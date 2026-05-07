@@ -16,3 +16,6 @@ nvda_kline.png
 # editor / OS noise
 .idea/
 .vscode/
+
+# playwright MCP session artifacts
+.playwright-mcp/
