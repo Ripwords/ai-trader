@@ -16,11 +16,14 @@ interface KLineResult {
   bars: { time: string; open: number; high: number; low: number; close: number; volume: number; turnover: number }[]
 }
 
+interface NewsResult { title: string; url: string; content: string; published_date?: string }
+
 interface Msg {
   id: string
   role: 'user' | 'assistant'
   content: string
   toolResult?: KLineResult
+  news?: { results: NewsResult[] }
   error?: string
 }
 
@@ -76,9 +79,11 @@ async function send() {
             asst.content += `\n_calling ${chunk.payload.toolName}…_\n`
             break
           case 'tool-result': {
-            const result = chunk.payload.result as KLineResult | undefined
+            const result = chunk.payload.result as { bars?: unknown[]; results?: NewsResult[] } | undefined
             if (result?.bars && Array.isArray(result.bars)) {
-              asst.toolResult = result
+              asst.toolResult = result as unknown as KLineResult
+            } else if (result?.results && Array.isArray(result.results)) {
+              asst.news = { results: result.results }
             }
             break
           }
@@ -122,6 +127,7 @@ function onSelect(code: string) {
           <div class="text-xs text-gray-400 uppercase tracking-wide">{{ m.role === 'user' ? 'You' : 'Copilot' }}</div>
           <div class="whitespace-pre-wrap" v-if="m.content">{{ m.content }}</div>
           <ChartCard v-if="m.toolResult" :code="m.toolResult.code" :ktype="m.toolResult.ktype" :bars="m.toolResult.bars" />
+          <NewsCard v-if="m.news" :results="m.news.results" />
           <div v-if="m.error" class="text-sm text-red-500">{{ m.error }}</div>
         </div>
       </main>

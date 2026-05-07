@@ -50,6 +50,7 @@ services:
       NUXT_API_BASE_URL: http://api:8000
       NUXT_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       NUXT_LLM_MODEL: ${LLM_MODEL}
+      NUXT_TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       DATABASE_URL: ${DATABASE_URL}
     ports:
       - "${WEB_PORT:-3000}:3000"

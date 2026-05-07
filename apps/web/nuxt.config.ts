@@ -9,6 +9,7 @@ export default defineNuxtConfig({
     apiBaseUrl: 'http://api:8000',
     anthropicApiKey: '',
     llmModel: 'claude-sonnet-4-6',
+    tavilyApiKey: '',
     public: {},
   },
   nitro: { experimental: { websocket: true } },
