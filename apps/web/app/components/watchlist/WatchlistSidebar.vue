@@ -23,14 +23,24 @@ async function refresh() {
 async function add() {
   const code = newCode.value.trim()
   if (!code) return
-  await $fetch('/api/watchlist/add', { method: 'POST', body: { code } })
-  newCode.value = ''
-  await refresh()
+  error.value = null
+  try {
+    await $fetch('/api/watchlist/add', { method: 'POST', body: { code } })
+    newCode.value = ''
+    await refresh()
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'failed to add'
+  }
 }
 
 async function remove(code: string) {
-  await $fetch('/api/watchlist/remove', { method: 'POST', body: { code } })
-  await refresh()
+  error.value = null
+  try {
+    await $fetch('/api/watchlist/remove', { method: 'POST', body: { code } })
+    await refresh()
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'failed to remove'
+  }
 }
 
 const emit = defineEmits<{ select: [code: string] }>()
