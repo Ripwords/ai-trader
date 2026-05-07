@@ -39,13 +39,13 @@ const fakeClient = {
 describe('market tools', () => {
   it('kline tool returns bars[]', async () => {
     const tools = makeMarketTools(fakeClient as any)
-    const out = await tools.kline.execute({ context: { code: 'US.NVDA', ktype: '1d', num: 1 } } as any)
+    const out = await tools.kline.execute({ code: 'US.NVDA', ktype: '1d', num: 1 } as any)
     expect(out.bars[0].close).toBe(108)
   })
 
   it('snapshot tool returns lastPrice', async () => {
     const tools = makeMarketTools(fakeClient as any)
-    const out = await tools.snapshot.execute({ context: { code: 'US.NVDA' } } as any)
+    const out = await tools.snapshot.execute({ code: 'US.NVDA' } as any)
     expect(out.lastPrice).toBe(125.5)
   })
 
@@ -53,7 +53,7 @@ describe('market tools', () => {
     const erroring = { ...fakeClient, getKline: vi.fn().mockRejectedValue(new Error('boom')) }
     const tools = makeMarketTools(erroring as any)
     await expect(
-      tools.kline.execute({ context: { code: 'US.NVDA', ktype: '1d', num: 1 } } as any),
+      tools.kline.execute({ code: 'US.NVDA', ktype: '1d', num: 1 } as any),
     ).rejects.toThrow('boom')
   })
 })
