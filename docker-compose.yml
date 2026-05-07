@@ -15,5 +15,17 @@ services:
       timeout: 5s
       retries: 10
 
+  api:
+    build: ./apps/api
+    environment:
+      INTERNAL_BEARER: ${INTERNAL_BEARER}
+      OPEND_HOST: ${OPEND_HOST}
+      OPEND_PORT: ${OPEND_PORT}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
