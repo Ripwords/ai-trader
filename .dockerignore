@@ -1,0 +1,11 @@
+**/node_modules
+**/.nuxt
+**/.output
+**/__pycache__
+**/.venv
+**/dist
+**/.git
+**/.DS_Store
+**/tests
+**/playwright-report
+**/test-results
