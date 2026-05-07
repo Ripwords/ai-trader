@@ -28,12 +28,19 @@ const Body = z.object({
  */
 export default defineEventHandler(async (event) => {
   const body = Body.parse(await readBody(event))
-  const agent = getAgent()
 
-  // agent.stream returns Promise<MastraModelOutput>
-  // fullStream is a ReadableStream<ChunkType> with Mastra's typed chunk format
-  const output = await agent.stream(body.messages, { maxSteps: 6 })
-  const { fullStream } = output
+  // Wrap agent init + stream setup so init errors emit a clean NDJSON error chunk
+  // instead of a raw 500 response.
+  let stream: AsyncIterable<unknown> | undefined
+  try {
+    const agent = getAgent()
+    const out = await agent.stream(body.messages, { maxSteps: 6 })
+    stream = out.fullStream as unknown as AsyncIterable<unknown>
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    setResponseHeader(event, 'Content-Type', 'application/x-ndjson')
+    return `${JSON.stringify({ type: 'error', payload: { message } })}\n${JSON.stringify({ type: 'finish', payload: { finishReason: 'error' } })}\n`
+  }
 
   setResponseHeader(event, 'Content-Type', 'application/x-ndjson')
   setResponseHeader(event, 'Cache-Control', 'no-cache, no-transform')
@@ -41,7 +48,7 @@ export default defineEventHandler(async (event) => {
 
   // Return a web-standard ReadableStream of NDJSON lines.
   // Each Mastra chunk is mapped to a JSON object; irrelevant chunk types are dropped.
-  const ndjsonStream = fullStream.pipeThrough(
+  const ndjsonStream = (stream as ReadableStream<unknown>).pipeThrough(
     new TransformStream({
       transform(chunk, controller) {
         // chunk is a Mastra ChunkType (tagged union on `type`)
@@ -80,16 +87,21 @@ export default defineEventHandler(async (event) => {
             break
           }
           case 'finish': {
-            const payload = c.payload as { finishReason?: string }
-            line = JSON.stringify({ type: 'finish', payload: { finishReason: payload?.finishReason } })
+            const p = c.payload as { stepResult?: { reason?: string } } | undefined
+            line = JSON.stringify({ type: 'finish', payload: { finishReason: p?.stepResult?.reason ?? null } })
             break
           }
           case 'error': {
-            const payload = c.payload as { error?: { message?: string }; message?: string }
+            const p = c.payload as { error?: unknown } | undefined
+            const raw = p?.error
             const message =
-              (payload as { error?: { message?: string } })?.error?.message ??
-              (payload as { message?: string })?.message ??
-              'Unknown error'
+              raw instanceof Error
+                ? raw.message
+                : typeof raw === 'string'
+                  ? raw
+                  : raw != null
+                    ? String(raw)
+                    : 'Unknown error'
             line = JSON.stringify({ type: 'error', payload: { message } })
             break
           }
