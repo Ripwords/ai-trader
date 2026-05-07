@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from app.schemas.quote import Bar, KLineResponse, KLineType, Snapshot
+from app.schemas.watchlist import WatchlistItem
 
 
 class OpendError(RuntimeError):
@@ -84,6 +85,51 @@ class OpendAdapter:
             for _, row in data.iterrows()
         ]
         return KLineResponse(code=code, ktype=ktype, bars=bars)
+
+    def list_watchlist(self, *, group: str = "All") -> list[WatchlistItem]:
+        ctx = self._ctx_factory()
+        try:
+            ret, data = ctx.get_user_security(group)
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"get_user_security failed: {data}")
+        items: list[WatchlistItem] = []
+        for _, row in data.iterrows():
+            r = row.to_dict()
+            items.append(WatchlistItem(
+                code=str(r["code"]),
+                name=r.get("name") if isinstance(r.get("name"), str) else None,
+                group=str(r.get("group", group)),
+            ))
+        return items
+
+    def add_watchlist_item(self, code: str, *, group: str = "All") -> None:
+        ctx = self._ctx_factory()
+        try:
+            ret, data = ctx.modify_user_security(group, [code], "ADD")
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"modify_user_security ADD failed: {data}")
+
+    def remove_watchlist_item(self, code: str, *, group: str = "All") -> None:
+        ctx = self._ctx_factory()
+        try:
+            ret, data = ctx.modify_user_security(group, [code], "DEL")
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"modify_user_security DEL failed: {data}")
 
     def get_snapshot(self, code: str) -> Snapshot:
         ctx = self._ctx_factory()
