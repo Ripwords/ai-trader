@@ -1,6 +1,6 @@
 import pytest
 
-from app.schemas.quote import Bar, KLineResponse, Snapshot
+from app.schemas.quote import KLineResponse, Snapshot
 from app.services.opend import OpendAdapter, OpendError
 
 
@@ -29,11 +29,7 @@ def _df_from_rows(rows):
     return pd.DataFrame(rows)
 
 
-@pytest.fixture
-def adapter():
-    return OpendAdapter(host="ignored", port=0, _ctx_factory=lambda: _ctx)
-
-
+# NOTE: module-level state is not safe for pytest-xdist parallel workers.
 _ctx: FakeQuoteCtx | None = None
 
 

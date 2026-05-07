@@ -49,6 +49,11 @@ class OpendAdapter:
     def get_kline(self, code: str, *, ktype: KLineType, num: int) -> KLineResponse:
         ctx = self._ctx_factory()
         try:
+            # moomoo SDK enums are only resolvable when the package is installed.
+            # When running under a fake ctx (tests without the SDK), the import
+            # raises ImportError and we fall back to passing raw strings, which
+            # FakeQuoteCtx accepts. The "moomoo" type-check guards the case where
+            # the SDK *is* installed but a fake ctx is injected (full-dep test env).
             from moomoo import AuType, KLType  # type: ignore[import-not-found]
             sdk_ktype = getattr(KLType, _KTYPE_TO_SDK[ktype], None) if "moomoo" in str(type(ctx)) else _KTYPE_TO_SDK[ktype]
             ret, data = ctx.get_cur_kline(
@@ -91,12 +96,12 @@ class OpendAdapter:
                 pass
         if ret != 0:
             raise OpendError(f"get_market_snapshot failed: {data}")
-        if len(data) == 0:
+        if data.empty:
             raise OpendError(f"snapshot empty for {code}")
         row = data.iloc[0].to_dict()
         return Snapshot(
             code=row["code"],
-            name=row.get("name"),
+            name=row.get("name") if isinstance(row.get("name"), str) else None,
             last_price=float(row["last_price"]),
             open_price=float(row["open_price"]),
             high_price=float(row["high_price"]),
