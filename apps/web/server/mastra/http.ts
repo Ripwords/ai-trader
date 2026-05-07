@@ -35,6 +35,12 @@ export interface Snapshot {
   updateTime: string
 }
 
+export interface WatchlistItem {
+  code: string
+  name: string | null
+  group: string
+}
+
 function snakeToCamel<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(obj)) {
@@ -60,6 +66,18 @@ export class ApiClient {
   async getSnapshot(args: { code: string }): Promise<Snapshot> {
     const raw = await this.fetch<Record<string, unknown>>('/quote/snapshot', { query: args })
     return snakeToCamel(raw) as unknown as Snapshot
+  }
+
+  async listWatchlist(args: { group?: string } = {}): Promise<WatchlistItem[]> {
+    return this.fetch('/watchlist/list', { query: args })
+  }
+
+  async addWatchlistItem(args: { code: string; group?: string }): Promise<{ status: string }> {
+    return this.fetch('/watchlist/add', { method: 'POST', body: args })
+  }
+
+  async removeWatchlistItem(args: { code: string; group?: string }): Promise<{ status: string }> {
+    return this.fetch('/watchlist/remove', { method: 'POST', body: args })
   }
 }
 

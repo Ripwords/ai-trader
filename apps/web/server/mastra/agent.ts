@@ -1,6 +1,7 @@
 import { Agent } from '@mastra/core/agent'
 import { getApiClient } from './http'
 import { makeMarketTools } from './tools/market'
+import { makeWatchlistTools } from './tools/watchlist'
 
 // Hydrate ANTHROPIC_API_KEY from runtimeConfig at module load — Mastra's
 // provider registry reads process.env eagerly when the Agent is constructed.
@@ -34,7 +35,8 @@ export function getAgent(): Agent {
 
   const cfg = useRuntimeConfig()
   const client = getApiClient()
-  const tools = makeMarketTools(client)
+  const marketTools = makeMarketTools(client)
+  const watchlistTools = makeWatchlistTools(client)
 
   // llmModel in .env / runtimeConfig should be e.g. "claude-sonnet-4-6"
   // Mastra's router expects the "anthropic/model-id" prefix form.
@@ -51,9 +53,10 @@ export function getAgent(): Agent {
       'When the user asks for a price, call market.snapshot.',
       'Default markets: NVDA→US.NVDA, Tencent→HK.00700, Apple→US.AAPL, Tesla→US.TSLA, etc.',
       'Never invent symbols — ask if unsure.',
+      'When the user wants to track a symbol, use watchlist.add. When they ask what they\'re tracking, use watchlist.list.',
     ].join('\n'),
     model,
-    tools,
+    tools: { ...marketTools, ...watchlistTools },
   })
 
   return _agent

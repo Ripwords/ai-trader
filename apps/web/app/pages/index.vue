@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import ChartCard from '~/components/chart/ChartCard.vue'
+import WatchlistSidebar from '~/components/watchlist/WatchlistSidebar.vue'
 
 type StreamChunk =
   | { type: 'text-delta'; payload: { text: string } }
@@ -101,27 +102,35 @@ async function logout() {
   await $fetch('/api/logout', { method: 'POST' })
   await navigateTo('/login')
 }
+
+function onSelect(code: string) {
+  input.value = `Show me ${code} daily`
+  send()
+}
 </script>
 
 <template>
-  <div class="h-screen flex flex-col">
-    <header class="px-4 py-2 border-b flex items-center justify-between">
-      <h1 class="font-semibold">ai-trader</h1>
-      <UButton size="xs" variant="ghost" @click="logout">Sign out</UButton>
-    </header>
-    <main class="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-      <div v-for="m in messages" :key="m.id" class="space-y-2">
-        <div class="text-xs text-gray-400 uppercase tracking-wide">{{ m.role === 'user' ? 'You' : 'Copilot' }}</div>
-        <div class="whitespace-pre-wrap" v-if="m.content">{{ m.content }}</div>
-        <ChartCard v-if="m.toolResult" :code="m.toolResult.code" :ktype="m.toolResult.ktype" :bars="m.toolResult.bars" />
-        <div v-if="m.error" class="text-sm text-red-500">{{ m.error }}</div>
-      </div>
-    </main>
-    <footer class="border-t p-2">
-      <form class="flex gap-2" @submit.prevent="send">
-        <UInput v-model="input" class="flex-1" placeholder="Show me NVDA daily" :disabled="busy" />
-        <UButton type="submit" :loading="busy">Send</UButton>
-      </form>
-    </footer>
+  <div class="h-screen flex">
+    <WatchlistSidebar @select="onSelect" />
+    <div class="flex-1 flex flex-col">
+      <header class="px-4 py-2 border-b flex items-center justify-between">
+        <h1 class="font-semibold">ai-trader</h1>
+        <UButton size="xs" variant="ghost" @click="logout">Sign out</UButton>
+      </header>
+      <main class="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        <div v-for="m in messages" :key="m.id" class="space-y-2">
+          <div class="text-xs text-gray-400 uppercase tracking-wide">{{ m.role === 'user' ? 'You' : 'Copilot' }}</div>
+          <div class="whitespace-pre-wrap" v-if="m.content">{{ m.content }}</div>
+          <ChartCard v-if="m.toolResult" :code="m.toolResult.code" :ktype="m.toolResult.ktype" :bars="m.toolResult.bars" />
+          <div v-if="m.error" class="text-sm text-red-500">{{ m.error }}</div>
+        </div>
+      </main>
+      <footer class="border-t p-2">
+        <form class="flex gap-2" @submit.prevent="send">
+          <UInput v-model="input" class="flex-1" placeholder="Show me NVDA daily" :disabled="busy" />
+          <UButton type="submit" :loading="busy">Send</UButton>
+        </form>
+      </footer>
+    </div>
   </div>
 </template>
