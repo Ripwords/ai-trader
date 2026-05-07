@@ -56,3 +56,22 @@ def client_with_bearer_and_fake_watchlist(monkeypatch, fake_watchlist_adapter) -
     yield c
     app.dependency_overrides.clear()
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def fake_trade_adapter():
+    from tests.test_trade import FakeTradeAdapter
+    return FakeTradeAdapter()
+
+
+@pytest.fixture
+def client_with_bearer_and_fake_trade(monkeypatch, fake_trade_adapter) -> Iterator[TestClient]:
+    monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
+    get_settings.cache_clear()
+    app = create_app()
+    app.dependency_overrides[get_opend] = lambda: fake_trade_adapter
+    c = TestClient(app)
+    c.headers.update({"Authorization": "Bearer test-bearer"})
+    yield c
+    app.dependency_overrides.clear()
+    get_settings.cache_clear()

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from app.schemas.quote import Bar, KLineResponse, KLineType, Snapshot
+from app.schemas.trade import Account, Fill, Order, Portfolio, Position
 from app.schemas.watchlist import WatchlistItem
 
 
@@ -30,6 +31,7 @@ class OpendAdapter:
 
     Each public method opens a context, runs the SDK call, and closes the context.
     Tests inject a `_ctx_factory` returning a fake; production resolves the real SDK.
+    For trade methods, a separate `_trade_ctx_factory` is used (per-call, not cached).
     """
 
     def __init__(
@@ -38,14 +40,25 @@ class OpendAdapter:
         port: int,
         *,
         _ctx_factory: Callable[[], Any] | None = None,
+        _trade_ctx_factory: Callable[[], Any] | None = None,
     ) -> None:
         self._host = host
         self._port = port
         self._ctx_factory = _ctx_factory or self._default_ctx_factory
+        self._trade_ctx_factory = _trade_ctx_factory or self._default_trade_ctx_factory
 
     def _default_ctx_factory(self) -> Any:
         from moomoo import OpenQuoteContext  # type: ignore[import-not-found]
         return OpenQuoteContext(host=self._host, port=self._port)
+
+    def _default_trade_ctx_factory(self) -> Any:
+        from moomoo import OpenSecTradeContext, SecurityFirm, TrdMarket  # type: ignore[import-not-found]
+        return OpenSecTradeContext(
+            host=self._host,
+            port=self._port,
+            filter_trdmarket=TrdMarket.NONE,
+            security_firm=SecurityFirm.NONE,
+        )
 
     def get_kline(self, code: str, *, ktype: KLineType, num: int) -> KLineResponse:
         ctx = self._ctx_factory()
@@ -158,3 +171,140 @@ class OpendAdapter:
             turnover=float(row["turnover"]),
             update_time=datetime.fromisoformat(str(row["update_time"])),
         )
+
+    # ------------------------------------------------------------------
+    # Trade methods — use _trade_ctx_factory (per-call, not cached)
+    # ------------------------------------------------------------------
+
+    def list_accounts(self) -> list[Account]:
+        ctx = self._trade_ctx_factory()
+        try:
+            ret, data = ctx.get_acc_list()
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"get_acc_list failed: {data}")
+        accounts: list[Account] = []
+        for _, row in data.iterrows():
+            r = row.to_dict()
+            trdmarket_auth_raw = r.get("trdmarket_auth", [])
+            if isinstance(trdmarket_auth_raw, list):
+                trdmarket_auth = [str(m) for m in trdmarket_auth_raw]
+            elif isinstance(trdmarket_auth_raw, str):
+                trdmarket_auth = [s.strip() for s in trdmarket_auth_raw.strip("[]").split(",") if s.strip()]
+            else:
+                trdmarket_auth = []
+            trd_env_raw = str(r.get("trd_env", "SIMULATE")).upper()
+            trd_env = "SIMULATE" if "SIM" in trd_env_raw else "REAL"
+            accounts.append(Account(
+                acc_id=int(r["acc_id"]),
+                trd_env=trd_env,  # type: ignore[arg-type]
+                acc_type=str(r.get("acc_type", "CASH")),
+                card_num=str(r["card_num"]) if r.get("card_num") else None,
+                security_firm=str(r["security_firm"]) if r.get("security_firm") else None,
+                trdmarket_auth=trdmarket_auth,
+                acc_role=str(r["acc_role"]) if r.get("acc_role") else None,
+            ))
+        return accounts
+
+    def get_portfolio(self, *, acc_id: int, trd_env: str = "SIMULATE") -> Portfolio:
+        ctx = self._trade_ctx_factory()
+        try:
+            try:
+                from moomoo import TrdEnv as MoomooTrdEnv  # type: ignore[import-not-found]
+                env = MoomooTrdEnv.SIMULATE if trd_env == "SIMULATE" else MoomooTrdEnv.REAL
+            except ImportError:
+                env = trd_env
+            ret_p, positions_df = ctx.position_list_query(acc_id=acc_id, trd_env=env, refresh_cache=True)
+            ret_a, accinfo_df = ctx.accinfo_query(acc_id=acc_id, trd_env=env, refresh_cache=True)
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret_p != 0:
+            raise OpendError(f"position_list_query failed: {positions_df}")
+        if ret_a != 0:
+            raise OpendError(f"accinfo_query failed: {accinfo_df}")
+        positions = [
+            Position(
+                code=str(r["code"]),
+                qty=int(r.get("qty", 0)),
+                # SDK uses "average_cost"; plan schema names it cost_price
+                cost_price=float(r.get("average_cost", r.get("cost_price", 0)) or 0),
+                # SDK uses "nominal_price"; plan schema names it current_price
+                current_price=float(r.get("nominal_price", r.get("current_price", 0)) or 0),
+                market_val=float(r.get("market_val", 0) or 0),
+                pl_val=float(r.get("unrealized_pl", r.get("pl_val", 0)) or 0),
+                pl_ratio=float(r.get("pl_ratio_avg_cost", r.get("pl_ratio", 0)) or 0),
+            )
+            for _, r in positions_df.iterrows()
+        ]
+        a = accinfo_df.iloc[0].to_dict() if not accinfo_df.empty else {}
+        return Portfolio(
+            cash=float(a.get("cash", 0) or 0),
+            market_val=float(a.get("market_val", 0) or 0),
+            total_assets=float(a.get("total_assets", 0) or 0),
+            positions=positions,
+        )
+
+    def list_orders(self, *, acc_id: int, trd_env: str = "SIMULATE") -> list[Order]:
+        ctx = self._trade_ctx_factory()
+        try:
+            try:
+                from moomoo import TrdEnv as MoomooTrdEnv  # type: ignore[import-not-found]
+                env = MoomooTrdEnv.SIMULATE if trd_env == "SIMULATE" else MoomooTrdEnv.REAL
+            except ImportError:
+                env = trd_env
+            ret, data = ctx.order_list_query(acc_id=acc_id, trd_env=env, refresh_cache=True)
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"order_list_query failed: {data}")
+        return [
+            Order(
+                order_id=str(r["order_id"]),
+                code=str(r["code"]),
+                side="BUY" if str(r.get("trd_side", "BUY")).upper().startswith("B") else "SELL",
+                qty=int(r.get("qty", 0)),
+                price=float(r.get("price", 0) or 0),
+                status=str(r.get("order_status", "")),
+                created_at=datetime.fromisoformat(str(r["create_time"])),
+            )
+            for _, r in data.iterrows()
+        ]
+
+    def list_fills(self, *, acc_id: int, trd_env: str = "SIMULATE") -> list[Fill]:
+        ctx = self._trade_ctx_factory()
+        try:
+            try:
+                from moomoo import TrdEnv as MoomooTrdEnv  # type: ignore[import-not-found]
+                env = MoomooTrdEnv.SIMULATE if trd_env == "SIMULATE" else MoomooTrdEnv.REAL
+            except ImportError:
+                env = trd_env
+            ret, data = ctx.deal_list_query(acc_id=acc_id, trd_env=env, refresh_cache=True)
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"deal_list_query failed: {data}")
+        return [
+            Fill(
+                fill_id=str(r["deal_id"]),
+                order_id=str(r["order_id"]),
+                code=str(r["code"]),
+                side="BUY" if str(r.get("trd_side", "BUY")).upper().startswith("B") else "SELL",
+                qty=int(r.get("qty", 0)),
+                price=float(r.get("price", 0) or 0),
+                fill_at=datetime.fromisoformat(str(r["create_time"])),
+            )
+            for _, r in data.iterrows()
+        ]
