@@ -2,6 +2,22 @@ import { Agent } from '@mastra/core/agent'
 import { getApiClient } from './http'
 import { makeMarketTools } from './tools/market'
 
+// Hydrate ANTHROPIC_API_KEY from runtimeConfig at module load — Mastra's
+// provider registry reads process.env eagerly when the Agent is constructed.
+// Fix A (docker-compose) propagates the key directly; this is a dev-mode safety net.
+try {
+  const _runtime = useRuntimeConfig()
+  if (!process.env.ANTHROPIC_API_KEY && _runtime.anthropicApiKey) {
+    process.env.ANTHROPIC_API_KEY = _runtime.anthropicApiKey as string
+  }
+} catch {
+  // useRuntimeConfig() may not be available outside a Nitro request context
+  // in all environments. Fall back to Fix A (direct env propagation via compose).
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.warn('[mastra] ANTHROPIC_API_KEY not set — agent calls will fail')
+  }
+}
+
 let _agent: Agent | undefined
 
 /**
@@ -10,20 +26,13 @@ let _agent: Agent | undefined
  * Model is specified as a magic string "provider/model-id" which Mastra's
  * provider registry resolves at runtime (no @ai-sdk/anthropic required).
  *
- * ANTHROPIC_API_KEY is read automatically by Mastra from the environment;
- * we set it explicitly from runtimeConfig so it works in Nuxt's server context.
+ * ANTHROPIC_API_KEY is propagated either via docker-compose (ANTHROPIC_API_KEY
+ * env var) or from runtimeConfig at module load above.
  */
 export function getAgent(): Agent {
   if (_agent) return _agent
 
   const cfg = useRuntimeConfig()
-
-  // Mastra reads ANTHROPIC_API_KEY from process.env.
-  // Populate it from runtimeConfig if not already set.
-  if (!process.env.ANTHROPIC_API_KEY && cfg.anthropicApiKey) {
-    process.env.ANTHROPIC_API_KEY = cfg.anthropicApiKey as string
-  }
-
   const client = getApiClient()
   const tools = makeMarketTools(client)
 

@@ -43,6 +43,7 @@ services:
   web:
     build: ./apps/web
     environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       NUXT_APP_PASSWORD: ${APP_PASSWORD}
       NUXT_SESSION_SECRET: ${SESSION_SECRET}
       NUXT_INTERNAL_BEARER: ${INTERNAL_BEARER}
