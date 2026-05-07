@@ -2,13 +2,21 @@
 
 Self-hosted trading copilot. Chat with an AI that has tools for moomoo market data + (later) Ghostfolio portfolio + algo trading.
 
-**Plan 1 status: complete.** End-to-end flow: log in, ask "show NVDA daily", see a real candlestick chart inline.
+**Plans 1 + 2 complete.** End-to-end:
+
+- Log in (single password), see your moomoo watchlist in the sidebar.
+- Ask `show NVDA daily` → real candlestick chart inline.
+- Ask `what's on my watchlist?` → list pulled from your real moomoo account.
+- Ask `add US.AAPL to my watchlist` / `remove US.NVDA` → mutates moomoo's watchlist.
+- Ask `any news on NVDA?` → Tavily-powered news cards.
+- Ask `show me my portfolio` → real positions + cash from your paper or live moomoo account (read-only).
 
 ## Prereqs
 
 - Docker Desktop (or compose v2)
 - moomoo OpenD installed on the host machine and **logged in**, listening on `127.0.0.1:11111`
 - Anthropic API key
+- (Optional but recommended) Tavily API key for news/web search — without it, search tools surface a clean error message and the rest still works
 
 ## First run
 
@@ -19,6 +27,7 @@ cp .env.example .env
 #   SESSION_SECRET     — at least 32 random bytes
 #   INTERNAL_BEARER    — random string, used between Nuxt and FastAPI
 #   ANTHROPIC_API_KEY  — real sk-ant-… key
+#   TAVILY_API_KEY     — tvly-… key for news/web search (optional)
 #   POSTGRES_PORT      — host port for postgres (default 5432; override if 5432 is taken)
 
 docker compose up -d --build
@@ -91,8 +100,7 @@ The e2e test passes if either a chart canvas OR an inline error message appears 
 
 ## What's next (later plans)
 
-- Plan 2: watchlists + Tavily/Exa search tools + trade read path (orders, fills, portfolio)
-- Plan 3: paper trading + push subscriptions (live ticker / orderbook streaming)
+- Plan 3: paper trading (place/modify/cancel orders via chat) + push subscriptions (live ticker / orderbook streaming)
 - Plan 4: options chain viewer + screener UI + Ghostfolio MCP integration
 - Plan 5: algo backtesting via backtrader + scheduled live algo strategies
 - Plan 6: live broker trading (with confirmation gates) + polish
