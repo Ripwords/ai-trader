@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
-import { CandlestickSeries, HistogramSeries, createChart, type IChartApi, type ISeriesApi } from 'lightweight-charts'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { CandlestickSeries, HistogramSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
 
 interface Bar {
   time: string
@@ -18,18 +18,18 @@ let chart: IChartApi | undefined
 let candle: ISeriesApi<'Candlestick'> | undefined
 let vol: ISeriesApi<'Histogram'> | undefined
 
-function toUnix(t: string) {
-  return Math.floor(new Date(t).getTime() / 1000)
+function toUnix(t: string): UTCTimestamp {
+  return Math.floor(new Date(t).getTime() / 1000) as UTCTimestamp
 }
 
 function render() {
   if (!chart || !candle || !vol) return
   candle.setData(
-    props.bars.map((b) => ({ time: toUnix(b.time) as any, open: b.open, high: b.high, low: b.low, close: b.close })),
+    props.bars.map((b) => ({ time: toUnix(b.time), open: b.open, high: b.high, low: b.low, close: b.close })),
   )
   vol.setData(
     props.bars.map((b) => ({
-      time: toUnix(b.time) as any,
+      time: toUnix(b.time),
       value: b.volume,
       color: b.close >= b.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
     })),
@@ -58,6 +58,13 @@ onMounted(() => {
 })
 
 watch(() => props.bars, render)
+
+onUnmounted(() => {
+  chart?.remove()
+  chart = undefined
+  candle = undefined
+  vol = undefined
+})
 </script>
 
 <template>

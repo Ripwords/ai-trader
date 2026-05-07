@@ -2,6 +2,13 @@
 import { ref } from 'vue'
 import ChartCard from '~/components/chart/ChartCard.vue'
 
+type StreamChunk =
+  | { type: 'text-delta'; payload: { text: string } }
+  | { type: 'tool-call'; payload: { toolCallId: string; toolName: string; args?: unknown } }
+  | { type: 'tool-result'; payload: { toolCallId: string; toolName: string; result?: unknown } }
+  | { type: 'finish'; payload: { finishReason: string | null } }
+  | { type: 'error'; payload: { message: string } }
+
 interface KLineResult {
   code: string
   ktype: string
@@ -20,6 +27,8 @@ const messages = ref<Msg[]>([])
 const input = ref('')
 const busy = ref(false)
 
+// Streaming NDJSON from /api/chat: TanStack Query doesn't model
+// long-lived event streams; raw fetch + ReadableStream reader is the right tool here.
 async function send() {
   const text = input.value.trim()
   if (!text || busy.value) return
@@ -51,24 +60,33 @@ async function send() {
       buf = lines.pop() ?? ''
       for (const line of lines) {
         if (!line.trim()) continue
-        let chunk: { type: string; payload?: any } | null = null
+        let chunk: StreamChunk | null = null
         try {
-          chunk = JSON.parse(line)
+          chunk = JSON.parse(line) as StreamChunk
         } catch {
           continue
         }
         if (!chunk) continue
-        if (chunk.type === 'text-delta') {
-          asst.content += chunk.payload?.text ?? ''
-        } else if (chunk.type === 'tool-call') {
-          asst.content += `\n_calling ${chunk.payload?.toolName ?? 'tool'}…_\n`
-        } else if (chunk.type === 'tool-result') {
-          const result = chunk.payload?.result
-          if (result?.bars && Array.isArray(result.bars)) {
-            asst.toolResult = result as KLineResult
+        switch (chunk.type) {
+          case 'text-delta':
+            asst.content += chunk.payload.text
+            break
+          case 'tool-call':
+            asst.content += `\n_calling ${chunk.payload.toolName}…_\n`
+            break
+          case 'tool-result': {
+            const result = chunk.payload.result as KLineResult | undefined
+            if (result?.bars && Array.isArray(result.bars)) {
+              asst.toolResult = result
+            }
+            break
           }
-        } else if (chunk.type === 'error') {
-          asst.error = chunk.payload?.message ?? 'unknown error'
+          case 'error':
+            asst.error = chunk.payload.message
+            break
+          case 'finish':
+            // intentional no-op for now
+            break
         }
       }
     }
