@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# generated chart artifacts during early prototyping
+tencent_kline.png
+nvda_kline.png
+
+# locally installed claude skills (sourced from moomoo zip; not project source)
+.claude/skills/
+
+# editor / OS noise
+.idea/
+.vscode/
