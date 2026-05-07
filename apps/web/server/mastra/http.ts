@@ -41,6 +41,53 @@ export interface WatchlistItem {
   group: string
 }
 
+export interface Account {
+  acc_id: number
+  trd_env: 'SIMULATE' | 'REAL'
+  acc_type: string
+  card_num: string | null
+  security_firm: string | null
+  trdmarket_auth: string[]
+  acc_role: string | null
+}
+
+export interface Position {
+  code: string
+  qty: number
+  cost_price: number
+  current_price: number
+  market_val: number
+  pl_val: number
+  pl_ratio: number
+}
+
+export interface Portfolio {
+  cash: number
+  market_val: number
+  total_assets: number
+  positions: Position[]
+}
+
+export interface Order {
+  order_id: string
+  code: string
+  side: 'BUY' | 'SELL'
+  qty: number
+  price: number
+  status: string
+  created_at: string
+}
+
+export interface Fill {
+  fill_id: string
+  order_id: string
+  code: string
+  side: 'BUY' | 'SELL'
+  qty: number
+  price: number
+  fill_at: string
+}
+
 function snakeToCamel<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(obj)) {
@@ -78,6 +125,22 @@ export class ApiClient {
 
   async removeWatchlistItem(args: { code: string; group?: string }): Promise<{ status: string }> {
     return this.fetch('/watchlist/remove', { method: 'POST', body: args })
+  }
+
+  listAccounts(): Promise<Account[]> {
+    return this.fetch('/trade/accounts')
+  }
+
+  getPortfolio(args: { acc_id: number; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Portfolio> {
+    return this.fetch('/trade/portfolio', { query: args })
+  }
+
+  listOrders(args: { acc_id: number; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Order[]> {
+    return this.fetch('/trade/orders', { query: args })
+  }
+
+  listFills(args: { acc_id: number; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Fill[]> {
+    return this.fetch('/trade/fills', { query: args })
   }
 }
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import ChartCard from '~/components/chart/ChartCard.vue'
+import PortfolioCard from '~/components/chat/PortfolioCard.vue'
 import WatchlistSidebar from '~/components/watchlist/WatchlistSidebar.vue'
 
 type StreamChunk =
@@ -18,12 +19,15 @@ interface KLineResult {
 
 interface NewsResult { title: string; url: string; content: string; published_date?: string }
 
+interface PortfolioResult { cash: number; market_val: number; total_assets: number; positions: { code: string; qty: number; cost_price: number; current_price: number; market_val: number; pl_val: number; pl_ratio: number }[] }
+
 interface Msg {
   id: string
   role: 'user' | 'assistant'
   content: string
   toolResult?: KLineResult
   news?: { results: NewsResult[] }
+  portfolio?: PortfolioResult
   error?: string
 }
 
@@ -79,11 +83,15 @@ async function send() {
             asst.content += `\n_calling ${chunk.payload.toolName}…_\n`
             break
           case 'tool-result': {
-            const result = chunk.payload.result as { bars?: unknown[]; results?: NewsResult[] } | undefined
+            const result = chunk.payload.result as { bars?: unknown[]; results?: NewsResult[]; positions?: unknown[]; accounts?: unknown[]; orders?: unknown[] } | undefined
             if (result?.bars && Array.isArray(result.bars)) {
               asst.toolResult = result as unknown as KLineResult
             } else if (result?.results && Array.isArray(result.results)) {
-              asst.news = { results: result.results }
+              asst.news = { results: result.results as NewsResult[] }
+            } else if (result?.positions && Array.isArray(result.positions)) {
+              asst.portfolio = result as unknown as PortfolioResult
+            } else if (result?.accounts || result?.orders) {
+              // fall through; the assistant text-delta will summarize
             }
             break
           }
@@ -128,6 +136,13 @@ function onSelect(code: string) {
           <div class="whitespace-pre-wrap" v-if="m.content">{{ m.content }}</div>
           <ChartCard v-if="m.toolResult" :code="m.toolResult.code" :ktype="m.toolResult.ktype" :bars="m.toolResult.bars" />
           <NewsCard v-if="m.news" :results="m.news.results" />
+          <PortfolioCard
+            v-if="m.portfolio"
+            :cash="m.portfolio.cash"
+            :market_val="m.portfolio.market_val"
+            :total_assets="m.portfolio.total_assets"
+            :positions="m.portfolio.positions"
+          />
           <div v-if="m.error" class="text-sm text-red-500">{{ m.error }}</div>
         </div>
       </main>

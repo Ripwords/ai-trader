@@ -2,6 +2,7 @@ import { Agent } from '@mastra/core/agent'
 import { getApiClient } from './http'
 import { makeMarketTools } from './tools/market'
 import { makeSearchTools } from './tools/search'
+import { makeTradeTools } from './tools/trade'
 import { makeWatchlistTools } from './tools/watchlist'
 
 // Hydrate ANTHROPIC_API_KEY from runtimeConfig at module load — Mastra's
@@ -39,6 +40,7 @@ export function getAgent(): Agent {
   const marketTools = makeMarketTools(client)
   const watchlistTools = makeWatchlistTools(client)
   const searchTools = makeSearchTools(cfg.tavilyApiKey as string)
+  const tradeTools = makeTradeTools(client)
 
   // llmModel in .env / runtimeConfig should be e.g. "claude-sonnet-4-6"
   // Mastra's router expects the "anthropic/model-id" prefix form.
@@ -58,9 +60,10 @@ export function getAgent(): Agent {
       'When the user wants to track a symbol, use watchlist.add. When they ask what they\'re tracking, use watchlist.list.',
       'For news / market context / company headlines, call search.news.',
       'For general facts or definitions, call search.web.',
+      'For account/portfolio/orders/fills: call trade.accounts first to find acc_id, then trade.portfolio / trade.orders / trade.fills.',
     ].join('\n'),
     model,
-    tools: { ...marketTools, ...watchlistTools, ...searchTools },
+    tools: { ...marketTools, ...watchlistTools, ...searchTools, ...tradeTools },
   })
 
   return _agent
