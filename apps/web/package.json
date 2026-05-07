@@ -10,6 +10,12 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
+    "@ai-sdk/anthropic-v5": "npm:@ai-sdk/anthropic@2.0.77",
+    "@ai-sdk/anthropic-v6": "npm:@ai-sdk/anthropic@3.0.71",
+    "@ai-sdk/provider-utils-v5": "npm:@ai-sdk/provider-utils@3.0.23",
+    "@ai-sdk/provider-utils-v6": "npm:@ai-sdk/provider-utils@4.0.23",
+    "@ai-sdk/provider-v5": "npm:@ai-sdk/provider@2.0.1",
+    "@ai-sdk/provider-v6": "npm:@ai-sdk/provider@3.0.8",
     "@anthropic-ai/sdk": "^0.95.1",
     "@mastra/core": "^1.32.1",
     "@nuxt/ui": "^4.7.1",
@@ -29,5 +35,10 @@
     "drizzle-orm": "^0.45.2",
     "pg": "^8.20.0",
     "vitest": "^4.1.5"
+  },
+  "pnpm": {
+    "overrides": {
+      "zod": "3.25.76"
+    }
   }
 }
