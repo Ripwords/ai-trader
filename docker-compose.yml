@@ -17,6 +17,17 @@ services:
       timeout: 5s
       retries: 10
 
+  drizzle-migrate:
+    build:
+      context: ./apps/web
+      target: migrate
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build: ./apps/api
     environment:
@@ -28,6 +39,24 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  web:
+    build: ./apps/web
+    environment:
+      NUXT_APP_PASSWORD: ${APP_PASSWORD}
+      NUXT_SESSION_SECRET: ${SESSION_SECRET}
+      NUXT_INTERNAL_BEARER: ${INTERNAL_BEARER}
+      NUXT_API_BASE_URL: http://api:8000
+      NUXT_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      NUXT_LLM_MODEL: ${LLM_MODEL}
+      DATABASE_URL: ${DATABASE_URL}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_started
+      drizzle-migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
