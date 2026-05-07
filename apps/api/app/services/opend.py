@@ -239,7 +239,7 @@ class OpendAdapter:
                 current_price=float(r.get("nominal_price", r.get("current_price", 0)) or 0),
                 market_val=float(r.get("market_val", 0) or 0),
                 pl_val=float(r.get("unrealized_pl", r.get("pl_val", 0)) or 0),
-                pl_ratio=float(r.get("pl_ratio_avg_cost", r.get("pl_ratio", 0)) or 0),
+                pl_ratio=float(r.get("pl_ratio_avg_cost", r.get("pl_ratio", 0)) or 0) / 100.0,
             )
             for _, r in positions_df.iterrows()
         ]

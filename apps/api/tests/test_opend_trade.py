@@ -93,7 +93,7 @@ def test_get_portfolio_merges_positions_and_account():
                 "nominal_price": 110.0,
                 "market_val": 1100.0,
                 "unrealized_pl": 100.0,
-                "pl_ratio_avg_cost": 0.10,
+                "pl_ratio_avg_cost": 10.0,
             }
         ],
         accinfo_payload=[
@@ -117,6 +117,7 @@ def test_get_portfolio_merges_positions_and_account():
     assert pos.cost_price == 100.0
     assert pos.current_price == 110.0
     assert pos.pl_val == 100.0
+    assert pos.pl_ratio == pytest.approx(0.10)  # SDK returned 10.0 (percentage) → normalized to 0.10
 
 
 def test_list_orders_returns_typed():
