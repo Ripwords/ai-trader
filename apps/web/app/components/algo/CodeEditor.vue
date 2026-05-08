@@ -1,25 +1,41 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import type { Highlighter } from 'shiki'
 import type { DiffPayload, Hunk, HunkDecision } from './diff-hunks'
 import { resolveCode, summarise } from './diff-hunks'
 
+import { EditorState, type Extension } from '@codemirror/state'
+import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from '@codemirror/view'
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+} from '@codemirror/commands'
+import {
+  bracketMatching,
+  defaultHighlightStyle,
+  syntaxHighlighting,
+  indentOnInput,
+  indentUnit,
+  foldGutter,
+  foldKeymap,
+} from '@codemirror/language'
+import { python } from '@codemirror/lang-python'
+
 /**
- * Editable Python code area with shiki syntax highlighting.
+ * Editable Python code area.
  *
- * Pattern: a transparent <textarea> sits on top of a shiki-rendered <pre>.
- * The textarea owns the caret + input; the pre owns the colours. We sync
- * scroll positions so they stay aligned as the user moves through the code.
+ * Edit mode is a CodeMirror 6 EditorView with @codemirror/lang-python — gives
+ * us auto-indent on Enter (Python-aware), native cmd+Z / cmd+shift+Z, bracket
+ * matching, multi-line indent/dedent on Tab, and search via cmd+F. The host
+ * page's draft state binds via v-model in the usual way.
  *
- * When `diff` is non-null we swap into a read-only review mode that shows
- * a unified diff with per-hunk ✓/✕ controls and a top toolbar
- * (Accept all / Discard all / Done — N of M applied). The toolbar emits
- * `done` with the resolved code and a {accepted,total} summary; the page
- * commits that resolved code into the draft and clears the diff prop,
- * which restores edit mode.
- *
- * Why not Monaco/CodeMirror: shiki + textarea is ~30 lines of glue and
- * pulls in a fraction of the bundle. We don't need IDE features.
+ * When `diff` is non-null we hide the editor and render the unified-diff
+ * review surface instead — read-only by construction, with per-hunk ✓/✕
+ * controls and a top toolbar (Accept all / Discard all / Done — N of M
+ * applied). The toolbar emits `done` with the resolved code; the page
+ * commits it into the draft and clears `diff`, restoring edit mode.
  */
 const props = defineProps<{
   modelValue: string
@@ -33,18 +49,145 @@ const emit = defineEmits<{
   (e: 'done', resolved: string, summary: { accepted: number; total: number }): void
 }>()
 
-const value = computed({
-  get: () => props.modelValue,
-  set: (v: string) => emit('update:modelValue', v),
+// ---------------------------------------------------------------------------
+// Edit mode — CodeMirror 6
+// ---------------------------------------------------------------------------
+
+const editorEl = ref<HTMLDivElement | null>(null)
+let view: EditorView | undefined
+
+// True while we're applying an external prop change to the editor doc, so
+// the update listener doesn't echo a synthetic update:modelValue back up.
+let applyingExternalChange = false
+
+function buildExtensions(): Extension[] {
+  return [
+    lineNumbers(),
+    foldGutter(),
+    drawSelection(),
+    highlightActiveLine(),
+    history(),
+    indentOnInput(),
+    indentUnit.of('    '),
+    bracketMatching(),
+    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    python(),
+    keymap.of([
+      indentWithTab,
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...foldKeymap,
+    ]),
+    EditorView.theme({
+      '&': {
+        backgroundColor: 'var(--ink-1)',
+        color: 'var(--paper-0)',
+        fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+        fontSize: '13px',
+        borderRadius: '6px',
+        border: '1px solid rgba(255, 245, 230, 0.08)',
+      },
+      '&.cm-focused': {
+        outline: 'none',
+        borderColor: 'var(--accent)',
+      },
+      '.cm-content': {
+        padding: '12px 0',
+        caretColor: 'var(--accent)',
+      },
+      '.cm-cursor': {
+        borderLeftColor: 'var(--accent)',
+      },
+      '.cm-line': {
+        padding: '0 12px',
+      },
+      '.cm-gutters': {
+        backgroundColor: 'transparent',
+        color: '#6f6c63',
+        border: 'none',
+      },
+      '.cm-activeLineGutter, .cm-activeLine': {
+        backgroundColor: 'rgba(212, 169, 106, 0.04)',
+      },
+      '.cm-selectionBackground, ::selection': {
+        backgroundColor: 'rgba(212, 169, 106, 0.25)',
+      },
+      '&.cm-focused .cm-selectionBackground': {
+        backgroundColor: 'rgba(212, 169, 106, 0.30)',
+      },
+      '.cm-matchingBracket': {
+        backgroundColor: 'rgba(212, 169, 106, 0.20)',
+        outline: '1px solid var(--accent)',
+      },
+      '.cm-scroller': {
+        fontFamily: 'inherit',
+        lineHeight: '1.55',
+      },
+    }, { dark: true }),
+    EditorView.updateListener.of((u) => {
+      if (!u.docChanged || applyingExternalChange) return
+      emit('update:modelValue', u.state.doc.toString())
+    }),
+  ]
+}
+
+function mountEditor() {
+  if (!editorEl.value || view) return
+  view = new EditorView({
+    parent: editorEl.value,
+    state: EditorState.create({
+      doc: props.modelValue,
+      extensions: buildExtensions(),
+    }),
+  })
+  // Best-effort min-height matched to the rows prop.
+  const lineHeight = 20.15  // 13px * 1.55
+  const minH = (props.rows ?? 18) * lineHeight + 24  // padding above + below
+  ;(editorEl.value as HTMLDivElement).style.minHeight = `${Math.round(minH)}px`
+}
+
+function unmountEditor() {
+  view?.destroy()
+  view = undefined
+}
+
+// Sync prop changes (e.g. `draft.code = resolved` after a diff Apply) into
+// the editor doc, without emitting another update.
+watch(() => props.modelValue, (next) => {
+  if (!view) return
+  const cur = view.state.doc.toString()
+  if (cur === next) return
+  applyingExternalChange = true
+  view.dispatch({
+    changes: { from: 0, to: cur.length, insert: next },
+  })
+  applyingExternalChange = false
 })
 
-const taRef = ref<HTMLTextAreaElement | null>(null)
-const preRef = ref<HTMLPreElement | null>(null)
-const highlighter = shallowRef<Highlighter | null>(null)
-const html = ref<string>('')
+// Mount/unmount when toggling between edit and diff modes. Vue re-renders
+// the template branch, so the ref drops to null before swapping back.
+watch(() => props.diff, (next) => {
+  if (next) {
+    unmountEditor()
+  } else {
+    // Wait for the v-if to render the edit-mode div before mounting.
+    requestAnimationFrame(() => mountEditor())
+  }
+}, { immediate: false })
 
-// shiki bundle: only python + a single dark theme so we don't pull every
-// grammar into the client chunk.
+onMounted(() => {
+  if (!props.diff) mountEditor()
+  if (!highlighter.value) ensureHighlighter()
+})
+
+onUnmounted(() => unmountEditor())
+
+// ---------------------------------------------------------------------------
+// Diff-review mode — shiki-rendered unified diff with per-hunk controls
+// ---------------------------------------------------------------------------
+
+const highlighter = shallowRef<Highlighter | null>(null)
+
 async function ensureHighlighter() {
   if (highlighter.value) return highlighter.value
   const { createHighlighter } = await import('shiki')
@@ -55,43 +198,6 @@ async function ensureHighlighter() {
   return highlighter.value
 }
 
-async function rerender() {
-  const h = await ensureHighlighter()
-  html.value = h.codeToHtml(value.value || ' ', {
-    lang: 'python',
-    theme: 'github-dark-default',
-  })
-}
-
-function syncScroll() {
-  if (!taRef.value || !preRef.value) return
-  preRef.value.scrollTop = taRef.value.scrollTop
-  preRef.value.scrollLeft = taRef.value.scrollLeft
-}
-
-// Tab key inserts two spaces instead of jumping focus.
-function onKeydown(e: KeyboardEvent) {
-  if (e.key !== 'Tab' || e.shiftKey) return
-  e.preventDefault()
-  const ta = taRef.value
-  if (!ta) return
-  const start = ta.selectionStart
-  const end = ta.selectionEnd
-  const next = `${value.value.slice(0, start)}    ${value.value.slice(end)}`
-  value.value = next
-  // place caret after the inserted spaces
-  requestAnimationFrame(() => {
-    ta.selectionStart = ta.selectionEnd = start + 4
-  })
-}
-
-watch(value, rerender)
-onMounted(rerender)
-
-// ---------------------------------------------------------------------------
-// Diff-review mode
-// ---------------------------------------------------------------------------
-
 // Per-hunk decision state. Resets whenever a fresh diff payload arrives.
 const decisions = ref<Map<string, HunkDecision>>(new Map())
 
@@ -100,10 +206,12 @@ watch(() => props.diff, () => {
   rerenderDiff()
 }, { immediate: true })
 
-const summary = computed(() => {
-  if (!props.diff) return { accepted: 0, total: 0 }
-  return summarise(props.diff.hunks, decisions.value)
-})
+const summary = ref<{ accepted: number; total: number }>({ accepted: 0, total: 0 })
+watch([() => props.diff, decisions], () => {
+  summary.value = props.diff
+    ? summarise(props.diff.hunks, decisions.value)
+    : { accepted: 0, total: 0 }
+}, { immediate: true })
 
 // Pre-rendered shiki HTML keyed by line content. We only highlight unique
 // line strings once per diff to keep this snappy on big patches.
@@ -191,29 +299,13 @@ function emitDone() {
 
 <template>
   <div class="code-editor relative font-mono text-sm leading-relaxed">
-    <!-- Edit mode -->
-    <template v-if="!diff">
-      <pre
-        ref="preRef"
-        aria-hidden="true"
-        class="absolute inset-0 m-0 p-3 overflow-auto whitespace-pre rounded bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] pointer-events-none"
-        v-html="html"
-      />
-      <textarea
-        ref="taRef"
-        v-model="value"
-        :rows="rows ?? 18"
-        :aria-label="ariaLabel"
-        spellcheck="false"
-        autocomplete="off"
-        autocorrect="off"
-        autocapitalize="off"
-        class="relative block w-full p-3 rounded bg-transparent text-transparent caret-[var(--accent)] selection:bg-[var(--accent)]/30 border border-transparent focus:border-[var(--accent)] focus:outline-none whitespace-pre overflow-auto resize-y"
-        @input="syncScroll"
-        @scroll="syncScroll"
-        @keydown="onKeydown"
-      />
-    </template>
+    <!-- Edit mode: CodeMirror -->
+    <div
+      v-if="!diff"
+      ref="editorEl"
+      :aria-label="ariaLabel"
+      class="cm-host w-full"
+    />
 
     <!-- Diff-review mode -->
     <div
@@ -353,6 +445,9 @@ function emitDone() {
 </template>
 
 <style scoped>
+.code-editor :deep(.cm-editor) {
+  height: auto;
+}
 .code-editor :deep(pre.shiki) {
   background: transparent !important;
   margin: 0;
@@ -362,12 +457,5 @@ function emitDone() {
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
-}
-.code-editor textarea {
-  /* Match the shiki <pre> font metrics exactly so the overlay aligns. */
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
-  tab-size: 4;
 }
 </style>
