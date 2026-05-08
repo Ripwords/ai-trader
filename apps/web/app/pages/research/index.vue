@@ -21,9 +21,9 @@ const ANALYSTS: { value: AnalystName; label: string }[] = [
 const PERSONAS: { value: PersonaName; label: string }[] = [
   { value: 'buffett', label: 'Buffett' },
   { value: 'munger', label: 'Munger' },
-  { value: 'ackman', label: 'Ackman' },
-  { value: 'wood', label: 'Wood' },
   { value: 'burry', label: 'Burry' },
+  { value: 'druckenmiller', label: 'Druckenmiller' },
+  { value: 'wood', label: 'Wood' },
 ]
 
 const symbol = ref('US.NVDA')

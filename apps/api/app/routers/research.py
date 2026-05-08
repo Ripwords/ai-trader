@@ -7,6 +7,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.deps import get_opend, require_internal_bearer
+from app.schemas.fundamentals import FundamentalsBundle
 from app.schemas.research import AnalystRequest, Signal
 from app.services.opend import OpendAdapter, OpendError
 from app.services.research.fundamentals_analyst import score_fundamentals
@@ -78,3 +79,14 @@ async def sentiment(body: AnalystRequest) -> Signal:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"sentiment fetch failed: {exc}")
     return score_sentiment(body.symbol, insider, news)
+
+
+@router.post("/bundle", response_model=FundamentalsBundle)
+async def bundle(body: AnalystRequest) -> FundamentalsBundle:
+    try:
+        f = _import_fundamentals_service()
+        return await f.get_fundamentals_bundle(body.symbol)
+    except (ImportError, AttributeError) as exc:
+        raise HTTPException(status_code=503, detail=f"fundamentals service unavailable: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"bundle fetch failed: {exc}")

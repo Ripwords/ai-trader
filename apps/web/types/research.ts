@@ -23,9 +23,9 @@ export type AnalystName = 'fundamentals' | 'valuation' | 'technicals' | 'sentime
 export type PersonaName =
   | 'buffett'
   | 'munger'
-  | 'ackman'
-  | 'wood'
   | 'burry'
+  | 'druckenmiller'
+  | 'wood'
 
 export interface ResearchRunRequest {
   symbol: string
