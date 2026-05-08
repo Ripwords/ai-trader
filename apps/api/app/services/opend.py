@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from app.schemas.quote import Bar, KLineResponse, KLineType, Snapshot
-from app.schemas.trade import Account, Fill, Order, Portfolio, Position
+from app.schemas.trade import Account, Fill, Order, PlaceOrderResult, Portfolio, Position
 from app.schemas.watchlist import WatchlistItem
 
 
@@ -358,6 +358,150 @@ class OpendAdapter:
             )
             for _, r in data.iterrows()
         ]
+
+    def _resolve_trd_env(self, trd_env: str) -> Any:
+        """Translate our string env to the SDK enum (or pass through for tests)."""
+        try:
+            from moomoo import TrdEnv as MoomooTrdEnv  # type: ignore[import-not-found]
+            return MoomooTrdEnv.SIMULATE if trd_env == "SIMULATE" else MoomooTrdEnv.REAL
+        except ImportError:
+            return trd_env
+
+    def _first_simulate_acc_id(self, ctx: Any) -> int:
+        """Find the first SIMULATE account on the connected ctx (used when the
+        caller didn't specify an acc_id). Raises OpendError if none."""
+        ret, data = ctx.get_acc_list()
+        if ret != 0:
+            raise OpendError(f"get_acc_list failed: {data}")
+        for _, row in data.iterrows():
+            r = row.to_dict()
+            env_str = str(r.get("trd_env", "")).upper()
+            if "SIM" in env_str:
+                return int(r["acc_id"])
+        raise OpendError("no SIMULATE account on this OpenD")
+
+    def place_order(
+        self,
+        *,
+        code: str,
+        side: str,
+        qty: int,
+        price: float | None = None,
+        order_type: str = "NORMAL",
+        trd_env: str = "SIMULATE",
+        acc_id: int | None = None,
+    ) -> PlaceOrderResult:
+        """Place a paper or live order. For NORMAL orders price is required.
+        For MARKET orders price is ignored (we pass 0 — SDK accepts that for
+        market orders on supported markets)."""
+        if order_type == "NORMAL" and price is None:
+            raise OpendError("price is required for NORMAL (limit) orders")
+        ctx = self._trade_ctx_factory()
+        try:
+            try:
+                from moomoo import OrderType as MoomooOrderType, TrdSide  # type: ignore[import-not-found]
+                sdk_side = TrdSide.BUY if side == "BUY" else TrdSide.SELL
+                sdk_type = MoomooOrderType.NORMAL if order_type == "NORMAL" else MoomooOrderType.MARKET
+            except ImportError:
+                sdk_side = side
+                sdk_type = order_type
+            env = self._resolve_trd_env(trd_env)
+            resolved_acc_id = acc_id if acc_id is not None else self._first_simulate_acc_id(ctx)
+            ret, data = ctx.place_order(
+                price=price if price is not None else 0,
+                qty=qty,
+                code=code,
+                trd_side=sdk_side,
+                order_type=sdk_type,
+                trd_env=env,
+                acc_id=resolved_acc_id,
+            )
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"place_order failed: {data}")
+        row = data.iloc[0].to_dict() if hasattr(data, "iloc") else data
+        return PlaceOrderResult(
+            order_id=str(row["order_id"]),
+            code=str(row.get("code", code)),
+            side="BUY" if side == "BUY" else "SELL",
+            qty=int(row.get("qty", qty)),
+            price=float(row.get("price", price or 0) or 0),
+            status=str(row.get("order_status", "SUBMITTED")),
+            trd_env=trd_env,  # type: ignore[arg-type]
+            acc_id=int(row.get("acc_id", resolved_acc_id)),
+        )
+
+    def modify_order(
+        self,
+        *,
+        order_id: str,
+        acc_id: int,
+        price: float | None = None,
+        qty: int | None = None,
+        trd_env: str = "SIMULATE",
+    ) -> dict[str, str]:
+        if price is None and qty is None:
+            raise OpendError("modify_order: provide at least one of price or qty")
+        ctx = self._trade_ctx_factory()
+        try:
+            try:
+                from moomoo import ModifyOrderOp  # type: ignore[import-not-found]
+                op = ModifyOrderOp.NORMAL
+            except ImportError:
+                op = "NORMAL"
+            env = self._resolve_trd_env(trd_env)
+            ret, data = ctx.modify_order(
+                modify_order_op=op,
+                order_id=order_id,
+                qty=qty if qty is not None else 0,
+                price=price if price is not None else 0,
+                acc_id=acc_id,
+                trd_env=env,
+            )
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"modify_order failed: {data}")
+        return {"order_id": order_id, "status": "MODIFIED"}
+
+    def cancel_order(
+        self,
+        *,
+        order_id: str,
+        acc_id: int,
+        trd_env: str = "SIMULATE",
+    ) -> dict[str, str]:
+        ctx = self._trade_ctx_factory()
+        try:
+            try:
+                from moomoo import ModifyOrderOp  # type: ignore[import-not-found]
+                op = ModifyOrderOp.CANCEL
+            except ImportError:
+                op = "CANCEL"
+            env = self._resolve_trd_env(trd_env)
+            ret, data = ctx.modify_order(
+                modify_order_op=op,
+                order_id=order_id,
+                qty=0,
+                price=0,
+                acc_id=acc_id,
+                trd_env=env,
+            )
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"cancel_order failed: {data}")
+        return {"order_id": order_id, "status": "CANCELLED"}
 
     def list_fills(self, *, acc_id: int, trd_env: str = "SIMULATE") -> list[Fill]:
         ctx = self._trade_ctx_factory()

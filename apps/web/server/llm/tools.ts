@@ -108,6 +108,47 @@ export function makeTools(client: ApiClient) {
       }),
       execute: async (args) => ({ fills: await client.listFills(args) }),
     }),
+
+    'trade_place_order': tool({
+      description:
+        'Place a paper trading order (default trd_env=SIMULATE). REFUSE to place live orders ' +
+        '(trd_env=REAL) unless the user explicitly says "live" or "real". For NORMAL (limit) orders ' +
+        'price is required; for MARKET orders price is ignored. acc_id is optional for paper — server ' +
+        'auto-picks the first SIMULATE account if omitted.',
+      inputSchema: z.object({
+        code: z.string().describe('moomoo symbol like US.NVDA, HK.00700'),
+        side: z.enum(['BUY', 'SELL']),
+        qty: z.number().int().min(1),
+        price: z.number().optional(),
+        order_type: z.enum(['NORMAL', 'MARKET']).default('NORMAL'),
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
+        acc_id: z.number().int().optional(),
+      }),
+      execute: async (args) => client.placeOrder(args),
+    }),
+
+    'trade_modify_order': tool({
+      description:
+        'Modify an existing order\'s price and/or quantity. acc_id required. trd_env defaults to SIMULATE.',
+      inputSchema: z.object({
+        order_id: z.string(),
+        acc_id: z.number().int(),
+        price: z.number().optional(),
+        qty: z.number().int().optional(),
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
+      }),
+      execute: async (args) => client.modifyOrder(args),
+    }),
+
+    'trade_cancel_order': tool({
+      description: 'Cancel an existing order by order_id. acc_id required.',
+      inputSchema: z.object({
+        order_id: z.string(),
+        acc_id: z.number().int(),
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
+      }),
+      execute: async (args) => client.cancelOrder(args),
+    }),
   }
 }
 

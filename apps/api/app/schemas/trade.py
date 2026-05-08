@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 
 TrdEnv = Literal["SIMULATE", "REAL"]
+OrderType = Literal["NORMAL", "MARKET"]
 
 
 class Account(BaseModel):
@@ -52,3 +53,38 @@ class Fill(BaseModel):
     qty: int
     price: float
     fill_at: datetime
+
+
+class PlaceOrderRequest(BaseModel):
+    code: str
+    side: Literal["BUY", "SELL"]
+    qty: int
+    price: float | None = None  # required for NORMAL (limit), ignored for MARKET
+    order_type: OrderType = "NORMAL"
+    trd_env: TrdEnv = "SIMULATE"
+    acc_id: int | None = None  # if omitted, server uses the first SIMULATE account
+
+
+class ModifyOrderRequest(BaseModel):
+    order_id: str
+    price: float | None = None
+    qty: int | None = None
+    trd_env: TrdEnv = "SIMULATE"
+    acc_id: int
+
+
+class CancelOrderRequest(BaseModel):
+    order_id: str
+    trd_env: TrdEnv = "SIMULATE"
+    acc_id: int
+
+
+class PlaceOrderResult(BaseModel):
+    order_id: str
+    code: str
+    side: Literal["BUY", "SELL"]
+    qty: int
+    price: float
+    status: str
+    trd_env: TrdEnv
+    acc_id: int

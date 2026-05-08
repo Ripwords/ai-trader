@@ -246,6 +246,10 @@ function hasOutput(part: unknown): boolean {
                   :total_assets="(getToolOutput(part) as any).total_assets"
                   :positions="(getToolOutput(part) as any).positions"
                 />
+                <OrderCard
+                  v-else-if="hasOutput(part) && getToolName(part) === 'trade_place_order' && (getToolOutput(part) as { order_id?: string })?.order_id"
+                  :result="getToolOutput(part) as any"
+                />
                 <UChatTool
                   v-else
                   :text="getToolName(part)"

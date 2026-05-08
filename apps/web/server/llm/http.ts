@@ -146,6 +146,47 @@ export class ApiClient {
   listFills(args: { acc_id: number; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Fill[]> {
     return this.fetch('/trade/fills', { query: args })
   }
+
+  placeOrder(args: {
+    code: string
+    side: 'BUY' | 'SELL'
+    qty: number
+    price?: number
+    order_type?: 'NORMAL' | 'MARKET'
+    trd_env?: 'SIMULATE' | 'REAL'
+    acc_id?: number
+  }): Promise<PlaceOrderResult> {
+    return this.fetch('/trade/order/place', { method: 'POST', body: args })
+  }
+
+  modifyOrder(args: {
+    order_id: string
+    acc_id: number
+    price?: number
+    qty?: number
+    trd_env?: 'SIMULATE' | 'REAL'
+  }): Promise<{ order_id: string; status: string }> {
+    return this.fetch('/trade/order/modify', { method: 'POST', body: args })
+  }
+
+  cancelOrder(args: {
+    order_id: string
+    acc_id: number
+    trd_env?: 'SIMULATE' | 'REAL'
+  }): Promise<{ order_id: string; status: string }> {
+    return this.fetch('/trade/order/cancel', { method: 'POST', body: args })
+  }
+}
+
+export interface PlaceOrderResult {
+  order_id: string
+  code: string
+  side: 'BUY' | 'SELL'
+  qty: number
+  price: number
+  status: string
+  trd_env: 'SIMULATE' | 'REAL'
+  acc_id: number
 }
 
 export function getApiClient() {
