@@ -1,4 +1,11 @@
 import { convertToModelMessages, stepCountIs, streamText } from 'ai'
+import {
+  appendMessages,
+  createThread,
+  getOwnerId,
+  getThread,
+  titleFromText,
+} from '../db/repo'
 import { getApiClient } from '../llm/http'
 import { buildModel } from '../llm/model'
 import { MOOMOO_RULES } from '../llm/moomoo-context'
@@ -17,14 +24,44 @@ const SYSTEM_PROMPT = [
   MOOMOO_RULES,
 ].join('\n')
 
+interface ChatBody {
+  messages?: Array<{ id?: string; role: string; parts?: unknown[]; [k: string]: unknown }>
+  // Client passes the active thread id when continuing a conversation.
+  // Omitted on the first message of a new chat — server creates a thread
+  // and returns the id in the X-Chat-Id response header so the UI can route to it.
+  chatId?: string
+}
+
 export default defineEventHandler(async (event) => {
-  const body = await readBody<{ messages?: unknown }>(event)
-  if (!Array.isArray(body?.messages)) {
-    throw createError({ statusCode: 400, statusMessage: 'messages must be an array' })
+  const body = await readBody<ChatBody>(event)
+  if (!Array.isArray(body?.messages) || body.messages.length === 0) {
+    throw createError({ statusCode: 400, statusMessage: 'messages must be a non-empty array' })
   }
+
+  const ownerId = await getOwnerId()
+  const newestUser = [...body.messages].reverse().find(m => m.role === 'user')
+
+  // Resolve thread: validate provided id OR create one from the first user message.
+  let threadId = body.chatId
+  if (threadId) {
+    const existing = await getThread(ownerId, threadId)
+    if (!existing) threadId = undefined
+  }
+  if (!threadId) {
+    const firstText =
+      typeof (newestUser as { parts?: unknown })?.parts === 'object'
+        ? extractText(newestUser?.parts as unknown[])
+        : 'New chat'
+    threadId = await createThread(ownerId, titleFromText(firstText || 'New chat'))
+  }
+
+  // Persist the user message immediately so it survives a refresh during streaming.
+  if (newestUser) {
+    await appendMessages(threadId, [newestUser])
+  }
+
   const client = getApiClient()
   const tools = makeTools(client)
-
   const modelMessages = await convertToModelMessages(
     body.messages as Parameters<typeof convertToModelMessages>[0],
   )
@@ -37,5 +74,28 @@ export default defineEventHandler(async (event) => {
     stopWhen: stepCountIs(8),
   })
 
-  return result.toUIMessageStreamResponse()
+  // The chat-id round-trip: tell the client which thread we wrote to so it can
+  // update its URL and refresh the conversation list.
+  setResponseHeader(event, 'X-Chat-Id', threadId)
+  setResponseHeader(event, 'Access-Control-Expose-Headers', 'X-Chat-Id')
+
+  // Persist the full assistant response when streaming completes.
+  return result.toUIMessageStreamResponse({
+    onFinish: async ({ messages: finalMessages }) => {
+      const assistantOnly = finalMessages.filter(m => m.role === 'assistant')
+      if (assistantOnly.length > 0) {
+        await appendMessages(threadId!, assistantOnly as unknown as Parameters<typeof appendMessages>[1])
+      }
+    },
+  })
 })
+
+function extractText(parts: unknown[] | undefined): string {
+  if (!parts) return ''
+  for (const p of parts) {
+    if (p && typeof p === 'object' && (p as { type?: string }).type === 'text') {
+      return String((p as { text?: string }).text ?? '')
+    }
+  }
+  return ''
+}

@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { DefaultChatTransport, type UIMessage } from 'ai'
 import { Chat } from '@ai-sdk/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   getToolName,
   isReasoningUIPart,
@@ -10,10 +11,81 @@ import {
 import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
 
 const input = ref('')
+const route = useRoute()
+const router = useRouter()
 
+// Active conversation id, mirrored to ?c=<uuid> in the URL so refreshes
+// keep you on the same chat.
+const chatId = ref<string | null>(typeof route.query.c === 'string' ? route.query.c : null)
+
+const conversationsList = ref<{ refresh: () => Promise<void> } | null>(null)
+
+// The Chat instance owns the messages array, status, and stream lifecycle.
+// We pass `body: { chatId }` on every send so the server can resolve / persist.
+// The transport also lets us read the X-Chat-Id response header to capture the
+// id of newly-created threads.
 const chat = new Chat({
+  transport: new DefaultChatTransport({
+    api: '/api/chat',
+    prepareSendMessagesRequest: ({ messages, body }) => ({
+      body: { ...body, messages, chatId: chatId.value },
+    }),
+    fetch: async (url, init) => {
+      const res = await fetch(url, init)
+      const headerId = res.headers.get('X-Chat-Id')
+      if (headerId && headerId !== chatId.value) {
+        chatId.value = headerId
+        // Update URL without triggering a navigation
+        router.replace({ query: { ...route.query, c: headerId } })
+        // Refresh the sidebar list (debounced via the ref)
+        setTimeout(() => conversationsList.value?.refresh(), 250)
+      }
+      return res
+    },
+  }),
   onError(err) { console.error('chat error', err) },
 })
+
+async function loadConversation(id: string | null) {
+  if (!id) {
+    chat.messages = []
+    return
+  }
+  try {
+    const r = await $fetch<{ messages: UIMessage[] }>(`/api/conversations/${id}`)
+    chat.messages = (r.messages || []) as UIMessage[]
+  } catch (e) {
+    console.error('failed to load conversation', e)
+    chat.messages = []
+    chatId.value = null
+    router.replace({ query: { ...route.query, c: undefined } })
+  }
+}
+
+// Initial load: if URL has ?c=<id>, hydrate from the server.
+onMounted(() => { if (chatId.value) loadConversation(chatId.value) })
+
+// React to URL changes (e.g. user clicks a thread in the sidebar that updates the route)
+watch(() => route.query.c, async (next) => {
+  const nextId = typeof next === 'string' ? next : null
+  if (nextId === chatId.value) return
+  chatId.value = nextId
+  await loadConversation(nextId)
+})
+
+function startNewChat() {
+  chatId.value = null
+  chat.setMessages([])
+  router.replace({ query: { ...route.query, c: undefined } })
+}
+
+function onSelectConversation(id: string) {
+  router.push({ query: { ...route.query, c: id } })
+}
+
+function onConversationDeleted(id: string) {
+  if (id === chatId.value) startNewChat()
+}
 
 function onSubmit() {
   const text = input.value.trim()
@@ -76,7 +148,18 @@ function hasOutput(part: unknown): boolean {
 
 <template>
   <div class="h-screen flex bg-[var(--ink-0)] text-[var(--paper-0)] relative">
-    <WatchlistSidebar @select="onSelect" />
+    <div class="w-[300px] shrink-0 border-r hairline flex flex-col h-full bg-[var(--ink-0)] relative z-10">
+      <WatchlistSidebar class="!w-full !border-r-0 flex-1 min-h-0" @select="onSelect" />
+      <div class="border-t hairline">
+        <ConversationsList
+          ref="conversationsList"
+          :active-id="chatId"
+          @select="onSelectConversation"
+          @new="startNewChat"
+          @deleted="onConversationDeleted"
+        />
+      </div>
+    </div>
 
     <div class="flex-1 flex flex-col min-w-0 relative z-10">
       <!-- Top bar -->
