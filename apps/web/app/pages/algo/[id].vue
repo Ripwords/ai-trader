@@ -75,11 +75,27 @@ async function save() {
     })
     await refresh()
   } catch (e) {
-    saveError.value = (e as { data?: { detail?: string } })?.data?.detail
-      ?? (e as Error)?.message ?? 'save failed'
+    saveError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
+}
+
+// FastAPI returns `detail` as a string for HTTPException(detail=...) but
+// as an array of {loc, msg, type} for Pydantic body-validation 422s. The
+// old single-line stringify lost everything in the array case.
+function formatApiError(e: unknown): string {
+  const detail = (e as { data?: { detail?: unknown } })?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d: { loc?: unknown[]; msg?: string }) => {
+        const path = Array.isArray(d.loc) ? d.loc.filter((p) => p !== 'body').join('.') : ''
+        return path ? `${path}: ${d.msg}` : (d.msg ?? 'invalid')
+      })
+      .join('\n')
+  }
+  return (e as Error)?.message ?? 'save failed'
 }
 
 const backtest = ref<AlgoBacktestResult | null>(null)
