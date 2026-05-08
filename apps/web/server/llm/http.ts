@@ -106,6 +106,14 @@ export class ApiClient {
     })
   }
 
+  post<T>(path: string, body: Record<string, unknown>): Promise<T> {
+    return this.fetch<T>(path, { method: 'POST', body })
+  }
+
+  get<T>(path: string, query?: Record<string, unknown>): Promise<T> {
+    return this.fetch<T>(path, { query })
+  }
+
   async getKline(args: { code: string; ktype: KLineResponse['ktype']; num: number }): Promise<KLineResponse> {
     return this.fetch('/quote/kline', { query: args })
   }
