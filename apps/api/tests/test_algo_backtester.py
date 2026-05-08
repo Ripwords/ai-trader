@@ -6,7 +6,10 @@ from datetime import datetime, timedelta
 
 from app.schemas.algo import BacktestResult
 from app.schemas.quote import Bar
-from app.services.algo.backtester import INITIAL_CASH, run_backtest
+from app.services.algo.backtester import (
+    DEFAULT_INITIAL_CAPITAL as INITIAL_CASH,
+    run_backtest,
+)
 
 
 def _bars(closes: list[float], opens: list[float] | None = None) -> list[Bar]:
@@ -105,3 +108,25 @@ def test_equity_curve_starts_at_initial_cash_and_has_point_per_bar() -> None:
     # No trades → cash unchanged across all bars.
     for p in res.equity_curve:
         assert p.v == INITIAL_CASH
+
+
+from app.schemas.algo import SizingMode
+from app.services.algo.backtester import resolve_qty
+
+
+def test_resolve_qty_fixed_qty_floors_value() -> None:
+    assert resolve_qty(mode="fixed_qty", value=3.7, equity=10_000, fill_price=50) == 3
+
+
+def test_resolve_qty_pct_equity_uses_equity_and_fill_price() -> None:
+    # 25% of $10k equity / $50 fill = 50 shares.
+    assert resolve_qty(mode="pct_equity", value=25, equity=10_000, fill_price=50) == 50
+
+
+def test_resolve_qty_fixed_cash_divides_value_by_fill_price() -> None:
+    # $1000 / $33 fill = 30 (floor).
+    assert resolve_qty(mode="fixed_cash", value=1000, equity=10_000, fill_price=33) == 30
+
+
+def test_resolve_qty_zero_when_not_enough_capital() -> None:
+    assert resolve_qty(mode="fixed_cash", value=10, equity=0, fill_price=50) == 0
