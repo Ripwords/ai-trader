@@ -14,6 +14,8 @@ dependencies = [
   "pandas>=2.2",
   # Async DB access for algo persistence (strategies/runs/signals).
   "asyncpg>=0.29",
+  # Free fundamentals source (financial metrics, history, insider, news).
+  "yfinance>=0.2.40",
 ]
 
 [dependency-groups]
