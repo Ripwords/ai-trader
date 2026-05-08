@@ -7,7 +7,7 @@ interface OrderResult {
   price: number
   status: string
   trd_env: 'SIMULATE' | 'REAL'
-  acc_id: number
+  acc_id: string
 }
 
 const props = defineProps<{ result: OrderResult }>()

@@ -78,7 +78,7 @@ def test_list_accounts_returns_typed():
     assert len(accounts) == 1
     acc = accounts[0]
     assert isinstance(acc, Account)
-    assert acc.acc_id == 12345
+    assert acc.acc_id == "12345"
     assert acc.trd_env == "SIMULATE"
     assert acc.acc_type == "CASH"
 

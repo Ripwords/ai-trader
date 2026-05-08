@@ -85,7 +85,7 @@ export function makeTools(client: ApiClient) {
     'trade_portfolio': tool({
       description: 'Get positions and cash for an account. Read-only.',
       inputSchema: z.object({
-        acc_id: z.number().int(),
+        acc_id: z.string(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
       }),
       execute: async (args) => client.getPortfolio(args),
@@ -97,7 +97,7 @@ export function makeTools(client: ApiClient) {
         'Skip accounts where acc_role is "IPO" — moomoo refuses this call on IPO accounts ' +
         '(502 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
       inputSchema: z.object({
-        acc_id: z.number().int(),
+        acc_id: z.string(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
       }),
       execute: async (args) => ({ orders: await client.listOrders(args) }),
@@ -109,7 +109,7 @@ export function makeTools(client: ApiClient) {
         'Skip accounts where acc_role is "IPO" — moomoo refuses this call on IPO accounts ' +
         '(502 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
       inputSchema: z.object({
-        acc_id: z.number().int(),
+        acc_id: z.string(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
       }),
       execute: async (args) => ({ fills: await client.listFills(args) }),
@@ -128,7 +128,7 @@ export function makeTools(client: ApiClient) {
         price: z.number().optional(),
         order_type: z.enum(['NORMAL', 'MARKET']).default('NORMAL'),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
-        acc_id: z.number().int().optional(),
+        acc_id: z.string().optional(),
       }),
       execute: async (args) => client.placeOrder(args),
     }),
@@ -138,7 +138,7 @@ export function makeTools(client: ApiClient) {
         'Modify an existing order\'s price and/or quantity. acc_id required. trd_env defaults to SIMULATE.',
       inputSchema: z.object({
         order_id: z.string(),
-        acc_id: z.number().int(),
+        acc_id: z.string(),
         price: z.number().optional(),
         qty: z.number().int().optional(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
@@ -150,7 +150,7 @@ export function makeTools(client: ApiClient) {
       description: 'Cancel an existing order by order_id. acc_id required.',
       inputSchema: z.object({
         order_id: z.string(),
-        acc_id: z.number().int(),
+        acc_id: z.string(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
       }),
       execute: async (args) => client.cancelOrder(args),

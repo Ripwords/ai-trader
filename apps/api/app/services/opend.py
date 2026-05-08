@@ -279,7 +279,7 @@ class OpendAdapter:
             trd_env_raw = str(r.get("trd_env", "SIMULATE")).upper()
             trd_env = "SIMULATE" if "SIM" in trd_env_raw else "REAL"
             accounts.append(Account(
-                acc_id=int(r["acc_id"]),
+                acc_id=str(int(r["acc_id"])),  # str-on-wire (int parse normalises whitespace/locale)
                 trd_env=trd_env,  # type: ignore[arg-type]
                 acc_type=str(r.get("acc_type", "CASH")),
                 card_num=str(r["card_num"]) if r.get("card_num") else None,
@@ -289,7 +289,7 @@ class OpendAdapter:
             ))
         return accounts
 
-    def get_portfolio(self, *, acc_id: int, trd_env: str = "SIMULATE") -> Portfolio:
+    def get_portfolio(self, *, acc_id: str, trd_env: str = "SIMULATE") -> Portfolio:
         ctx = self._trade_ctx_factory()
         try:
             try:
@@ -297,8 +297,8 @@ class OpendAdapter:
                 env = MoomooTrdEnv.SIMULATE if trd_env == "SIMULATE" else MoomooTrdEnv.REAL
             except ImportError:
                 env = trd_env
-            ret_p, positions_df = ctx.position_list_query(acc_id=acc_id, trd_env=env, refresh_cache=True)
-            ret_a, accinfo_df = ctx.accinfo_query(acc_id=acc_id, trd_env=env, refresh_cache=True)
+            ret_p, positions_df = ctx.position_list_query(acc_id=int(acc_id), trd_env=env, refresh_cache=True)
+            ret_a, accinfo_df = ctx.accinfo_query(acc_id=int(acc_id), trd_env=env, refresh_cache=True)
         finally:
             try:
                 ctx.close()
@@ -330,7 +330,7 @@ class OpendAdapter:
             positions=positions,
         )
 
-    def list_orders(self, *, acc_id: int, trd_env: str = "SIMULATE") -> list[Order]:
+    def list_orders(self, *, acc_id: str, trd_env: str = "SIMULATE") -> list[Order]:
         ctx = self._trade_ctx_factory()
         try:
             try:
@@ -338,7 +338,7 @@ class OpendAdapter:
                 env = MoomooTrdEnv.SIMULATE if trd_env == "SIMULATE" else MoomooTrdEnv.REAL
             except ImportError:
                 env = trd_env
-            ret, data = ctx.order_list_query(acc_id=acc_id, trd_env=env, refresh_cache=True)
+            ret, data = ctx.order_list_query(acc_id=int(acc_id), trd_env=env, refresh_cache=True)
         finally:
             try:
                 ctx.close()
@@ -367,7 +367,7 @@ class OpendAdapter:
         except ImportError:
             return trd_env
 
-    def _first_simulate_acc_id(self, ctx: Any) -> int:
+    def _first_simulate_acc_id(self, ctx: Any) -> str:
         """Find the first SIMULATE account on the connected ctx (used when the
         caller didn't specify an acc_id). Raises OpendError if none."""
         ret, data = ctx.get_acc_list()
@@ -377,7 +377,7 @@ class OpendAdapter:
             r = row.to_dict()
             env_str = str(r.get("trd_env", "")).upper()
             if "SIM" in env_str:
-                return int(r["acc_id"])
+                return str(int(r["acc_id"]))
         raise OpendError("no SIMULATE account on this OpenD")
 
     def place_order(
@@ -389,7 +389,7 @@ class OpendAdapter:
         price: float | None = None,
         order_type: str = "NORMAL",
         trd_env: str = "SIMULATE",
-        acc_id: int | None = None,
+        acc_id: str | None = None,
     ) -> PlaceOrderResult:
         """Place a paper or live order. For NORMAL orders price is required.
         For MARKET orders price is ignored (we pass 0 — SDK accepts that for
@@ -414,7 +414,7 @@ class OpendAdapter:
                 trd_side=sdk_side,
                 order_type=sdk_type,
                 trd_env=env,
-                acc_id=resolved_acc_id,
+                acc_id=int(resolved_acc_id),
             )
         finally:
             try:
@@ -432,14 +432,14 @@ class OpendAdapter:
             price=float(row.get("price", price or 0) or 0),
             status=str(row.get("order_status", "SUBMITTED")),
             trd_env=trd_env,  # type: ignore[arg-type]
-            acc_id=int(row.get("acc_id", resolved_acc_id)),
+            acc_id=str(int(row.get("acc_id", resolved_acc_id))),
         )
 
     def modify_order(
         self,
         *,
         order_id: str,
-        acc_id: int,
+        acc_id: str,
         price: float | None = None,
         qty: int | None = None,
         trd_env: str = "SIMULATE",
@@ -459,7 +459,7 @@ class OpendAdapter:
                 order_id=order_id,
                 qty=qty if qty is not None else 0,
                 price=price if price is not None else 0,
-                acc_id=acc_id,
+                acc_id=int(acc_id),
                 trd_env=env,
             )
         finally:
@@ -475,7 +475,7 @@ class OpendAdapter:
         self,
         *,
         order_id: str,
-        acc_id: int,
+        acc_id: str,
         trd_env: str = "SIMULATE",
     ) -> dict[str, str]:
         ctx = self._trade_ctx_factory()
@@ -491,7 +491,7 @@ class OpendAdapter:
                 order_id=order_id,
                 qty=0,
                 price=0,
-                acc_id=acc_id,
+                acc_id=int(acc_id),
                 trd_env=env,
             )
         finally:
@@ -503,7 +503,7 @@ class OpendAdapter:
             raise OpendError(f"cancel_order failed: {data}")
         return {"order_id": order_id, "status": "CANCELLED"}
 
-    def list_fills(self, *, acc_id: int, trd_env: str = "SIMULATE") -> list[Fill]:
+    def list_fills(self, *, acc_id: str, trd_env: str = "SIMULATE") -> list[Fill]:
         ctx = self._trade_ctx_factory()
         try:
             try:
@@ -511,7 +511,7 @@ class OpendAdapter:
                 env = MoomooTrdEnv.SIMULATE if trd_env == "SIMULATE" else MoomooTrdEnv.REAL
             except ImportError:
                 env = trd_env
-            ret, data = ctx.deal_list_query(acc_id=acc_id, trd_env=env, refresh_cache=True)
+            ret, data = ctx.deal_list_query(acc_id=int(acc_id), trd_env=env, refresh_cache=True)
         finally:
             try:
                 ctx.close()

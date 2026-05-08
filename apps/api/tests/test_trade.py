@@ -8,7 +8,7 @@ from app.schemas.trade import Account, Fill, Order, Portfolio, Position
 
 class FakeTradeAdapter:
     def list_accounts(self):
-        return [Account(acc_id=12345, trd_env="SIMULATE", acc_type="CASH", trdmarket_auth=["US"], acc_role="OWNER")]
+        return [Account(acc_id="12345", trd_env="SIMULATE", acc_type="CASH", trdmarket_auth=["US"], acc_role="OWNER")]
 
     def get_portfolio(self, *, acc_id, trd_env="SIMULATE"):
         return Portfolio(
@@ -58,7 +58,7 @@ class FakeTradeAdapter:
 def test_accounts_endpoint(client_with_bearer_and_fake_trade):
     res = client_with_bearer_and_fake_trade.get("/trade/accounts")
     assert res.status_code == 200
-    assert res.json()[0]["acc_id"] == 12345
+    assert res.json()[0]["acc_id"] == "12345"
 
 
 def test_portfolio_endpoint(client_with_bearer_and_fake_trade):

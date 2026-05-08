@@ -42,7 +42,7 @@ export interface WatchlistItem {
 }
 
 export interface Account {
-  acc_id: number
+  acc_id: string
   trd_env: 'SIMULATE' | 'REAL'
   acc_type: string
   card_num: string | null
@@ -135,15 +135,15 @@ export class ApiClient {
     return this.fetch('/trade/accounts')
   }
 
-  getPortfolio(args: { acc_id: number; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Portfolio> {
+  getPortfolio(args: { acc_id: string; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Portfolio> {
     return this.fetch('/trade/portfolio', { query: args })
   }
 
-  listOrders(args: { acc_id: number; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Order[]> {
+  listOrders(args: { acc_id: string; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Order[]> {
     return this.fetch('/trade/orders', { query: args })
   }
 
-  listFills(args: { acc_id: number; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Fill[]> {
+  listFills(args: { acc_id: string; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Fill[]> {
     return this.fetch('/trade/fills', { query: args })
   }
 
@@ -154,14 +154,14 @@ export class ApiClient {
     price?: number
     order_type?: 'NORMAL' | 'MARKET'
     trd_env?: 'SIMULATE' | 'REAL'
-    acc_id?: number
+    acc_id?: string
   }): Promise<PlaceOrderResult> {
     return this.fetch('/trade/order/place', { method: 'POST', body: args })
   }
 
   modifyOrder(args: {
     order_id: string
-    acc_id: number
+    acc_id: string
     price?: number
     qty?: number
     trd_env?: 'SIMULATE' | 'REAL'
@@ -171,7 +171,7 @@ export class ApiClient {
 
   cancelOrder(args: {
     order_id: string
-    acc_id: number
+    acc_id: string
     trd_env?: 'SIMULATE' | 'REAL'
   }): Promise<{ order_id: string; status: string }> {
     return this.fetch('/trade/order/cancel', { method: 'POST', body: args })
@@ -186,7 +186,7 @@ export interface PlaceOrderResult {
   price: number
   status: string
   trd_env: 'SIMULATE' | 'REAL'
-  acc_id: number
+  acc_id: string
 }
 
 export function getApiClient() {
