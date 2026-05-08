@@ -19,6 +19,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nuxt/ui": "^4.7.1",
     "ai": "^6.0.176",
+    "diff": "^9.0.0",
     "lightweight-charts": "^5.2.0",
     "nuxt": "^4.4.4",
     "ofetch": "^1.5.1",
