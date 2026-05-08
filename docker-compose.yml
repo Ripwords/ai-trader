@@ -69,6 +69,8 @@ services:
       NUXT_SESSION_SECRET: ${SESSION_SECRET}
       NUXT_INTERNAL_BEARER: ${INTERNAL_BEARER}
       NUXT_API_BASE_URL: http://api:8000
+      # Echoed in the chat footer ("model · …"). Mirrors LLM_MODEL.
+      NUXT_PUBLIC_LLM_MODEL: ${LLM_MODEL}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     ports:
       - "${WEB_PORT:-3000}:3000"

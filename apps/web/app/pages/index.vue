@@ -137,7 +137,8 @@ const suggestions = [
   'Show my paper portfolio',
 ]
 
-const llmModel = 'deepseek/deepseek-v4-flash'
+// Mirrored from server-side LLM_MODEL via NUXT_PUBLIC_LLM_MODEL.
+const llmModel = useRuntimeConfig().public.llmModel || 'unset'
 
 // Branch on tool name to decide whether to render a rich custom card
 // or fall back to the default UChatTool indicator.
@@ -287,19 +288,27 @@ function hasOutput(part: unknown): boolean {
             placeholder="Show me NVDA daily, what's on my watchlist, any news on…"
             @submit="onSubmit"
           >
-            <UChatPromptSubmit
-              :status="chat.status"
-              color="neutral"
-              variant="solid"
-              :ui="{
-                base: '!bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a]',
-              }"
-              @stop="chat.stop()"
-              @reload="chat.regenerate()"
-            />
+            <template #footer>
+              <!-- Left spacer reserves room for future controls (attachments, etc.).
+                   Footer slot is `flex items-center justify-between gap-1.5` so the
+                   submit button is pushed to the right. -->
+              <div />
+              <UChatPromptSubmit
+                :status="chat.status"
+                color="neutral"
+                variant="solid"
+                :ui="{
+                  base: '!bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !rounded-md !p-0 !size-8 !inline-flex !items-center !justify-center',
+                  leadingIcon: '!size-4',
+                  trailingIcon: '!size-4',
+                }"
+                @stop="chat.stop()"
+                @reload="chat.regenerate()"
+              />
+            </template>
           </UChatPrompt>
           <div class="mt-3 px-2 text-xs font-mono uppercase tracking-[0.18em] text-[var(--paper-3)]">
-            model · {{ llmModel }} · paper trading default
+            model · {{ llmModel }} · live data · paper writes
           </div>
         </div>
       </footer>

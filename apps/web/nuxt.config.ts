@@ -28,7 +28,10 @@ export default defineNuxtConfig({
     sessionSecret: '',
     internalBearer: '',
     apiBaseUrl: 'http://api:8000',
-    public: {},
+    public: {
+      // Echoed to the chat footer. Mirrors process.env.LLM_MODEL via NUXT_PUBLIC_LLM_MODEL.
+      llmModel: '',
+    },
     // LLM provider keys, model id, and Tavily key are read directly from
     // process.env in agent.ts (Mastra's provider registry expects them
     // there anyway). Keeping them out of runtimeConfig avoids pulling
