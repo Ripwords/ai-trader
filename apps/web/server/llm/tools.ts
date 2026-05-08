@@ -283,6 +283,29 @@ export function makeTools(client: ApiClient) {
         return getResearchApi().synthesizeDecisions({ symbols, signals })
       },
     }),
+
+    'analyze_ticker': tool({
+      description:
+        'COMPREHENSIVE ticker analysis via the Mastra workflow: fetches fundamentals, runs all 4 deterministic analysts AND all 5 LLM investor personas (Buffett/Munger/Burry/Druckenmiller/Wood), persists every signal, then synthesizes a final risk-managed decision. Returns a markdown report ready to show the user. Slower than research_ticker — use when the user asks for a deep dive, a full analysis, or "analyze X comprehensively".',
+      inputSchema: z.object({
+        symbol: z.string().describe('moomoo-style symbol like US.NVDA'),
+      }),
+      execute: async ({ symbol }) => {
+        const { analyzeTickerWorkflow } = await import('../mastra')
+        const run = await analyzeTickerWorkflow.createRun()
+        const result = await run.start({
+          inputData: {
+            symbol,
+            analysts: ['fundamentals', 'valuation', 'technicals', 'sentiment'],
+            personas: ['buffett', 'munger', 'burry', 'druckenmiller', 'wood'],
+          },
+        })
+        if (result.status !== 'success') {
+          throw new Error(`analyze_ticker workflow status=${result.status}`)
+        }
+        return result.result
+      },
+    }),
   }
 }
 

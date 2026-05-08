@@ -358,10 +358,20 @@ export interface ResearchSignal {
 
 export type AnalystName = 'fundamentals' | 'valuation' | 'technicals' | 'sentiment'
 
+export interface PortfolioSnapshot {
+  cash: number
+  total_value: number
+  positions: Record<string, number>
+}
+
 export interface ResearchApi {
   getBundle(symbol: string): Promise<unknown>
   runAnalyst(name: AnalystName, symbol: string): Promise<ResearchSignal>
-  synthesizeDecisions(payload: { symbols: string[]; signals?: ResearchSignal[] }): Promise<{ decisions: unknown[] }>
+  synthesizeDecisions(payload: {
+    symbols: string[]
+    signals?: ResearchSignal[]
+    portfolio?: PortfolioSnapshot
+  }): Promise<{ decisions: unknown[] }>
 }
 
 export function getResearchApi(): ResearchApi {
