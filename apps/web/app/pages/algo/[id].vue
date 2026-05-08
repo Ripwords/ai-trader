@@ -336,6 +336,8 @@ async function runBacktest() {
           <AlgoCard
             v-if="backtest"
             :equity="backtest.equity_curve"
+            :benchmark="backtest.benchmark_curve"
+            :price-bars="backtest.price_bars"
             :trades="backtest.trades"
             :metrics="backtest.metrics"
             :status="backtest.status"

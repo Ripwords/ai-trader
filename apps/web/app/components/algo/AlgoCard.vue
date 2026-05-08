@@ -1,30 +1,49 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import {
+  CandlestickSeries,
   LineSeries,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type LogicalRange,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
 
 interface EquityPoint { t: string, v: number }
+interface Bar { time: string, open: number, high: number, low: number, close: number }
 interface Trade { ts: string, side: 'BUY' | 'SELL', qty: number, price: number, pnl: number }
-interface Metrics { pnl: number, win_rate: number, max_dd: number, sharpe: number, n_trades: number }
+interface Metrics {
+  pnl: number, win_rate: number, max_dd: number, sharpe: number,
+  fills: number, round_trips: number, wins: number, losses: number,
+  benchmark_pnl: number,
+}
 
 const props = defineProps<{
   equity: EquityPoint[]
+  benchmark: EquityPoint[]
+  priceBars: Bar[]
   trades: Trade[]
   metrics: Metrics | null
   status?: string
   error?: string | null
 }>()
 
-const el = ref<HTMLDivElement | null>(null)
-let chart: IChartApi | undefined
-let line: ISeriesApi<'Line'> | undefined
+const priceEl = ref<HTMLDivElement | null>(null)
+const equityEl = ref<HTMLDivElement | null>(null)
+let priceChart: IChartApi | undefined
+let equityChart: IChartApi | undefined
+let candle: ISeriesApi<'Candlestick'> | undefined
+let candleMarkers: ISeriesMarkersPluginApi<Time> | undefined
+let equityLine: ISeriesApi<'Line'> | undefined
+let benchLine: ISeriesApi<'Line'> | undefined
 
 const ACCENT = '#d4a96a'
+const BENCH = '#6b6558'
 const UP = '#7ec99c'
 const DOWN = '#e07a5f'
 
@@ -32,15 +51,8 @@ function toUnix(t: string): UTCTimestamp {
   return Math.floor(new Date(t).getTime() / 1000) as UTCTimestamp
 }
 
-function render() {
-  if (!chart || !line) return
-  line.setData(props.equity.map(p => ({ time: toUnix(p.t), value: p.v })))
-  chart.timeScale().fitContent()
-}
-
-onMounted(() => {
-  if (!el.value) return
-  chart = createChart(el.value, {
+function makeBaseOptions() {
+  return {
     layout: {
       background: { color: 'transparent' },
       textColor: '#b6b1a4',
@@ -54,32 +66,97 @@ onMounted(() => {
     rightPriceScale: { borderColor: 'rgba(255, 245, 230, 0.08)' },
     timeScale: { borderColor: 'rgba(255, 245, 230, 0.08)' },
     crosshair: {
-      vertLine: { color: ACCENT, width: 1, style: 2, labelBackgroundColor: ACCENT },
-      horzLine: { color: ACCENT, width: 1, style: 2, labelBackgroundColor: ACCENT },
+      vertLine: { color: ACCENT, width: 1 as const, style: 2 as const, labelBackgroundColor: ACCENT },
+      horzLine: { color: ACCENT, width: 1 as const, style: 2 as const, labelBackgroundColor: ACCENT },
     },
-    height: 280,
     autoSize: true,
+  }
+}
+
+function render() {
+  if (candle) {
+    candle.setData(props.priceBars.map(b => ({
+      time: toUnix(b.time),
+      open: b.open, high: b.high, low: b.low, close: b.close,
+    })))
+    const markers: SeriesMarker<Time>[] = props.trades.map(t => t.side === 'BUY'
+      ? {
+          time: toUnix(t.ts) as Time, position: 'belowBar',
+          color: UP, shape: 'arrowUp', text: `BUY ${t.qty}`,
+        }
+      : {
+          time: toUnix(t.ts) as Time, position: 'aboveBar',
+          color: DOWN, shape: 'arrowDown', text: `SELL ${t.qty}`,
+        })
+    if (!candleMarkers) {
+      candleMarkers = createSeriesMarkers(candle, markers)
+    } else {
+      candleMarkers.setMarkers(markers)
+    }
+  }
+  if (equityLine) {
+    equityLine.setData(props.equity.map(p => ({ time: toUnix(p.t), value: p.v })))
+  }
+  if (benchLine) {
+    benchLine.setData(props.benchmark.map(p => ({ time: toUnix(p.t), value: p.v })))
+  }
+  priceChart?.timeScale().fitContent()
+  equityChart?.timeScale().fitContent()
+}
+
+let syncing = false
+function syncRanges() {
+  if (!priceChart || !equityChart) return
+  priceChart.timeScale().subscribeVisibleLogicalRangeChange((range: LogicalRange | null) => {
+    if (syncing || !range) return
+    syncing = true
+    equityChart!.timeScale().setVisibleLogicalRange(range)
+    syncing = false
   })
-  line = chart.addSeries(LineSeries, {
-    color: ACCENT,
-    lineWidth: 2,
-    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+  equityChart.timeScale().subscribeVisibleLogicalRangeChange((range: LogicalRange | null) => {
+    if (syncing || !range) return
+    syncing = true
+    priceChart!.timeScale().setVisibleLogicalRange(range)
+    syncing = false
   })
+}
+
+onMounted(() => {
+  if (priceEl.value) {
+    priceChart = createChart(priceEl.value, { ...makeBaseOptions(), height: 240 })
+    candle = priceChart.addSeries(CandlestickSeries, {
+      upColor: UP, downColor: DOWN,
+      borderUpColor: UP, borderDownColor: DOWN,
+      wickUpColor: UP, wickDownColor: DOWN,
+    })
+  }
+  if (equityEl.value) {
+    equityChart = createChart(equityEl.value, { ...makeBaseOptions(), height: 200 })
+    equityLine = equityChart.addSeries(LineSeries, {
+      color: ACCENT, lineWidth: 2,
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+    })
+    benchLine = equityChart.addSeries(LineSeries, {
+      color: BENCH, lineWidth: 1, lineStyle: 2,
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+    })
+  }
+  syncRanges()
   render()
 })
 
-onUnmounted(() => { chart?.remove() })
+onUnmounted(() => {
+  priceChart?.remove()
+  equityChart?.remove()
+})
 
-watch(() => props.equity, render, { deep: false })
+watch(() => [props.equity, props.benchmark, props.priceBars, props.trades], render, { deep: false })
 
 function fmt(n: number, digits = 2): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 function pct(n: number): string { return `${(n * 100).toFixed(2)}%` }
-function shortTs(t: string): string {
-  const d = new Date(t)
-  return d.toISOString().slice(0, 16).replace('T', ' ')
-}
+function shortTs(t: string): string { return new Date(t).toISOString().slice(0, 16).replace('T', ' ') }
 </script>
 
 <template>
@@ -89,7 +166,7 @@ function shortTs(t: string): string {
     </div>
 
     <!-- Metrics row -->
-    <div v-if="metrics" class="grid grid-cols-5 gap-4 font-mono text-xs uppercase tracking-[0.18em]">
+    <div v-if="metrics" class="grid grid-cols-7 gap-4 font-mono text-xs uppercase tracking-[0.18em]">
       <div>
         <div class="text-[var(--paper-3)]">PnL</div>
         <div
@@ -99,8 +176,18 @@ function shortTs(t: string): string {
         >{{ metrics.pnl >= 0 ? '+' : '' }}{{ fmt(metrics.pnl) }}</div>
       </div>
       <div>
+        <div class="text-[var(--paper-3)]">Bench</div>
+        <div
+          class="text-base mt-1"
+          :class="metrics.benchmark_pnl >= 0 ? 'text-[var(--tape-up)]' : 'text-[var(--tape-down)]'"
+          data-mono
+        >{{ metrics.benchmark_pnl >= 0 ? '+' : '' }}{{ fmt(metrics.benchmark_pnl) }}</div>
+      </div>
+      <div>
         <div class="text-[var(--paper-3)]">Win-rate</div>
-        <div class="text-base mt-1 text-[var(--paper-0)]" data-mono>{{ pct(metrics.win_rate) }}</div>
+        <div class="text-base mt-1 text-[var(--paper-0)]" data-mono>
+          {{ metrics.round_trips > 0 ? pct(metrics.win_rate) : '—' }}
+        </div>
       </div>
       <div>
         <div class="text-[var(--paper-3)]">Max DD</div>
@@ -111,19 +198,39 @@ function shortTs(t: string): string {
         <div class="text-base mt-1 text-[var(--paper-0)]" data-mono>{{ fmt(metrics.sharpe, 3) }}</div>
       </div>
       <div>
-        <div class="text-[var(--paper-3)]">Trades</div>
-        <div class="text-base mt-1 text-[var(--paper-0)]" data-mono>{{ metrics.n_trades }}</div>
+        <div class="text-[var(--paper-3)]">Fills</div>
+        <div class="text-base mt-1 text-[var(--paper-0)]" data-mono>{{ metrics.fills }}</div>
+      </div>
+      <div>
+        <div class="text-[var(--paper-3)]">Round-trips</div>
+        <div class="text-base mt-1 text-[var(--paper-0)]" data-mono>
+          {{ metrics.round_trips }}
+          <span v-if="metrics.round_trips > 0" class="text-xs text-[var(--paper-3)] ml-1">
+            ({{ metrics.wins }}W / {{ metrics.losses }}L)
+          </span>
+        </div>
       </div>
     </div>
 
-    <!-- Equity curve -->
-    <div ref="el" class="w-full" />
+    <!-- Stacked charts -->
+    <div class="space-y-2">
+      <div class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">price · trade markers</div>
+      <div ref="priceEl" class="w-full" />
+      <div class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] flex gap-4 items-center">
+        <span>equity</span>
+        <span class="inline-flex items-center gap-1.5">
+          <span class="inline-block w-3 h-[2px] bg-[#d4a96a]" /> strategy
+        </span>
+        <span class="inline-flex items-center gap-1.5">
+          <span class="inline-block w-3 border-t border-dashed border-[#6b6558]" /> buy &amp; hold
+        </span>
+      </div>
+      <div ref="equityEl" class="w-full" />
+    </div>
 
     <!-- Trades table -->
     <div v-if="trades.length">
-      <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mb-2">
-        trades
-      </div>
+      <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mb-2">trades</div>
       <div class="max-h-72 overflow-y-auto scroll-hidden">
         <table class="w-full font-mono text-xs">
           <thead class="text-[var(--paper-3)] uppercase tracking-wider">
