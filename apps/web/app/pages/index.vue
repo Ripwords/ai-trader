@@ -98,8 +98,8 @@ function hasOutput(part: unknown): boolean {
         </div>
       </header>
 
-      <!-- Body -->
-      <main class="flex-1 overflow-hidden flex flex-col">
+      <!-- Body — min-h-0 lets UChatMessages's internal scroll container size correctly inside the flex column -->
+      <main class="flex-1 min-h-0 flex flex-col">
         <!-- Empty state -->
         <div
           v-if="!hasMessages"
@@ -125,12 +125,12 @@ function hasOutput(part: unknown): boolean {
           </div>
         </div>
 
-        <!-- Chat list -->
+        <!-- Chat list — scrollable but scrollbar hidden -->
         <UChatMessages
           v-else
           :messages="chat.messages"
           :status="chat.status"
-          class="flex-1 max-w-3xl mx-auto w-full px-6"
+          class="flex-1 min-h-0 max-w-3xl mx-auto w-full px-6 overflow-y-auto scroll-hidden"
         >
           <template #content="{ message }">
             <template v-for="(part, idx) in message.parts" :key="`${message.id}-${idx}`">
@@ -199,6 +199,11 @@ function hasOutput(part: unknown): boolean {
           >
             <UChatPromptSubmit
               :status="chat.status"
+              color="neutral"
+              variant="solid"
+              :ui="{
+                base: '!bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a]',
+              }"
               @stop="chat.stop()"
               @reload="chat.regenerate()"
             />
