@@ -317,7 +317,12 @@ async function runBacktest() {
             </div>
           </div>
 
-          <label class="block">
+          <!-- NOTE: This is intentionally a <div>, not a <label>. A <label>
+               with no `for` attribute dispatches clicks to its first labeled
+               descendant; in diff-review mode the textarea is hidden and the
+               first labeled descendant becomes the toolbar's Accept All
+               button — every click anywhere in the diff view would fire it. -->
+          <div class="block">
             <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">strategy code</span>
             <CodeEditor
               v-model="draft.code"
@@ -327,7 +332,7 @@ async function runBacktest() {
               class="mt-1"
               @done="onDone"
             />
-          </label>
+          </div>
 
           <div v-if="saveError" class="font-mono text-sm text-[var(--tape-down)] whitespace-pre-wrap">
             {{ saveError }}
