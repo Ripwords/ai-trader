@@ -6,6 +6,7 @@ import type {
   AlgoState,
   AlgoStrategy,
 } from '../../../server/llm/http'
+import { buildHunks, type DiffPayload } from '../../components/algo/diff-hunks'
 
 const route = useRoute()
 const id = computed(() => route.params.id as string)
@@ -107,6 +108,34 @@ async function toggleKill() {
 
 function shortTs(t: string): string {
   return new Date(t).toISOString().slice(5, 16).replace('T', ' ')
+}
+
+// --- Editor diff-review handoff -------------------------------------------
+//
+// Chat blocks emit `review` with a base snapshot + proposed code. We hand
+// that to the editor via `activeReview`; the editor's `done` event tells
+// us what to commit and how many hunks were accepted. The summary flows
+// back to the chat via `finishedReview`, which the assistant watches to
+// flip its block status pill.
+const activeReview = ref<DiffPayload | null>(null)
+const finishedReview = ref<{ blockKey: string, summary: { accepted: number; total: number } } | null>(null)
+
+function onReview(blockKey: string, base: string, proposed: string) {
+  activeReview.value = {
+    blockKey,
+    base,
+    proposed,
+    hunks: buildHunks(base, proposed),
+  }
+  finishedReview.value = null
+}
+
+function onDone(resolved: string, summary: { accepted: number; total: number }) {
+  draft.value.code = resolved
+  if (activeReview.value) {
+    finishedReview.value = { blockKey: activeReview.value.blockKey, summary }
+  }
+  activeReview.value = null
 }
 
 async function runBacktest() {
@@ -290,7 +319,14 @@ async function runBacktest() {
 
           <label class="block">
             <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">strategy code</span>
-            <CodeEditor v-model="draft.code" :rows="18" aria-label="strategy code" class="mt-1" />
+            <CodeEditor
+              v-model="draft.code"
+              :rows="18"
+              :diff="activeReview"
+              aria-label="strategy code"
+              class="mt-1"
+              @done="onDone"
+            />
           </label>
 
           <div v-if="saveError" class="font-mono text-sm text-[var(--tape-down)] whitespace-pre-wrap">
@@ -399,6 +435,9 @@ async function runBacktest() {
           :current-code="draft.code"
           :symbol="draft.symbol"
           :cadence="draft.cadence"
+          :active-review-key="activeReview?.blockKey ?? null"
+          :finished-review="finishedReview"
+          @review="onReview"
           @apply="(code) => { draft.code = code }"
         />
       </div>
