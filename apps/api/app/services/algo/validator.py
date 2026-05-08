@@ -91,7 +91,8 @@ class _Visitor(ast.NodeVisitor):
 
 
 def validate(src: str) -> None:
-    """Raise ValidationError if `src` contains disallowed constructs."""
+    """Raise ValidationError if `src` contains disallowed constructs OR
+    fails to define a top-level `on_bar(c)` function."""
     try:
         tree = ast.parse(src)
     except SyntaxError as e:
@@ -102,3 +103,20 @@ def validate(src: str) -> None:
     if v.errors:
         joined = "; ".join(str(e) for e in v.errors)
         raise ValidationError(joined, v.errors[0].line)
+
+    # The runtime imports the strategy and calls `on_bar(ctx)` once per
+    # bar. The LLM occasionally produces bare module-level code that
+    # references `c.bars` directly; that fails at exec time with the
+    # cryptic `name 'c' is not defined`. Catch it here with a clearer
+    # message so the chat can prompt the model to fix it.
+    has_on_bar = any(
+        isinstance(node, ast.FunctionDef)
+        and node.name == "on_bar"
+        and len(node.args.args) >= 1
+        for node in tree.body
+    )
+    if not has_on_bar:
+        raise ValidationError(
+            "strategy must define a top-level `def on_bar(c):` function — "
+            "the runtime calls it once per bar with the bar context"
+        )

@@ -69,6 +69,30 @@ def test_validator_reports_syntax_error_with_line() -> None:
     assert "syntax" in msg.lower() or "line" in msg.lower()
 
 
+def test_validator_rejects_missing_on_bar_with_clear_message() -> None:
+    """LLMs occasionally emit bare module-level code (referencing `c.bars`
+    without wrapping in `def on_bar(c):`). At exec time that surfaces as
+    `name 'c' is not defined`; the validator should catch it earlier with
+    actionable guidance."""
+    bare = (
+        "df = c.bars\n"
+        "if len(df) < 20:\n"
+        "    c.hold()\n"
+    )
+    with pytest.raises(ValidationError) as exc:
+        validate(bare)
+    msg = str(exc.value)
+    assert "on_bar" in msg
+
+
+def test_validator_rejects_on_bar_with_no_parameter() -> None:
+    """`def on_bar():` (no params) is syntactically a function but doesn't
+    match the runtime contract — the runtime always calls it with ctx."""
+    with pytest.raises(ValidationError) as exc:
+        validate("def on_bar():\n    pass\n")
+    assert "on_bar" in str(exc.value)
+
+
 # --- Sandbox: contract --------------------------------------------------------
 
 
