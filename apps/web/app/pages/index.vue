@@ -196,8 +196,8 @@ function pickSuggestion(s: string) {
           class="h-full flex flex-col items-center justify-center px-6 max-w-2xl mx-auto text-center gap-10"
         >
           <div class="rise-in">
-            <div class="font-serif italic text-6xl text-[var(--paper-0)] leading-none">
-              good <span class="text-[var(--accent)]">morning</span>
+            <div class="text-5xl font-semibold tracking-tight text-[var(--paper-0)] leading-none">
+              Good <span class="text-[var(--accent)]">morning</span>
             </div>
             <div class="font-mono text-sm uppercase tracking-[0.25em] text-[var(--paper-3)] mt-4">
               ask anything · charts, news, your portfolio
@@ -210,7 +210,7 @@ function pickSuggestion(s: string) {
               class="text-left px-5 py-4 surface-1 hover:border-[var(--accent)] transition-colors group"
               @click="pickSuggestion(s)"
             >
-              <span class="font-serif italic text-lg text-[var(--paper-0)] group-hover:text-[var(--accent)]">{{ s }}</span>
+              <span class="text-base font-medium text-[var(--paper-0)] group-hover:text-[var(--accent)]">{{ s }}</span>
             </button>
           </div>
         </div>
@@ -229,7 +229,7 @@ function pickSuggestion(s: string) {
             <div v-for="(block, idx) in m.blocks" :key="idx" class="space-y-3">
               <p
                 v-if="block.kind === 'text'"
-                class="whitespace-pre-wrap font-serif text-xl leading-[1.55] text-[var(--paper-0)]"
+                class="whitespace-pre-wrap text-base leading-[1.6] text-[var(--paper-0)]"
               >{{ block.text }}</p>
               <div v-else-if="block.kind === 'tool-call'" class="tool-rule">
                 calling <span class="text-[var(--accent)] not-italic font-medium">{{ block.tool }}</span>…
@@ -269,8 +269,8 @@ function pickSuggestion(s: string) {
           <span class="font-mono text-lg text-[var(--accent)] select-none leading-none">›</span>
           <input
             v-model="input"
-            class="flex-1 bg-transparent outline-none font-serif text-lg text-[var(--paper-0)] placeholder:text-[var(--paper-3)] placeholder:italic"
-            placeholder="show me NVDA daily, what's on my watchlist, any news on…"
+            class="flex-1 bg-transparent outline-none text-base text-[var(--paper-0)] placeholder:text-[var(--paper-3)]"
+            placeholder="Show me NVDA daily, what's on my watchlist, any news on…"
             :disabled="busy"
           />
           <button

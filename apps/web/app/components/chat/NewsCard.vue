@@ -23,7 +23,7 @@ function fmtDate(d?: string): string {
           <span class="font-mono text-xs uppercase tracking-[0.15em] text-[var(--paper-3)]">{{ host(r.url) || '—' }}</span>
           <span v-if="r.published_date" class="font-mono text-xs text-[var(--paper-3)]">· {{ fmtDate(r.published_date) }}</span>
         </div>
-        <a :href="r.url" target="_blank" rel="noopener noreferrer" class="block font-serif text-xl text-[var(--paper-0)] hover:text-[var(--accent)] transition-colors leading-snug">
+        <a :href="r.url" target="_blank" rel="noopener noreferrer" class="block text-base font-medium text-[var(--paper-0)] hover:text-[var(--accent)] transition-colors leading-snug">
           {{ r.title }}
         </a>
         <p class="text-base text-[var(--paper-2)] mt-2 line-clamp-2 leading-snug">{{ r.content }}</p>

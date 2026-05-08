@@ -92,7 +92,7 @@ onUnmounted(() => {
     <div class="px-5 pt-5 pb-4 flex items-end justify-between border-b hairline">
       <div>
         <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">Watchlist</div>
-        <div class="font-serif italic text-2xl text-[var(--paper-0)] leading-none mt-2">your tape</div>
+        <div class="text-xl font-semibold text-[var(--paper-0)] leading-none mt-2 tracking-tight">Your tape</div>
       </div>
       <div class="font-mono text-sm text-[var(--paper-2)]">{{ items.length }}</div>
     </div>
@@ -140,7 +140,7 @@ onUnmounted(() => {
                 {{ split(i.code)[1] }}
               </span>
             </div>
-            <div class="text-sm text-[var(--paper-3)] truncate mt-0.5 font-serif">
+            <div class="text-sm text-[var(--paper-3)] truncate mt-0.5">
               {{ i.name || '—' }}
             </div>
           </div>
