@@ -193,14 +193,21 @@ export interface PlaceOrderResult {
 
 export type AlgoCadence = '1m' | '5m' | '15m' | '1h' | '1d'
 
+export type AlgoSizingMode = 'fixed_qty' | 'pct_equity' | 'fixed_cash'
+
 export interface AlgoStrategy {
   id: string
   name: string
   symbol: string
   cadence: AlgoCadence
-  qty_per_signal: number
   code: string
   enabled: boolean
+  initial_capital: number
+  commission_bps: number
+  slippage_bps: number
+  sizing_mode: AlgoSizingMode
+  sizing_value: number
+  pyramiding_max: number
   created_at: string
   updated_at: string
 }
@@ -209,23 +216,30 @@ export interface AlgoStrategyCreate {
   name: string
   symbol: string
   cadence: AlgoCadence
-  qty_per_signal: number
   code: string
+  initial_capital?: number
+  commission_bps?: number
+  slippage_bps?: number
+  sizing_mode?: AlgoSizingMode
+  sizing_value?: number
+  pyramiding_max?: number
 }
 
 export interface AlgoStrategyUpdate {
   name?: string
   symbol?: string
   cadence?: AlgoCadence
-  qty_per_signal?: number
   code?: string
   enabled?: boolean
+  initial_capital?: number
+  commission_bps?: number
+  slippage_bps?: number
+  sizing_mode?: AlgoSizingMode
+  sizing_value?: number
+  pyramiding_max?: number
 }
 
-export interface AlgoEquityPoint {
-  t: string
-  v: number
-}
+export interface AlgoEquityPoint { t: string, v: number }
 
 export interface AlgoTrade {
   ts: string
@@ -240,13 +254,19 @@ export interface AlgoMetrics {
   win_rate: number
   max_dd: number
   sharpe: number
-  n_trades: number
+  fills: number
+  round_trips: number
+  wins: number
+  losses: number
+  benchmark_pnl: number
 }
 
 export interface AlgoBacktestResult {
   run_id: string
   status: 'pending' | 'running' | 'ok' | 'error'
   equity_curve: AlgoEquityPoint[]
+  benchmark_curve: AlgoEquityPoint[]
+  price_bars: Bar[]
   trades: AlgoTrade[]
   metrics: AlgoMetrics | null
   error: string | null
