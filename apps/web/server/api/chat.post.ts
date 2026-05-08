@@ -7,18 +7,20 @@ import {
   titleFromText,
 } from '../db/repo'
 import { getApiClient } from '../llm/http'
+import { getGhostfolioTools } from '../llm/mcp'
 import { buildModel } from '../llm/model'
 import { MOOMOO_RULES } from '../llm/moomoo-context'
 import { makeTools } from '../llm/tools'
 
 const SYSTEM_PROMPT = [
-  'You are a trading copilot. The user has a moomoo OpenD account.',
+  'You are a trading copilot. The user has a moomoo OpenD account; cross-broker portfolio truth lives in Ghostfolio (exposed via ghostfolio_* MCP tools).',
   'When the user asks for a chart, ALWAYS call market_kline and present the result.',
   'When the user asks for a price, call market_snapshot.',
   'When the user wants to track a symbol, use watchlist_add. When they ask what they\'re tracking, use watchlist_list.',
   'For news / market context / company headlines, call search_news.',
   'For general facts or definitions, call search_web.',
-  'For account/portfolio/orders/fills: call trade_accounts first to find acc_id, then trade_portfolio / trade_orders / trade_fills.',
+  'For their broker-side moomoo account/portfolio/orders/fills: call trade_accounts first to find acc_id, then trade_portfolio / trade_orders / trade_fills.',
+  'For the user\'s overall holdings ACROSS brokers (the source of truth they care about), prefer the ghostfolio_* tools — Ghostfolio aggregates all their accounts. Use moomoo trade_* tools when they specifically ask about the moomoo account.',
   'Never invent symbols — ask if unsure. The lookup table below is authoritative for common names.',
   '',
   MOOMOO_RULES,
@@ -61,7 +63,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const client = getApiClient()
-  const tools = makeTools(client)
+  const ghostfolioTools = await getGhostfolioTools()
+  const tools = { ...makeTools(client), ...ghostfolioTools }
   const modelMessages = await convertToModelMessages(
     body.messages as Parameters<typeof convertToModelMessages>[0],
   )
