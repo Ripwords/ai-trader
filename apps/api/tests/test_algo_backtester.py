@@ -228,3 +228,24 @@ def test_metrics_win_loss_count_after_costs() -> None:
 
 def test_default_initial_capital_constant_unchanged() -> None:
     assert DEFAULT_INITIAL_CAPITAL == 100_000.0
+
+
+def test_bare_sell_flattens_position_regardless_of_sizing_mode() -> None:
+    """`c.sell()` with no qty arg sells the entire position. Sizing modes
+    apply to entries only, not exits."""
+    code = (
+        "def on_bar(c):\n"
+        "    n = len(c.bars)\n"
+        "    if n == 1: c.buy(5)\n"
+        "    elif n == 2: c.sell()\n"  # bare sell — should flatten all 5
+    )
+    bars = _bars(closes=[10.0, 10.0, 10.0], opens=[10.0, 10.0, 10.0])
+    res = run_backtest(
+        code, bars,
+        commission_bps=0, slippage_bps=0,
+        sizing_mode="fixed_cash", sizing_value=1,  # would resolve to 0 shares
+    )
+    assert res.status == "ok"
+    sells = [t for t in res.trades if t.side == "SELL"]
+    assert len(sells) == 1
+    assert sells[0].qty == 5  # flattened, not 0

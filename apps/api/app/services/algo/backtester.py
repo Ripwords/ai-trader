@@ -172,15 +172,9 @@ def run_backtest(
 
             elif side == "SELL" and position > 0:
                 fill_price = next_open * (1 - slip)
-                qty = (
-                    min(int(explicit_qty), position)
-                    if explicit_qty is not None
-                    else min(position, resolve_qty(
-                        mode=sizing_mode, value=sizing_value,
-                        equity=cash + position * float(df.iloc[i]["close"]),
-                        fill_price=fill_price,
-                    ) or position)
-                )
+                # Bare c.sell() flattens the position. Sizing modes apply to entries only;
+                # exits are full-or-explicit. Use c.sell(N) for a partial exit.
+                qty = min(int(explicit_qty), position) if explicit_qty is not None else position
                 if qty > 0:
                     gross = fill_price * qty
                     commission = gross * fee
