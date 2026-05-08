@@ -27,7 +27,7 @@ const STRATEGY_PROMPT = [
   '- Define a top-level function `on_bar(c)`. The runtime calls it once per bar.',
   '- `c.bars` is a pandas DataFrame with columns: time, open, high, low, close, volume. The latest bar is `c.bars.iloc[-1]`.',
   '- `c.position` is the current integer position (>=0) in the strategy\'s symbol.',
-  '- `c.qty` is the configured qty_per_signal.',
+  '- `c.qty` is a sane default share qty derived from the strategy\'s sizing mode (fixed_qty / pct_equity / fixed_cash). You can pass a different qty to c.buy/c.sell explicitly, or call them with no arg to use this default.',
   '- Order intent: call exactly one of `c.buy(qty)`, `c.sell(qty)`, or `c.hold()` per bar. Calling none is the same as `c.hold()`. Only the LAST call wins. Fills happen at the next bar\'s open (no look-ahead).',
   '- The backtester walks bars forward; the live scheduler runs the same on_bar against the latest klines.',
   '',

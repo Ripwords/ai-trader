@@ -19,13 +19,11 @@ const draft = ref<{
   name: string
   symbol: string
   cadence: AlgoCadence
-  qty_per_signal: number
   code: string
 }>({
   name: 'My SMA crossover',
   symbol: 'US.NVDA',
   cadence: '1d',
-  qty_per_signal: 1,
   code: `# Buy on simple up-bar momentum, hold otherwise.
 def on_bar(c):
     closes = c.bars['close']
@@ -107,8 +105,8 @@ function fmt(t: string): string {
           <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
             new strategy
           </div>
-          <div class="grid grid-cols-4 gap-4">
-            <label class="block col-span-2">
+          <div class="grid grid-cols-3 gap-4">
+            <label class="block">
               <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">name</span>
               <input
                 v-model="draft.name"
@@ -134,15 +132,6 @@ function fmt(t: string): string {
                 <option value="1h">1h</option>
                 <option value="1d">1d</option>
               </select>
-            </label>
-            <label class="block">
-              <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">qty/signal</span>
-              <input
-                v-model.number="draft.qty_per_signal"
-                type="number"
-                min="1"
-                class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-              />
             </label>
           </div>
 
@@ -183,7 +172,7 @@ function fmt(t: string): string {
                 >{{ s.enabled ? '● live' : '○ paused' }}</span>
               </div>
               <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mt-1">
-                {{ s.symbol }} · {{ s.cadence }} · qty {{ s.qty_per_signal }} · created {{ fmt(s.created_at) }}
+                {{ s.symbol }} · {{ s.cadence }} · {{ s.sizing_mode }} {{ s.sizing_value }} · created {{ fmt(s.created_at) }}
               </div>
             </NuxtLink>
             <button

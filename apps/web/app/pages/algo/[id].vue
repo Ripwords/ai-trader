@@ -39,8 +39,13 @@ const draft = ref({
   name: strategy.value.name,
   symbol: strategy.value.symbol,
   cadence: strategy.value.cadence,
-  qty_per_signal: strategy.value.qty_per_signal,
   code: strategy.value.code,
+  initial_capital: strategy.value.initial_capital,
+  commission_bps: strategy.value.commission_bps,
+  slippage_bps: strategy.value.slippage_bps,
+  sizing_mode: strategy.value.sizing_mode,
+  sizing_value: strategy.value.sizing_value,
+  pyramiding_max: strategy.value.pyramiding_max,
 })
 
 const saveError = ref<string | null>(null)
@@ -50,8 +55,13 @@ const dirty = computed(() => {
   return draft.value.name !== s.name
     || draft.value.symbol !== s.symbol
     || draft.value.cadence !== s.cadence
-    || draft.value.qty_per_signal !== s.qty_per_signal
     || draft.value.code !== s.code
+    || draft.value.initial_capital !== s.initial_capital
+    || draft.value.commission_bps !== s.commission_bps
+    || draft.value.slippage_bps !== s.slippage_bps
+    || draft.value.sizing_mode !== s.sizing_mode
+    || draft.value.sizing_value !== s.sizing_value
+    || draft.value.pyramiding_max !== s.pyramiding_max
 })
 
 async function save() {
@@ -112,6 +122,8 @@ async function runBacktest() {
       run_id: '',
       status: 'error',
       equity_curve: [],
+      benchmark_curve: [],
+      price_bars: [],
       trades: [],
       metrics: null,
       error: (e as { data?: { detail?: string } })?.data?.detail
@@ -215,15 +227,66 @@ async function runBacktest() {
             </label>
           </div>
 
-          <label class="block">
-            <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">qty/signal</span>
-            <input
-              v-model.number="draft.qty_per_signal"
-              type="number"
-              min="1"
-              class="block w-32 mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-            />
-          </label>
+          <div class="space-y-2">
+            <div class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">backtest config</div>
+            <div class="grid grid-cols-6 gap-3">
+              <label class="block">
+                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">capital ($)</span>
+                <input
+                  v-model.number="draft.initial_capital"
+                  type="number"
+                  min="1"
+                  step="1000"
+                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+                />
+              </label>
+              <label class="block">
+                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">commission (bps)</span>
+                <input
+                  v-model.number="draft.commission_bps"
+                  type="number" min="0" max="1000"
+                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+                />
+              </label>
+              <label class="block">
+                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">slippage (bps)</span>
+                <input
+                  v-model.number="draft.slippage_bps"
+                  type="number" min="0" max="1000"
+                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+                />
+              </label>
+              <label class="block">
+                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">sizing</span>
+                <select
+                  v-model="draft.sizing_mode"
+                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+                >
+                  <option value="fixed_qty">fixed qty</option>
+                  <option value="pct_equity">% equity</option>
+                  <option value="fixed_cash">fixed $</option>
+                </select>
+              </label>
+              <label class="block">
+                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">
+                  {{ draft.sizing_mode === 'fixed_qty' ? 'shares' : draft.sizing_mode === 'pct_equity' ? '%' : '$' }}
+                </span>
+                <input
+                  v-model.number="draft.sizing_value"
+                  type="number" min="0.0001" step="0.5"
+                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+                />
+              </label>
+              <label class="block">
+                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">pyramid max</span>
+                <input
+                  v-model.number="draft.pyramiding_max"
+                  type="number" min="1" max="100"
+                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+                />
+              </label>
+            </div>
+          </div>
 
           <label class="block">
             <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">strategy code</span>
