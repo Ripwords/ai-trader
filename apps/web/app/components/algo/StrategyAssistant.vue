@@ -9,10 +9,20 @@ const props = defineProps<{
   currentCode: string
   symbol: string
   cadence: string
+  /** Block key currently being reviewed in the editor; disables every
+   *  other block's button while a review is in flight. */
+  activeReviewKey: string | null
+  /** Page tells us a review just resolved so we can flip the matching
+   *  block's status to applied/discarded with its summary. */
+  finishedReview: { blockKey: string, summary: { accepted: number; total: number } } | null
 }>()
 
 const emit = defineEmits<{
+  // Kept for backward compatibility — the new flow routes through `review`
+  // and the parent commits via the editor's done event. The page still
+  // binds @apply for safety.
   (e: 'apply', code: string): void
+  (e: 'review', blockKey: string, base: string, proposed: string): void
 }>()
 
 const input = ref('')
@@ -68,6 +78,7 @@ interface BlockState {
   status: BlockStatus
   baseSnapshot: string  // currentCode at the moment the message arrived
   appliedAt?: string
+  summary?: { accepted: number; total: number }
 }
 
 const blockState = ref<Map<string, BlockState>>(new Map())
@@ -91,27 +102,43 @@ function isStale(key: string): boolean {
   return s.baseSnapshot !== props.currentCode
 }
 
-function apply(key: string, code: string) {
+function review(key: string, code: string) {
   const s = blockState.value.get(key)
   if (!s) return
   if (s.baseSnapshot !== props.currentCode) {
     const ok = window.confirm(
-      'Your draft has changed since this suggestion was made. Apply will overwrite your current draft. Continue?',
+      'Your draft has changed since this suggestion was made. Reviewing will diff against the snapshot from when this message arrived. Continue?',
     )
     if (!ok) return
   }
-  emit('apply', code)
-  s.status = 'applied'
-  s.appliedAt = new Date().toISOString()
-  blockState.value = new Map(blockState.value)
+  emit('review', key, s.baseSnapshot, code)
+  // Status doesn't change yet — the page will tell us when review resolves
+  // via the `finishedReview` prop, which the watcher below reacts to.
 }
 
-function discard(key: string) {
-  const s = blockState.value.get(key)
-  if (!s) return
-  s.status = 'discarded'
-  blockState.value = new Map(blockState.value)
+function statusPillText(s: BlockState): string {
+  if (s.status === 'applied') {
+    if (!s.summary) return '✓ applied'
+    if (s.summary.accepted === 0) return '✕ discarded'
+    if (s.summary.accepted === s.summary.total) return '✓ applied'
+    return `✓ applied ${s.summary.accepted} of ${s.summary.total}`
+  }
+  return '✕ discarded'
 }
+
+watch(() => props.finishedReview, (fr) => {
+  if (!fr) return
+  const s = blockState.value.get(fr.blockKey)
+  if (!s) return
+  if (fr.summary.accepted === 0) {
+    s.status = 'discarded'
+  } else {
+    s.status = 'applied'
+    s.summary = fr.summary
+    s.appliedAt = new Date().toISOString()
+  }
+  blockState.value = new Map(blockState.value)
+})
 
 // --- Diff rendering ------------------------------------------------------
 
@@ -276,13 +303,15 @@ function messageBlocks(m: UIMessage): ParsedBlock[] {
                 v-if="(blockState.get(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i))) || { status: 'pending' }).status === 'pending'"
               >
                 <button
-                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
-                  @click="apply(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)), block.text)"
-                >✓ apply</button>
-                <button
-                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] rounded hover:text-[var(--paper-0)] hover:border-[var(--paper-2)]"
-                  @click="discard(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)))"
-                >✕ discard</button>
+                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f] disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="activeReviewKey !== null && activeReviewKey !== blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i))"
+                  :title="activeReviewKey !== null && activeReviewKey !== blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)) ? 'finish current review first' : ''"
+                  @click="review(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)), block.text)"
+                >→ review in editor</button>
+                <span
+                  v-if="activeReviewKey === blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i))"
+                  class="font-mono text-xs text-[var(--accent)]"
+                >reviewing…</span>
                 <span
                   v-if="isStale(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)))"
                   class="font-mono text-xs text-[var(--paper-3)] italic"
@@ -292,7 +321,7 @@ function messageBlocks(m: UIMessage): ParsedBlock[] {
                 v-else
                 class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]"
               >
-                {{ (blockState.get(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i))) || { status: 'pending' }).status === 'applied' ? '✓ applied' : '✕ discarded' }}
+                {{ statusPillText(blockState.get(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)))!) }}
               </div>
             </div>
           </template>
