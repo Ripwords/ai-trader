@@ -22,7 +22,8 @@ services:
       context: ./apps/web
       target: migrate
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      # Derive from parts so it can't drift if you rotate POSTGRES_PASSWORD.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,7 +58,7 @@ services:
       NUXT_SESSION_SECRET: ${SESSION_SECRET}
       NUXT_INTERNAL_BEARER: ${INTERNAL_BEARER}
       NUXT_API_BASE_URL: http://api:8000
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:
