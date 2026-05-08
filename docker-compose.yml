@@ -29,28 +29,6 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # Opt-in: brings Ghostfolio cross-broker portfolio data into the agent.
-  # Enable with `docker compose --profile ghostfolio up -d` once you've set
-  # GHOSTFOLIO_URL + GHOSTFOLIO_TOKEN in .env. The web service detects it
-  # at runtime by trying to connect; if the service isn't running, the
-  # ghostfolio_* tools simply don't appear to the agent.
-  ghostfolio-mcp:
-    image: ghcr.io/mhajder/ghostfolio-mcp:latest
-    profiles: [ghostfolio]
-    environment:
-      GHOSTFOLIO_URL: ${GHOSTFOLIO_URL:-}
-      GHOSTFOLIO_TOKEN: ${GHOSTFOLIO_TOKEN:-}
-      READ_ONLY_MODE: "true"
-      MCP_TRANSPORT: http
-      MCP_HTTP_HOST: 0.0.0.0
-      MCP_HTTP_PORT: "8000"
-      MCP_HTTP_BEARER_TOKEN: ${GHOSTFOLIO_MCP_BEARER:-}
-      LOG_LEVEL: WARNING
-    restart: unless-stopped
-    # Internal-only by default. Uncomment to expose for direct inspection:
-    # ports:
-    #   - "8001:8000"
-
   api:
     build: ./apps/api
     environment:
@@ -81,8 +59,9 @@ services:
       SEARCH_PROVIDER: ${SEARCH_PROVIDER:-brave}
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
-      # Ghostfolio MCP (in-network HTTP transport, bearer-auth)
-      GHOSTFOLIO_MCP_URL: http://ghostfolio-mcp:8000/mcp
+      # Ghostfolio MCP — point at your remote MCP endpoint.
+      # Leave empty to disable (the agent simply won't see ghostfolio_* tools).
+      GHOSTFOLIO_MCP_URL: ${GHOSTFOLIO_MCP_URL:-}
       GHOSTFOLIO_MCP_BEARER: ${GHOSTFOLIO_MCP_BEARER:-}
       # Nuxt runtimeConfig — only what /api/login etc. need (everything else
       # reads process.env directly).
