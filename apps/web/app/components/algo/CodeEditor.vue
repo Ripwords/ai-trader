@@ -14,14 +14,58 @@ import {
 } from '@codemirror/commands'
 import {
   bracketMatching,
-  defaultHighlightStyle,
+  HighlightStyle,
   syntaxHighlighting,
   indentOnInput,
   indentUnit,
+  indentSelection,
   foldGutter,
   foldKeymap,
 } from '@codemirror/language'
 import { python } from '@codemirror/lang-python'
+import { tags as t } from '@lezer/highlight'
+
+// Custom syntax palette tuned to the app's warm-amber-on-ink aesthetic.
+// We resist the urge to introduce reds/blues/cyans (the github-dark default
+// look) — the app uses amber as the only chromatic brand color, paper tones
+// for body copy, and tape-up/tape-down only for finance signals. Three
+// colors carry the syntax highlighting:
+//   amber  (#d4a96a)  — keywords, control flow, decorators
+//   sand   (#c5a47a)  — string/number literals
+//   paper  tones      — everything else (default fg, dim for builtins)
+const algoHighlight = HighlightStyle.define([
+  // amber — keywords & flow
+  { tag: [t.keyword, t.controlKeyword ?? t.keyword, t.modifier, t.self, t.null], color: '#d4a96a' },
+  { tag: t.definition(t.keyword), color: '#d4a96a' },
+  { tag: t.operatorKeyword, color: '#d4a96a' },
+  { tag: t.meta, color: '#d4a96a' },                                  // decorators
+
+  // muted paper-3 italic — comments
+  { tag: [t.comment, t.lineComment, t.blockComment], color: '#6f6c63', fontStyle: 'italic' },
+
+  // warm sand — literals
+  { tag: [t.string, t.special(t.string), t.regexp, t.escape], color: '#c5a47a' },
+  { tag: [t.number, t.integer, t.float, t.bool, t.atom, t.literal, t.unit], color: '#c5a47a' },
+
+  // paper-1 — declarations / types
+  { tag: [t.className, t.typeName, t.namespace], color: '#e8e3d8' },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.definition(t.variableName)],
+    color: '#e8e3d8' },
+
+  // paper-2 — built-ins & properties (slightly recessed)
+  { tag: t.standard(t.variableName), color: '#b6b1a4' },              // print, len, range
+  { tag: t.propertyName, color: '#b6b1a4' },
+
+  // paper-2 — punctuation / operators
+  { tag: [t.operator, t.punctuation, t.bracket, t.paren, t.brace, t.derefOperator, t.separator],
+    color: '#b6b1a4' },
+
+  // paper-0 — fallback for variables and content
+  { tag: [t.variableName, t.content], color: '#f7f4ee' },
+
+  // tape-down (red) for invalid syntax — the only place we use red
+  { tag: t.invalid, color: '#e07a5f' },
+])
 
 /**
  * Editable Python code area.
@@ -47,6 +91,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:modelValue', v: string): void
   (e: 'done', resolved: string, summary: { accepted: number; total: number }): void
+  // Fired when the user presses Cmd/Ctrl+S inside the editor. We've already
+  // re-indented the whole doc by then; the parent decides whether to persist.
+  (e: 'save'): void
 }>()
 
 // ---------------------------------------------------------------------------
@@ -70,9 +117,27 @@ function buildExtensions(): Extension[] {
     indentOnInput(),
     indentUnit.of('    '),
     bracketMatching(),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    syntaxHighlighting(algoHighlight, { fallback: true }),
     python(),
     keymap.of([
+      // Cmd/Ctrl+S: auto-format the whole doc (Python-aware re-indent),
+      // then ask the parent to persist. We pre-empt the browser's default
+      // "save page as HTML" dialog with preventDefault inside the command.
+      {
+        key: 'Mod-s',
+        preventDefault: true,
+        run: (v) => {
+          v.dispatch({
+            selection: { anchor: 0, head: v.state.doc.length },
+          })
+          indentSelection(v)
+          // Reset cursor to top so the user doesn't end up with the whole
+          // doc highlighted after formatting.
+          v.dispatch({ selection: { anchor: 0 } })
+          emit('save')
+          return true
+        },
+      },
       indentWithTab,
       ...defaultKeymap,
       ...historyKeymap,

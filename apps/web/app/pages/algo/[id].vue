@@ -358,6 +358,7 @@ async function runBacktest() {
               aria-label="strategy code"
               class="mt-1"
               @done="onDone"
+              @save="() => { if (dirty && !saving) save() }"
             />
           </div>
 
