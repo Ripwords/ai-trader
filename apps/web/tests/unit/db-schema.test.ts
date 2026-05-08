@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { getTableColumns } from 'drizzle-orm'
 import {
   algoRuns,
   algoStrategies,
@@ -9,7 +10,6 @@ import {
 } from '../../db/schema'
 
 const NAME = Symbol.for('drizzle:Name')
-const COLS = Symbol.for('drizzle:Columns')
 
 describe('schema', () => {
   it('has the expected core tables', () => {
@@ -20,16 +20,16 @@ describe('schema', () => {
   })
 
   it('algoStrategies has the new backtest config columns and dropped qty_per_signal', () => {
-    const cols = (algoStrategies as unknown as Record<symbol, Record<string, unknown>>)[COLS]
-    expect(Object.keys(cols)).toEqual(expect.arrayContaining([
+    const cols = Object.keys(getTableColumns(algoStrategies))
+    expect(cols).toEqual(expect.arrayContaining([
       'initialCapital', 'commissionBps', 'slippageBps',
       'sizingMode', 'sizingValue', 'pyramidingMax',
     ]))
-    expect(Object.keys(cols)).not.toContain('qtyPerSignal')
+    expect(cols).not.toContain('qtyPerSignal')
   })
 
   it('algoRuns has the new benchmark and price_bars columns', () => {
-    const cols = (algoRuns as unknown as Record<symbol, Record<string, unknown>>)[COLS]
-    expect(Object.keys(cols)).toEqual(expect.arrayContaining(['benchmarkCurve', 'priceBars']))
+    const cols = Object.keys(getTableColumns(algoRuns))
+    expect(cols).toEqual(expect.arrayContaining(['benchmarkCurve', 'priceBars']))
   })
 })
