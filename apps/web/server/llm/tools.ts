@@ -83,34 +83,34 @@ export function makeTools(client: ApiClient) {
     }),
 
     'trade_portfolio': tool({
-      description: 'Get positions and cash for an account. Read-only.',
+      description: 'Get positions and cash for an account. Read-only. Defaults to REAL.',
       inputSchema: z.object({
         acc_id: z.string(),
-        trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
       }),
       execute: async (args) => client.getPortfolio(args),
     }),
 
     'trade_orders': tool({
       description:
-        'List today\'s orders for an account. ' +
+        'List today\'s orders for an account. Defaults to REAL. ' +
         'Skip accounts where acc_role is "IPO" — moomoo refuses this call on IPO accounts ' +
-        '(502 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
+        '(422 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
       inputSchema: z.object({
         acc_id: z.string(),
-        trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
       }),
       execute: async (args) => ({ orders: await client.listOrders(args) }),
     }),
 
     'trade_fills': tool({
       description:
-        'List today\'s fills (executed trades) for an account. ' +
+        'List today\'s fills (executed trades) for an account. Defaults to REAL. ' +
         'Skip accounts where acc_role is "IPO" — moomoo refuses this call on IPO accounts ' +
-        '(502 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
+        '(422 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
       inputSchema: z.object({
         acc_id: z.string(),
-        trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
       }),
       execute: async (args) => ({ fills: await client.listFills(args) }),
     }),

@@ -44,7 +44,7 @@ async def accounts(opend: OpendAdapter = Depends(get_opend)) -> list[Account]:
 @router.get("/portfolio", response_model=Portfolio)
 async def portfolio(
     acc_id: str = Query(...),
-    trd_env: TrdEnv = Query("SIMULATE"),
+    trd_env: TrdEnv = Query("REAL"),
     opend: OpendAdapter = Depends(get_opend),
 ) -> Portfolio:
     try:
@@ -56,7 +56,7 @@ async def portfolio(
 @router.get("/orders", response_model=list[Order])
 async def orders(
     acc_id: str = Query(...),
-    trd_env: TrdEnv = Query("SIMULATE"),
+    trd_env: TrdEnv = Query("REAL"),
     opend: OpendAdapter = Depends(get_opend),
 ) -> list[Order]:
     try:
@@ -68,7 +68,7 @@ async def orders(
 @router.get("/fills", response_model=list[Fill])
 async def fills(
     acc_id: str = Query(...),
-    trd_env: TrdEnv = Query("SIMULATE"),
+    trd_env: TrdEnv = Query("REAL"),
     opend: OpendAdapter = Depends(get_opend),
 ) -> list[Fill]:
     try:
