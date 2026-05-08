@@ -223,6 +223,66 @@ export function makeTools(client: ApiClient) {
         return getAlgoApi().unkill()
       },
     }),
+
+    // --- Research (multi-analyst + LLM personas) --------------------------
+
+    'research_ticker': tool({
+      description:
+        'Run a multi-perspective research pass on a symbol: deterministic analysts (fundamentals/valuation/technicals/sentiment) plus selected LLM investor personas (Buffett, Munger, Burry, Druckenmiller, Wood). Returns a list of signals each with confidence + reasoning. Read-only.',
+      inputSchema: z.object({
+        symbol: z.string().describe('moomoo-style symbol like US.NVDA'),
+        personas: z
+          .array(z.enum(['buffett', 'munger', 'burry', 'druckenmiller', 'wood']))
+          .default(['buffett', 'burry', 'wood'])
+          .describe('which LLM personas to include'),
+        analysts: z
+          .array(z.enum(['fundamentals', 'valuation', 'technicals', 'sentiment']))
+          .default(['fundamentals', 'valuation', 'technicals', 'sentiment']),
+      }),
+      execute: async ({ symbol, personas, analysts }) => {
+        const { getResearchApi } = await import('./http')
+        const { findPersona, runPersona } = await import('./personas')
+        const api = getResearchApi()
+        const bundle = await api.getBundle(symbol).catch(() => null)
+        const personaSignals = bundle
+          ? await Promise.all(
+              personas.map((id) => {
+                const p = findPersona(id)
+                if (!p) throw new Error(`unknown persona: ${id}`)
+                return runPersona(p, symbol, bundle)
+              }),
+            )
+          : []
+        const analystSignals = await Promise.all(
+          analysts.map(name => api.runAnalyst(name, symbol)),
+        )
+        return { symbol, signals: [...analystSignals, ...personaSignals] }
+      },
+    }),
+
+    'synthesize_decisions': tool({
+      description:
+        'Given a set of research signals across symbols, run the risk manager + portfolio manager pipeline to produce final trade decisions (buy/sell/short/cover/hold + quantity + confidence). Read-only — does not place orders.',
+      inputSchema: z.object({
+        symbols: z.array(z.string()).min(1),
+        signals: z
+          .array(
+            z.object({
+              source: z.string(),
+              symbol: z.string(),
+              signal: z.enum(['bullish', 'bearish', 'neutral']),
+              confidence: z.number().int().min(0).max(100),
+              reasoning: z.string(),
+            }),
+          )
+          .optional()
+          .describe('omit to fetch fresh signals from /research/* — slower but always current'),
+      }),
+      execute: async ({ symbols, signals }) => {
+        const { getResearchApi } = await import('./http')
+        return getResearchApi().synthesizeDecisions({ symbols, signals })
+      },
+    }),
   }
 }
 

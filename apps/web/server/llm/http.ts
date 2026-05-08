@@ -336,3 +336,35 @@ export function getApiClient() {
   const cfg = useRuntimeConfig()
   return new ApiClient({ baseUrl: cfg.apiBaseUrl as string, bearer: cfg.internalBearer as string })
 }
+
+// --- Research (deterministic analysts + persona orchestration) --------
+
+export interface ResearchSignal {
+  source: string
+  symbol: string
+  signal: 'bullish' | 'bearish' | 'neutral'
+  confidence: number
+  reasoning: string
+  metadata?: Record<string, unknown>
+}
+
+export type AnalystName = 'fundamentals' | 'valuation' | 'technicals' | 'sentiment'
+
+export interface ResearchApi {
+  getBundle(symbol: string): Promise<unknown>
+  runAnalyst(name: AnalystName, symbol: string): Promise<ResearchSignal>
+  synthesizeDecisions(payload: { symbols: string[]; signals?: ResearchSignal[] }): Promise<{ decisions: unknown[] }>
+}
+
+export function getResearchApi(): ResearchApi {
+  const cfg = useRuntimeConfig()
+  const fetch = ofetch.create({
+    baseURL: cfg.apiBaseUrl as string,
+    headers: { Authorization: `Bearer ${cfg.internalBearer as string}` },
+  })
+  return {
+    getBundle: (symbol) => fetch('/research/bundle', { method: 'POST', body: { symbol } }),
+    runAnalyst: (name, symbol) => fetch(`/research/${name}`, { method: 'POST', body: { symbol } }),
+    synthesizeDecisions: (payload) => fetch('/synthesis/decide', { method: 'POST', body: payload }),
+  }
+}
