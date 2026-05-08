@@ -43,14 +43,20 @@ services:
   web:
     build: ./apps/web
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # Mastra reads these via process.env when routing "<provider>/<model-id>".
+      # Set whichever provider you actually use; LLM_MODEL picks the route.
+      LLM_MODEL: ${LLM_MODEL}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      # Nuxt runtimeConfig — only what /api/login etc. need (everything else
+      # reads process.env directly).
       NUXT_APP_PASSWORD: ${APP_PASSWORD}
       NUXT_SESSION_SECRET: ${SESSION_SECRET}
       NUXT_INTERNAL_BEARER: ${INTERNAL_BEARER}
       NUXT_API_BASE_URL: http://api:8000
-      NUXT_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      NUXT_LLM_MODEL: ${LLM_MODEL}
-      NUXT_TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       DATABASE_URL: ${DATABASE_URL}
     ports:
       - "${WEB_PORT:-3000}:3000"

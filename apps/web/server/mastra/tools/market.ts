@@ -18,7 +18,12 @@ export function makeMarketTools(client: ApiClient) {
     description:
       'Fetch candlestick (k-line) bars for a symbol. Use when the user asks for charts, trends, or historical price.',
     inputSchema: klineInputSchema,
-    execute: async (inputData) => client.getKline(inputData),
+    execute: async (inputData) => {
+      // zod .default() makes ktype/num optional in the parsed type even though
+      // they always have a value at runtime; assert the post-default shape.
+      const args = klineInputSchema.parse(inputData)
+      return client.getKline(args)
+    },
   })
 
   const snapshot = createTool({

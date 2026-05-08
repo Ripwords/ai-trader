@@ -72,8 +72,8 @@ onUnmounted(() => {
     <template #header>
       <div class="flex justify-between items-center">
         <div class="font-medium">{{ props.code }} · {{ props.ktype }}</div>
-        <div class="text-xs text-gray-500" v-if="props.bars.length">
-          last {{ props.bars[props.bars.length - 1].close }}
+        <div v-if="props.bars.length > 0" class="text-xs text-gray-500">
+          last {{ props.bars[props.bars.length - 1]?.close ?? '—' }}
         </div>
       </div>
     </template>

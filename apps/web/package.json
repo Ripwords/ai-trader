@@ -10,13 +10,10 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
-    "@ai-sdk/anthropic-v5": "npm:@ai-sdk/anthropic@2.0.77",
-    "@ai-sdk/anthropic-v6": "npm:@ai-sdk/anthropic@3.0.71",
-    "@ai-sdk/provider-utils-v5": "npm:@ai-sdk/provider-utils@3.0.23",
-    "@ai-sdk/provider-utils-v6": "npm:@ai-sdk/provider-utils@4.0.23",
-    "@ai-sdk/provider-v5": "npm:@ai-sdk/provider@2.0.1",
-    "@ai-sdk/provider-v6": "npm:@ai-sdk/provider@3.0.8",
-    "@anthropic-ai/sdk": "^0.95.1",
+    "@ai-sdk/anthropic": "^2.0.77",
+    "@ai-sdk/deepseek": "^1.0.37",
+    "@ai-sdk/google": "^2.0.70",
+    "@ai-sdk/openai": "^2.0.103",
     "@mastra/core": "^1.32.1",
     "@nuxt/ui": "^4.7.1",
     "lightweight-charts": "^5.2.0",

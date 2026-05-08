@@ -4,7 +4,7 @@ const PUBLIC_PATHS = new Set(['/login', '/api/login', '/api/logout'])
 
 export default defineEventHandler((event) => {
   const url = event.node.req.url ?? ''
-  const path = url.split('?')[0]
+  const path = url.split('?')[0] ?? ''
   if (PUBLIC_PATHS.has(path)) return
   if (!path.startsWith('/api') && !['/'].includes(path) && !path.startsWith('/_')) {
     // static assets, devtools, etc — allow

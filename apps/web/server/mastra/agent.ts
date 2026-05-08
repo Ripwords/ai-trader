@@ -1,66 +1,71 @@
+import { createAnthropic } from '@ai-sdk/anthropic'
+import { createDeepSeek } from '@ai-sdk/deepseek'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
+import { createOpenAI } from '@ai-sdk/openai'
 import { Agent } from '@mastra/core/agent'
 import { getApiClient } from './http'
+import { MOOMOO_RULES } from './refs/moomoo-context'
 import { makeMarketTools } from './tools/market'
 import { makeSearchTools } from './tools/search'
 import { makeTradeTools } from './tools/trade'
 import { makeWatchlistTools } from './tools/watchlist'
 
-// Hydrate ANTHROPIC_API_KEY from runtimeConfig at module load — Mastra's
-// provider registry reads process.env eagerly when the Agent is constructed.
-// Fix A (docker-compose) propagates the key directly; this is a dev-mode safety net.
-try {
-  const _runtime = useRuntimeConfig()
-  if (!process.env.ANTHROPIC_API_KEY && _runtime.anthropicApiKey) {
-    process.env.ANTHROPIC_API_KEY = _runtime.anthropicApiKey as string
-  }
-} catch {
-  // useRuntimeConfig() may not be available outside a Nitro request context
-  // in all environments. Fall back to Fix A (direct env propagation via compose).
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.warn('[mastra] ANTHROPIC_API_KEY not set — agent calls will fail')
-  }
-}
-
 let _agent: Agent | undefined
 
 /**
- * Returns a singleton Mastra Agent configured with Claude and the market tools.
- *
- * Model is specified as a magic string "provider/model-id" which Mastra's
- * provider registry resolves at runtime (no @ai-sdk/anthropic required).
- *
- * ANTHROPIC_API_KEY is propagated either via docker-compose (ANTHROPIC_API_KEY
- * env var) or from runtimeConfig at module load above.
+ * Build a LanguageModel from an `LLM_MODEL` env string of the form
+ * `"<provider>/<model-id>"`. Supports anthropic, openai, google, deepseek
+ * (each with its own API key env var). One ai-sdk version per provider —
+ * no npm aliases, so Nitro's prod-build tracer handles them cleanly.
+ */
+function buildModel(spec: string) {
+  const slash = spec.indexOf('/')
+  const provider = slash >= 0 ? spec.slice(0, slash) : 'anthropic'
+  const modelId = slash >= 0 ? spec.slice(slash + 1) : spec
+
+  switch (provider) {
+    case 'anthropic':
+      return createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' })(modelId)
+    case 'openai':
+      return createOpenAI({ apiKey: process.env.OPENAI_API_KEY ?? '' })(modelId)
+    case 'google':
+      return createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? '' })(modelId)
+    case 'deepseek':
+      return createDeepSeek({ apiKey: process.env.DEEPSEEK_API_KEY ?? '' })(modelId)
+    default:
+      throw new Error(`Unknown LLM provider "${provider}" (LLM_MODEL=${spec}). Supported: anthropic, openai, google, deepseek.`)
+  }
+}
+
+/**
+ * Singleton Mastra Agent. Provider/model is selected via the LLM_MODEL env
+ * var — see buildModel() above.
  */
 export function getAgent(): Agent {
   if (_agent) return _agent
 
-  const cfg = useRuntimeConfig()
   const client = getApiClient()
   const marketTools = makeMarketTools(client)
   const watchlistTools = makeWatchlistTools(client)
-  const searchTools = makeSearchTools(cfg.tavilyApiKey as string)
+  const searchTools = makeSearchTools(process.env.TAVILY_API_KEY ?? '')
   const tradeTools = makeTradeTools(client)
 
-  // llmModel in .env / runtimeConfig should be e.g. "claude-sonnet-4-6"
-  // Mastra's router expects the "anthropic/model-id" prefix form.
-  const rawModel = (cfg.llmModel as string) || 'claude-sonnet-4-6'
-  const model = rawModel.startsWith('anthropic/')
-    ? rawModel
-    : `anthropic/${rawModel}`
+  const model = buildModel(process.env.LLM_MODEL || 'anthropic/claude-sonnet-4-6')
 
   _agent = new Agent({
+    id: 'tradingCopilot',
     name: 'tradingCopilot',
     instructions: [
       'You are a trading copilot. The user has a moomoo OpenD account.',
       'When the user asks for a chart, ALWAYS call market.kline and present the result.',
       'When the user asks for a price, call market.snapshot.',
-      'Default markets: NVDA→US.NVDA, Tencent→HK.00700, Apple→US.AAPL, Tesla→US.TSLA, etc.',
-      'Never invent symbols — ask if unsure.',
       'When the user wants to track a symbol, use watchlist.add. When they ask what they\'re tracking, use watchlist.list.',
       'For news / market context / company headlines, call search.news.',
       'For general facts or definitions, call search.web.',
       'For account/portfolio/orders/fills: call trade.accounts first to find acc_id, then trade.portfolio / trade.orders / trade.fills.',
+      'Never invent symbols — ask if unsure. The lookup table below is authoritative for common names.',
+      '',
+      MOOMOO_RULES,
     ].join('\n'),
     model,
     tools: { ...marketTools, ...watchlistTools, ...searchTools, ...tradeTools },

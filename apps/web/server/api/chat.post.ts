@@ -30,12 +30,12 @@ export default defineEventHandler(async (event) => {
   const body = Body.parse(await readBody(event))
 
   // Wrap agent init + stream setup so init errors emit a clean NDJSON error chunk
-  // instead of a raw 500 response.
-  let stream: AsyncIterable<unknown> | undefined
+  // instead of a raw 500 response. fullStream is a web ReadableStream<ChunkType>.
+  let stream: ReadableStream<unknown> | undefined
   try {
     const agent = getAgent()
     const out = await agent.stream(body.messages, { maxSteps: 6 })
-    stream = out.fullStream as unknown as AsyncIterable<unknown>
+    stream = out.fullStream as unknown as ReadableStream<unknown>
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     setResponseHeader(event, 'Content-Type', 'application/x-ndjson')
@@ -48,7 +48,7 @@ export default defineEventHandler(async (event) => {
 
   // Return a web-standard ReadableStream of NDJSON lines.
   // Each Mastra chunk is mapped to a JSON object; irrelevant chunk types are dropped.
-  const ndjsonStream = (stream as ReadableStream<unknown>).pipeThrough(
+  const ndjsonStream = stream.pipeThrough(
     new TransformStream({
       transform(chunk, controller) {
         // chunk is a Mastra ChunkType (tagged union on `type`)
