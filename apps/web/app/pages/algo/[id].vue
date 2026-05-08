@@ -202,6 +202,28 @@ function onDone(resolved: string, summary: { accepted: number; total: number }) 
   activeReview.value = null
 }
 
+// The chat assistant proposed a backtest-config tweak via the
+// `propose_config` tool and the user clicked Apply on the chat card.
+// We merge into the draft (so it's dirty + visible), then the user
+// hits Save to persist — same model as code edits.
+type ProposedConfig = Partial<{
+  initial_capital: number
+  commission_bps: number
+  slippage_bps: number
+  sizing_mode: 'fixed_qty' | 'pct_equity' | 'fixed_cash'
+  sizing_value: number
+  pyramiding_max: number
+}>
+
+function onApplyConfig(cfg: ProposedConfig) {
+  if (cfg.initial_capital !== undefined) draft.value.initial_capital = cfg.initial_capital
+  if (cfg.commission_bps !== undefined) draft.value.commission_bps = cfg.commission_bps
+  if (cfg.slippage_bps !== undefined) draft.value.slippage_bps = cfg.slippage_bps
+  if (cfg.sizing_mode !== undefined) draft.value.sizing_mode = cfg.sizing_mode
+  if (cfg.sizing_value !== undefined) draft.value.sizing_value = cfg.sizing_value
+  if (cfg.pyramiding_max !== undefined) draft.value.pyramiding_max = cfg.pyramiding_max
+}
+
 async function runBacktest() {
   backtesting.value = true
   backtest.value = null
@@ -330,7 +352,12 @@ async function runBacktest() {
             <div class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">backtest config</div>
             <div class="grid grid-cols-6 gap-3">
               <label class="block">
-                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">capital ($)</span>
+                <UTooltip
+                  text="Starting cash for backtests. Doesn't affect live trading. Higher capital lets % equity sizing buy more shares per signal but can mask under-capitalised strategies. Typical retail backtest: $10k–$100k."
+                  :delay-duration="200"
+                >
+                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">capital ($)</span>
+                </UTooltip>
                 <input
                   v-model.number="draft.initial_capital"
                   type="number"
@@ -340,7 +367,12 @@ async function runBacktest() {
                 />
               </label>
               <label class="block">
-                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">commission (bps)</span>
+                <UTooltip
+                  text="Per-trade commission in basis points. 10 bps = 0.10% = $0.10 per $100 traded. Most retail US brokers are 0–10 bps; HK/Asian brokers 10–25 bps. Higher commission punishes high-frequency strategies."
+                  :delay-duration="200"
+                >
+                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">commission (bps)</span>
+                </UTooltip>
                 <input
                   v-model.number="draft.commission_bps"
                   type="number" min="0" max="1000"
@@ -348,7 +380,12 @@ async function runBacktest() {
                 />
               </label>
               <label class="block">
-                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">slippage (bps)</span>
+                <UTooltip
+                  text="Estimated price drift between when a signal fires and when it actually fills. The backtest shifts BUY fills up and SELL fills down by this percentage. 5 bps (0.05%) is typical for liquid stocks; thin names need 20–50+ bps to be honest."
+                  :delay-duration="200"
+                >
+                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">slippage (bps)</span>
+                </UTooltip>
                 <input
                   v-model.number="draft.slippage_bps"
                   type="number" min="0" max="1000"
@@ -356,7 +393,12 @@ async function runBacktest() {
                 />
               </label>
               <label class="block">
-                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">sizing</span>
+                <UTooltip
+                  text="How signals translate into share counts. fixed qty = same N shares every signal. % equity = N% of current equity (winners compound). fixed $ = $N per signal (rotates capital uniformly). Affects what `sizing value` means."
+                  :delay-duration="200"
+                >
+                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">sizing</span>
+                </UTooltip>
                 <select
                   v-model="draft.sizing_mode"
                   class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
@@ -367,9 +409,18 @@ async function runBacktest() {
                 </select>
               </label>
               <label class="block">
-                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">
-                  {{ draft.sizing_mode === 'fixed_qty' ? 'shares' : draft.sizing_mode === 'pct_equity' ? '%' : '$' }}
-                </span>
+                <UTooltip
+                  :text="draft.sizing_mode === 'fixed_qty'
+                    ? 'Shares per signal. Strategy buys exactly this many every time it fires (capped at available cash).'
+                    : draft.sizing_mode === 'pct_equity'
+                      ? 'Percent of current equity per signal. 25 means 25% of (cash + position MTM). Winners compound; losses shrink the next bet.'
+                      : 'Dollars per signal. Strategy commits this many dollars each time, dividing by fill price to get shares.'"
+                  :delay-duration="200"
+                >
+                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">
+                    {{ draft.sizing_mode === 'fixed_qty' ? 'shares' : draft.sizing_mode === 'pct_equity' ? '%' : '$' }}
+                  </span>
+                </UTooltip>
                 <input
                   v-model.number="draft.sizing_value"
                   type="number" min="0.0001" step="0.5"
@@ -377,7 +428,12 @@ async function runBacktest() {
                 />
               </label>
               <label class="block">
-                <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">pyramid max</span>
+                <UTooltip
+                  text="Max consecutive BUYs without going flat. 1 = never stack (must SELL to flat before re-entering). Higher values let you scale into a position. The cap silently rejects extra BUYs once hit."
+                  :delay-duration="200"
+                >
+                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">pyramid max</span>
+                </UTooltip>
                 <input
                   v-model.number="draft.pyramiding_max"
                   type="number" min="1" max="100"
@@ -533,6 +589,7 @@ async function runBacktest() {
             :finished-review="finishedReview"
             @review="onReview"
             @apply="(code) => { draft.code = code }"
+            @apply-config="onApplyConfig"
           />
         </div>
       </div>

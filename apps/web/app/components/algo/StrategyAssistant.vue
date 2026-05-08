@@ -1,9 +1,18 @@
 <script setup lang="ts">
-import { DefaultChatTransport, isReasoningUIPart, isTextUIPart, type UIMessage } from 'ai'
+import { DefaultChatTransport, getToolName, isReasoningUIPart, isTextUIPart, isToolUIPart, type UIMessage } from 'ai'
 import { Chat } from '@ai-sdk/vue'
 import { onMounted, ref, shallowRef, watch } from 'vue'
 import type { Highlighter } from 'shiki'
 import { isPartStreaming } from '@nuxt/ui/utils/ai'
+
+interface ProposedConfig {
+  initial_capital?: number
+  commission_bps?: number
+  slippage_bps?: number
+  sizing_mode?: 'fixed_qty' | 'pct_equity' | 'fixed_cash'
+  sizing_value?: number
+  pyramiding_max?: number
+}
 
 const props = defineProps<{
   currentCode: string
@@ -23,6 +32,10 @@ const emit = defineEmits<{
   // binds @apply for safety.
   (e: 'apply', code: string): void
   (e: 'review', blockKey: string, base: string, proposed: string): void
+  // The assistant has tooled up a backtest-config change. Page merges
+  // the proposed fields into draft.* without saving — user clicks the
+  // existing Save button (or Cmd+S) to persist.
+  (e: 'apply-config', config: ProposedConfig): void
 }>()
 
 const input = ref('')
@@ -53,6 +66,66 @@ function onSubmit() {
 function reset() {
   chat.messages = []
   blockState.value = new Map()
+  toolPartState.value = new Map()
+}
+
+// --- Per-tool-call state (propose_config) -------------------------------
+
+type ToolStatus = 'pending' | 'applied' | 'discarded'
+const toolPartState = ref<Map<string, ToolStatus>>(new Map())
+
+function toolKey(messageId: string, partIdx: number): string {
+  return `${messageId}::tool::${partIdx}`
+}
+
+function toolStatus(key: string): ToolStatus {
+  return toolPartState.value.get(key) ?? 'pending'
+}
+
+function setToolStatus(key: string, s: ToolStatus) {
+  const next = new Map(toolPartState.value)
+  next.set(key, s)
+  toolPartState.value = next
+}
+
+function applyConfigProposal(key: string, config: ProposedConfig) {
+  emit('apply-config', config)
+  setToolStatus(key, 'applied')
+}
+
+function discardConfigProposal(key: string) {
+  setToolStatus(key, 'discarded')
+}
+
+function fmtCfgValue(field: keyof ProposedConfig, v: unknown): string {
+  if (v === undefined || v === null) return ''
+  if (field === 'initial_capital') return `$${Number(v).toLocaleString()}`
+  if (field === 'commission_bps' || field === 'slippage_bps') return `${v} bps`
+  if (field === 'sizing_value') return String(v)
+  return String(v)
+}
+
+function cfgFieldLabel(field: keyof ProposedConfig): string {
+  switch (field) {
+    case 'initial_capital': return 'capital'
+    case 'commission_bps': return 'commission'
+    case 'slippage_bps': return 'slippage'
+    case 'sizing_mode': return 'sizing mode'
+    case 'sizing_value': return 'sizing value'
+    case 'pyramiding_max': return 'pyramiding max'
+  }
+}
+
+function proposedConfigEntries(part: unknown): Array<[keyof ProposedConfig, unknown]> {
+  const out = (part as { output?: { proposed?: ProposedConfig } })?.output?.proposed
+  if (!out || typeof out !== 'object') return []
+  const fields: (keyof ProposedConfig)[] = [
+    'initial_capital', 'commission_bps', 'slippage_bps',
+    'sizing_mode', 'sizing_value', 'pyramiding_max',
+  ]
+  return fields
+    .filter(k => out[k] !== undefined && out[k] !== null)
+    .map(k => [k, out[k]] as [keyof ProposedConfig, unknown])
 }
 
 // --- Shiki highlighter (used for the per-block clean preview) ----------
@@ -296,6 +369,50 @@ watch(
               class="*:first:mt-0 *:last:mb-0"
             />
           </UChatReasoning>
+
+          <!-- propose_config tool: render an Apply / Discard card.
+               No auto-apply — config changes are user-confirmed. -->
+          <template
+            v-else-if="isToolUIPart(part) && getToolName(part) === 'propose_config'"
+          >
+            <div class="rounded border border-[var(--accent)] bg-[rgba(196,151,90,0.06)] p-3 space-y-2">
+              <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
+                proposed backtest config
+              </div>
+              <ul class="font-mono text-xs space-y-1">
+                <li
+                  v-for="([field, value]) in proposedConfigEntries(part)"
+                  :key="String(field)"
+                  class="flex items-center justify-between gap-3"
+                >
+                  <span class="text-[var(--paper-3)] uppercase tracking-wider">{{ cfgFieldLabel(field) }}</span>
+                  <span class="text-[var(--paper-0)]">{{ fmtCfgValue(field, value) }}</span>
+                </li>
+              </ul>
+              <div
+                v-if="toolStatus(toolKey(message.id, idx)) === 'pending'"
+                class="flex items-center gap-2 pt-1"
+              >
+                <button
+                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
+                  @click="applyConfigProposal(
+                    toolKey(message.id, idx),
+                    (part as { output?: { proposed?: ProposedConfig } }).output?.proposed ?? {},
+                  )"
+                >✓ apply</button>
+                <button
+                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] rounded hover:text-[var(--paper-0)] hover:border-[var(--paper-2)]"
+                  @click="discardConfigProposal(toolKey(message.id, idx))"
+                >✕ discard</button>
+              </div>
+              <div
+                v-else
+                class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]"
+              >
+                {{ toolStatus(toolKey(message.id, idx)) === 'applied' ? '✓ applied — save to persist' : '✕ discarded' }}
+              </div>
+            </div>
+          </template>
 
           <!-- Text part: assistant prose goes through Comark; python fenced
                code blocks get split out into shiki preview + review controls.

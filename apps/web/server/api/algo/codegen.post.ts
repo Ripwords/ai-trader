@@ -2,11 +2,13 @@
  * Streaming endpoint for the strategy-authoring assistant on /algo/[id].
  *
  * Differs from /api/chat: no thread persistence (these conversations are
- * scratch), no tools (this is a code-writing surface, not an action surface),
- * tightly-scoped system prompt that documents the sandbox DSL so the model
- * doesn't suggest disallowed imports.
+ * scratch), one tool only (`propose_config` for proposing backtest-config
+ * tweaks — code edits flow as fenced python blocks), tightly-scoped system
+ * prompt that documents the sandbox DSL so the model doesn't suggest
+ * disallowed imports.
  */
-import { convertToModelMessages, streamText, type UIMessage } from 'ai'
+import { convertToModelMessages, stepCountIs, streamText, tool, type UIMessage } from 'ai'
+import { z } from 'zod'
 import { buildModel } from '../../llm/model'
 
 const STRATEGY_PROMPT = [
@@ -102,6 +104,21 @@ const STRATEGY_PROMPT = [
   '- Don\'t mutate c.bars. Don\'t define your own classes unless asked.',
   '- Don\'t put state in module-level dicts — it persists across reloads unpredictably.',
   '  If you need across-bar state, derive it from c.bars or c.position each tick.',
+  '',
+  'BACKTEST CONFIG TOOL:',
+  'You have a tool `propose_config` that PROPOSES (does not apply) changes to',
+  'the strategy\'s backtest config. The user reviews and clicks Apply in the UI.',
+  'Use it whenever the user asks to tweak capital, fees, sizing, or pyramiding —',
+  'don\'t describe the change in prose alone. Pass only the fields you want to',
+  'change; everything else stays at its current value. Examples:',
+  '- "use 25% of equity per trade" → propose_config({ sizing_mode: "pct_equity", sizing_value: 25 })',
+  '- "raise commission to 0.2%" → propose_config({ commission_bps: 20 })',
+  '- "$50k starting capital, no slippage" → propose_config({ initial_capital: 50000, slippage_bps: 0 })',
+  'Ranges: commission_bps and slippage_bps are 0..1000 (10 = 0.10%).',
+  'sizing_mode is one of "fixed_qty" | "pct_equity" | "fixed_cash".',
+  'sizing_value is shares for fixed_qty, percent (0..100) for pct_equity,',
+  'and dollars for fixed_cash. pyramiding_max is 1..100; default 1 means',
+  '"never stack — exit before re-entering".',
 ].join('\n')
 
 interface CodegenBody {
@@ -127,10 +144,39 @@ export default defineEventHandler(async (event) => {
     body.messages as Parameters<typeof convertToModelMessages>[0],
   )
 
+  // Tool: propose backtest-config changes. Echoes the input back as the
+  // result so the frontend can render an Apply / Discard card. The actual
+  // mutation lives in the page (it merges into draft and goes through the
+  // normal Save flow), so the assistant can't overwrite the user's work.
+  const proposeConfig = tool({
+    description: [
+      'Propose changes to the strategy\'s backtest configuration.',
+      'Pass only the fields you want to change. The user reviews the',
+      'proposed values and clicks Apply to commit them into the draft.',
+    ].join(' '),
+    inputSchema: z.object({
+      initial_capital: z.number().gt(0).optional()
+        .describe('Starting cash in dollars for backtests'),
+      commission_bps: z.number().int().min(0).max(1000).optional()
+        .describe('Per-trade commission in basis points (10 = 0.10%)'),
+      slippage_bps: z.number().int().min(0).max(1000).optional()
+        .describe('Slippage applied to fills in basis points (5 = 0.05%)'),
+      sizing_mode: z.enum(['fixed_qty', 'pct_equity', 'fixed_cash']).optional()
+        .describe('How signals translate into share counts'),
+      sizing_value: z.number().gt(0).optional()
+        .describe('Shares for fixed_qty, % (0..100) for pct_equity, $ for fixed_cash'),
+      pyramiding_max: z.number().int().min(1).max(100).optional()
+        .describe('Max consecutive BUYs without an intervening flatten'),
+    }),
+    execute: async (input) => ({ proposed: input }),
+  })
+
   const result = streamText({
     model: buildModel(),
     system: STRATEGY_PROMPT + ctx,
     messages: modelMessages,
+    tools: { propose_config: proposeConfig },
+    stopWhen: stepCountIs(3),
   })
 
   return result.toUIMessageStreamResponse()
