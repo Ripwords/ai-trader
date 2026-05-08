@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { DefaultChatTransport, isTextUIPart, type UIMessage } from 'ai'
+import { DefaultChatTransport, isReasoningUIPart, isTextUIPart, type UIMessage } from 'ai'
 import { Chat } from '@ai-sdk/vue'
-import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { onMounted, ref, shallowRef, watch } from 'vue'
 import type { Highlighter } from 'shiki'
-import { diffLines, type Change } from 'diff'
+import { isPartStreaming } from '@nuxt/ui/utils/ai'
 
 const props = defineProps<{
   currentCode: string
@@ -55,7 +55,7 @@ function reset() {
   blockState.value = new Map()
 }
 
-// --- Shiki highlighter (used inline per diff line) ----------------------
+// --- Shiki highlighter (used for the per-block clean preview) ----------
 
 const highlighter = shallowRef<Highlighter | null>(null)
 
@@ -80,6 +80,12 @@ interface BlockState {
   appliedAt?: string
   summary?: { accepted: number; total: number }
   autoFired?: boolean   // true once we've auto-triggered review for this block
+  /** Cached shiki HTML for the proposed block. Re-computed when the raw
+   *  code text changes (during streaming) so the v-html lookup stays sync. */
+  previewHtml?: string
+  /** Raw text the previewHtml was rendered from — guards against using a
+   *  stale render after the streamed text grows. */
+  previewSource?: string
 }
 
 const blockState = ref<Map<string, BlockState>>(new Map())
@@ -141,93 +147,96 @@ watch(() => props.finishedReview, (fr) => {
   blockState.value = new Map(blockState.value)
 })
 
-// --- Diff rendering ------------------------------------------------------
+// --- Text splitter -------------------------------------------------------
+//
+// Walks an assistant text part and yields prose chunks plus python fenced
+// code blocks. `codeIndex` is the running count of code segments seen in
+// THIS text (= within this message), which matches the convention used by
+// `getOrInitBlock` so per-block state stays keyed consistently.
 
-interface DiffLine {
-  kind: 'add' | 'remove' | 'context'
-  html: string
-}
+interface ProseSegment { kind: 'prose'; text: string }
+interface CodeSegment { kind: 'code'; text: string; codeIndex: number }
+type Segment = ProseSegment | CodeSegment
 
-function buildDiff(base: string, proposed: string, h: Highlighter): DiffLine[] {
-  const changes: Change[] = diffLines(base, proposed)
-  const out: DiffLine[] = []
-  for (const c of changes) {
-    const lines = c.value.replace(/\n$/, '').split('\n')
-    const kind: DiffLine['kind'] = c.added ? 'add' : c.removed ? 'remove' : 'context'
-    for (const line of lines) {
-      const html = h.codeToHtml(line || ' ', {
-        lang: 'python',
-        theme: 'github-dark-default',
-      })
-      out.push({ kind, html })
+function splitText(text: string): Segment[] {
+  const out: Segment[] = []
+  const re = /```(?:python|py)?\s*\n([\s\S]*?)```/g
+  let lastIdx = 0
+  let codeIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text))) {
+    if (m.index > lastIdx) {
+      out.push({ kind: 'prose', text: text.slice(lastIdx, m.index) })
     }
+    out.push({ kind: 'code', text: m[1] ?? '', codeIndex })
+    codeIndex++
+    lastIdx = m.index + m[0].length
+  }
+  if (lastIdx < text.length) {
+    out.push({ kind: 'prose', text: text.slice(lastIdx) })
   }
   return out
 }
 
-interface ParsedBlock {
-  kind: 'text' | 'code'
-  text: string
-  diff?: DiffLine[]
+// Lookup helper for the template — returns the cached HTML for a block,
+// or a plaintext-escaped fallback while shiki is still warming up. v-html
+// must be sync, so all real rendering happens in `rerenderMessage`.
+function codeHtmlFor(key: string, text: string): string {
+  const s = blockState.value.get(key)
+  if (s && s.previewHtml && s.previewSource === text) return s.previewHtml
+  return `<pre class="shiki"><code>${escapeHtml(text)}</code></pre>`
 }
 
-const renderedMessages = ref<Map<string, ParsedBlock[]>>(new Map())
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+// --- Per-message rerender (highlight + auto-fire) -----------------------
 
 function rawText(m: UIMessage): string {
   return m.parts.filter(isTextUIPart).map(p => p.text).join('')
 }
 
-function parseRaw(text: string): ParsedBlock[] {
-  const out: ParsedBlock[] = []
-  const re = /```(?:python|py)?\s*\n([\s\S]*?)```/g
-  let lastIdx = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(text))) {
-    if (m.index > lastIdx) {
-      out.push({ kind: 'text', text: text.slice(lastIdx, m.index) })
-    }
-    out.push({ kind: 'code', text: m[1] ?? '' })
-    lastIdx = m.index + m[0].length
-  }
-  if (lastIdx < text.length) {
-    out.push({ kind: 'text', text: text.slice(lastIdx) })
-  }
-  return out
-}
-
 async function rerenderMessage(m: UIMessage) {
-  const text = rawText(m)
-  const blocks = parseRaw(text)
+  const segments = splitText(rawText(m))
   const h = await ensureHighlighter()
-  let codeIndex = 0
   // Auto-fire review for the FIRST eligible code block in this message.
   // We pick at most one because the activeReviewKey prop won't update until
   // the parent re-renders, so firing for multiple blocks in the same tick
   // would just race to overwrite each other in the page state.
   let toAutoFire: { key: string; code: string } | null = null
-  for (const b of blocks) {
-    if (b.kind === 'code') {
-      const key = blockKey(m.id, codeIndex)
-      const state = getOrInitBlock(key)
-      b.diff = buildDiff(state.baseSnapshot, b.text, h)
-      if (
-        !toAutoFire
-        && !state.autoFired
-        && state.status === 'pending'
-        && props.activeReviewKey === null
-      ) {
-        state.autoFired = true
-        toAutoFire = { key, code: b.text }
-      }
-      codeIndex++
+  let dirty = false
+  for (const seg of segments) {
+    if (seg.kind !== 'code') continue
+    const key = blockKey(m.id, seg.codeIndex)
+    const state = getOrInitBlock(key)
+    if (state.previewSource !== seg.text) {
+      state.previewHtml = h.codeToHtml(seg.text || ' ', {
+        lang: 'python',
+        theme: 'github-dark-default',
+      })
+      state.previewSource = seg.text
+      dirty = true
+    }
+    if (
+      !toAutoFire
+      && !state.autoFired
+      && state.status === 'pending'
+      && props.activeReviewKey === null
+    ) {
+      state.autoFired = true
+      toAutoFire = { key, code: seg.text }
+      dirty = true
     }
   }
-  renderedMessages.value.set(m.id, blocks)
-  renderedMessages.value = new Map(renderedMessages.value)
+  if (dirty) blockState.value = new Map(blockState.value)
   if (toAutoFire) review(toAutoFire.key, toAutoFire.code)
 }
 
-// Recompute diffs whenever a message's text changes (streaming).
+// Recompute previews + auto-fire whenever a message's text changes (streaming).
 watch(
   () => chat.messages.map(m => ({ id: m.id, role: m.role, text: rawText(m) })),
   (list) => {
@@ -240,26 +249,11 @@ watch(
   },
   { deep: true },
 )
-
-// Helper for the template — get the per-code-block index when iterating.
-function codeBlockIndex(blocks: ParsedBlock[], i: number): number {
-  let n = 0
-  for (let j = 0; j < i; j++) if (blocks[j]!.kind === 'code') n++
-  return n
-}
-
-// Stable typed fallback for messages we haven't rendered yet (e.g. mid-stream
-// before the first watch tick). Returning a `ParsedBlock[]` keeps the v-for
-// element narrowing intact in the template.
-function messageBlocks(m: UIMessage): ParsedBlock[] {
-  const cached = renderedMessages.value.get(m.id)
-  if (cached) return cached
-  return [{ kind: 'text', text: rawText(m) }]
-}
 </script>
 
 <template>
   <aside class="strategy-assistant flex flex-col h-full bg-[var(--ink-0)] border-l hairline">
+    <!-- Header -->
     <div class="px-4 h-12 flex items-center justify-between border-b hairline shrink-0">
       <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
         strategy assistant
@@ -270,99 +264,121 @@ function messageBlocks(m: UIMessage): ParsedBlock[] {
       >clear</button>
     </div>
 
-    <div class="flex-1 min-h-0 overflow-y-auto scroll-hidden px-4 py-4 space-y-4">
-      <div v-if="chat.messages.length === 0" class="text-center font-mono text-xs text-[var(--paper-3)] py-12 leading-relaxed">
+    <!-- Empty state -->
+    <div
+      v-if="chat.messages.length === 0"
+      class="flex-1 flex items-center justify-center text-center font-mono text-xs text-[var(--paper-3)] py-12 leading-relaxed"
+    >
+      <div>
         ask for a strategy<br/>
         <span class="text-[var(--paper-2)]">e.g. "20/50 SMA crossover" · "RSI mean-reversion" · "tighten my stops"</span>
       </div>
-
-      <div v-for="m in chat.messages" :key="m.id" class="space-y-2">
-        <div v-if="m.role === 'user'" class="flex justify-end">
-          <div class="max-w-[90%] surface-1 px-3 py-2 text-sm text-[var(--paper-0)] whitespace-pre-wrap">
-            {{ rawText(m) }}
-          </div>
-        </div>
-
-        <div v-else-if="m.role === 'assistant'" class="space-y-2">
-          <template v-for="(block, i) in messageBlocks(m)" :key="`${m.id}-${i}`">
-            <div
-              v-if="block.kind === 'text' && block.text.trim()"
-              class="text-sm text-[var(--paper-1)] whitespace-pre-wrap leading-relaxed"
-            >{{ block.text.trim() }}</div>
-
-            <div v-else-if="block.kind === 'code'" class="space-y-1.5">
-              <div class="rounded border border-[rgba(255,245,230,0.08)] overflow-hidden bg-[var(--ink-1)] text-xs leading-relaxed font-mono">
-                <div
-                  v-for="(line, li) in block.diff || []"
-                  :key="li"
-                  class="px-3 flex items-start"
-                  :class="line.kind === 'add'
-                    ? 'bg-[rgba(126,201,156,0.10)]'
-                    : line.kind === 'remove'
-                      ? 'bg-[rgba(224,122,95,0.10)]'
-                      : ''"
-                >
-                  <span
-                    class="select-none w-4 shrink-0"
-                    :class="line.kind === 'add'
-                      ? 'text-[var(--tape-up)]'
-                      : line.kind === 'remove'
-                        ? 'text-[var(--tape-down)]'
-                        : 'text-[var(--paper-3)]'"
-                  >{{ line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' ' }}</span>
-                  <span class="flex-1 [&_pre.shiki]:!bg-transparent [&_pre.shiki]:m-0 [&_pre.shiki]:py-0 [&_pre.shiki]:px-0" v-html="line.html" />
-                </div>
-              </div>
-
-              <div
-                class="flex items-center gap-2"
-                v-if="(blockState.get(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i))) || { status: 'pending' }).status === 'pending'"
-              >
-                <button
-                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f] disabled:opacity-50 disabled:cursor-not-allowed"
-                  :disabled="activeReviewKey !== null && activeReviewKey !== blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i))"
-                  :title="activeReviewKey !== null && activeReviewKey !== blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)) ? 'finish current review first' : ''"
-                  @click="review(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)), block.text)"
-                >→ review in editor</button>
-                <span
-                  v-if="activeReviewKey === blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i))"
-                  class="font-mono text-xs text-[var(--accent)]"
-                >reviewing…</span>
-                <span
-                  v-if="isStale(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)))"
-                  class="font-mono text-xs text-[var(--paper-3)] italic"
-                >(draft moved since)</span>
-              </div>
-              <div
-                v-else
-                class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]"
-              >
-                {{ statusPillText(blockState.get(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)))!) }}
-              </div>
-            </div>
-          </template>
-        </div>
-      </div>
     </div>
 
-    <form
-      class="border-t hairline px-3 py-3 flex items-end gap-2"
-      @submit.prevent="onSubmit"
+    <!-- Messages -->
+    <UChatMessages
+      v-else
+      :messages="chat.messages"
+      :status="chat.status"
+      class="flex-1 min-h-0 px-4 overflow-y-auto scroll-hidden"
     >
-      <textarea
+      <template #content="{ message }">
+        <template v-for="(part, idx) in message.parts" :key="`${message.id}-${idx}`">
+          <!-- Reasoning (server-side support is optional; this is a no-op when absent) -->
+          <UChatReasoning
+            v-if="isReasoningUIPart(part)"
+            :text="part.text"
+            :streaming="isPartStreaming(part)"
+          >
+            <Comark
+              :markdown="part.text"
+              :streaming="isPartStreaming(part)"
+              class="*:first:mt-0 *:last:mb-0"
+            />
+          </UChatReasoning>
+
+          <!-- Text part: assistant prose goes through Comark; python fenced
+               code blocks get split out into shiki preview + review controls.
+               User messages render verbatim. -->
+          <template v-else-if="isTextUIPart(part)">
+            <template v-if="message.role === 'assistant'">
+              <template
+                v-for="(seg, segIdx) in splitText(part.text)"
+                :key="`${message.id}-${idx}-${segIdx}`"
+              >
+                <Comark
+                  v-if="seg.kind === 'prose' && seg.text.trim()"
+                  :markdown="seg.text"
+                  :streaming="isPartStreaming(part)"
+                  class="*:first:mt-0 *:last:mb-0 prose-invert"
+                />
+                <div v-else-if="seg.kind === 'code'" class="space-y-1.5">
+                  <div
+                    class="rounded border border-[rgba(255,245,230,0.08)] overflow-hidden bg-[var(--ink-1)] text-xs leading-relaxed font-mono [&_pre.shiki]:!bg-transparent [&_pre.shiki]:m-0 [&_pre.shiki]:p-3"
+                    v-html="codeHtmlFor(blockKey(message.id, seg.codeIndex), seg.text)"
+                  />
+                  <!-- Block controls: review button + active pill + stale warning,
+                       or status pill once a review has resolved. -->
+                  <template
+                    v-if="(blockState.get(blockKey(message.id, seg.codeIndex)) || { status: 'pending' }).status === 'pending'"
+                  >
+                    <div class="flex items-center gap-2">
+                      <button
+                        class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f] disabled:opacity-50 disabled:cursor-not-allowed"
+                        :disabled="activeReviewKey !== null && activeReviewKey !== blockKey(message.id, seg.codeIndex)"
+                        :title="activeReviewKey !== null && activeReviewKey !== blockKey(message.id, seg.codeIndex) ? 'finish current review first' : ''"
+                        @click="review(blockKey(message.id, seg.codeIndex), seg.text)"
+                      >→ review in editor</button>
+                      <span
+                        v-if="activeReviewKey === blockKey(message.id, seg.codeIndex)"
+                        class="font-mono text-xs text-[var(--accent)]"
+                      >reviewing…</span>
+                      <span
+                        v-if="isStale(blockKey(message.id, seg.codeIndex))"
+                        class="font-mono text-xs text-[var(--paper-3)] italic"
+                      >(draft moved since)</span>
+                    </div>
+                  </template>
+                  <div
+                    v-else
+                    class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]"
+                  >
+                    {{ statusPillText(blockState.get(blockKey(message.id, seg.codeIndex))!) }}
+                  </div>
+                </div>
+              </template>
+            </template>
+            <p
+              v-else-if="message.role === 'user'"
+              class="whitespace-pre-wrap text-base leading-[1.6] text-[var(--paper-0)]"
+            >{{ part.text }}</p>
+          </template>
+        </template>
+      </template>
+    </UChatMessages>
+
+    <!-- Composer -->
+    <footer class="px-4 py-3 border-t hairline shrink-0">
+      <UChatPrompt
         v-model="input"
-        rows="2"
+        :error="chat.error"
         placeholder="describe a strategy or ask for changes…"
-        class="flex-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)] resize-none"
-        @keydown.enter.exact.prevent="onSubmit"
-      />
-      <button
-        type="submit"
-        :disabled="chat.status === 'streaming' || chat.status === 'submitted'"
-        class="font-mono text-xs uppercase tracking-wider px-3 py-2 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f] disabled:opacity-60 self-stretch"
+        :ui="{ body: '!pe-11' }"
+        @submit="onSubmit"
       >
-        {{ chat.status === 'streaming' || chat.status === 'submitted' ? '…' : 'send' }}
-      </button>
-    </form>
+        <UChatPromptSubmit
+          :status="chat.status"
+          color="neutral"
+          variant="solid"
+          :ui="{
+            base: '!absolute !bottom-0 !end-0 !size-8 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
+            leadingIcon: '!size-4',
+            trailingIcon: '!size-4',
+          }"
+          @stop="chat.stop()"
+          @reload="chat.regenerate()"
+        />
+      </UChatPrompt>
+    </footer>
   </aside>
 </template>
