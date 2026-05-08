@@ -21,6 +21,12 @@ describe('tool catalogue', () => {
   it('exposes the expected tool names', () => {
     const tools = makeTools(fakeClient() as unknown as ApiClient)
     expect(Object.keys(tools).sort()).toEqual([
+      'algo_backtest',
+      'algo_kill',
+      'algo_list',
+      'algo_recent_signals',
+      'algo_state',
+      'algo_unkill',
       'market_kline',
       'market_snapshot',
       'search_news',

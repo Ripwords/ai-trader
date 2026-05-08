@@ -155,6 +155,74 @@ export function makeTools(client: ApiClient) {
       }),
       execute: async (args) => client.cancelOrder(args),
     }),
+
+    // --- Algo trading (paper-only, kill-gated) ----------------------------
+
+    'algo_list': tool({
+      description:
+        'List the user\'s authored algo strategies. Use this when they ask "what strategies do I have", "show my algos", or before backtesting/enabling so you have an id.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getAlgoApi } = await import('./http')
+        return { strategies: await getAlgoApi().listStrategies() }
+      },
+    }),
+
+    'algo_backtest': tool({
+      description:
+        'Run a backtest of a strategy against the last N daily bars of its configured symbol. Returns equity curve, trades, and metrics (PnL, win-rate, max-DD, Sharpe). Pure read — no orders are placed.',
+      inputSchema: z.object({
+        strategy_id: z.string().describe('uuid of the strategy from algo_list'),
+        bars: z.number().int().min(10).max(2000).default(200),
+      }),
+      execute: async ({ strategy_id, bars }) => {
+        const { getAlgoApi } = await import('./http')
+        return getAlgoApi().backtest(strategy_id, { bars })
+      },
+    }),
+
+    'algo_recent_signals': tool({
+      description:
+        'Recent live-tick signals emitted by the scheduler. Each signal is a paper-trade attempt the strategy fired on its cadence — order_id is set if the paper order placed, error explains why it didn\'t.',
+      inputSchema: z.object({
+        strategy_id: z.string().optional().describe('omit to see signals across all strategies'),
+        limit: z.number().int().min(1).max(200).default(20),
+      }),
+      execute: async ({ strategy_id, limit }) => {
+        const { getAlgoApi } = await import('./http')
+        return { signals: await getAlgoApi().listSignals({ strategy_id, limit }) }
+      },
+    }),
+
+    'algo_state': tool({
+      description:
+        'Algo system state: whether the kill switch is active and which strategies are currently enabled (live).',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getAlgoApi } = await import('./http')
+        return getAlgoApi().state()
+      },
+    }),
+
+    'algo_kill': tool({
+      description:
+        'EMERGENCY: activate the global kill switch. Live ticks still run and signals still get logged, but no orders will be placed until algo_unkill. Use this when the user says "stop", "kill all", "halt the algos", or after seeing a signal sequence go wrong.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getAlgoApi } = await import('./http')
+        return getAlgoApi().kill()
+      },
+    }),
+
+    'algo_unkill': tool({
+      description:
+        'Release the global kill switch. Strategies that were already enabled will resume placing paper orders on their cadence.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getAlgoApi } = await import('./http')
+        return getAlgoApi().unkill()
+      },
+    }),
   }
 }
 

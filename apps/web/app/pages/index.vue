@@ -175,6 +175,10 @@ function hasOutput(part: unknown): boolean {
           <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">copilot</span>
         </div>
         <div class="flex items-center gap-7">
+          <NuxtLink
+            to="/algo"
+            class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
+          >algo</NuxtLink>
           <div class="font-mono text-sm text-[var(--paper-2)]" data-mono>{{ clock }}</div>
           <button
             class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"

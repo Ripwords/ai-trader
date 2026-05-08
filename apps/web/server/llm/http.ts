@@ -189,6 +189,122 @@ export interface PlaceOrderResult {
   acc_id: string
 }
 
+// --- Algo --------------------------------------------------------------
+
+export type AlgoCadence = '1m' | '5m' | '15m' | '1h' | '1d'
+
+export interface AlgoStrategy {
+  id: string
+  name: string
+  symbol: string
+  cadence: AlgoCadence
+  qty_per_signal: number
+  code: string
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AlgoStrategyCreate {
+  name: string
+  symbol: string
+  cadence: AlgoCadence
+  qty_per_signal: number
+  code: string
+}
+
+export interface AlgoStrategyUpdate {
+  name?: string
+  symbol?: string
+  cadence?: AlgoCadence
+  qty_per_signal?: number
+  code?: string
+  enabled?: boolean
+}
+
+export interface AlgoEquityPoint {
+  t: string
+  v: number
+}
+
+export interface AlgoTrade {
+  ts: string
+  side: 'BUY' | 'SELL'
+  qty: number
+  price: number
+  pnl: number
+}
+
+export interface AlgoMetrics {
+  pnl: number
+  win_rate: number
+  max_dd: number
+  sharpe: number
+  n_trades: number
+}
+
+export interface AlgoBacktestResult {
+  run_id: string
+  status: 'pending' | 'running' | 'ok' | 'error'
+  equity_curve: AlgoEquityPoint[]
+  trades: AlgoTrade[]
+  metrics: AlgoMetrics | null
+  error: string | null
+}
+
+export interface AlgoSignal {
+  id: number
+  strategy_id: string
+  ts: string
+  side: 'BUY' | 'SELL'
+  qty: number
+  price: number | null
+  order_id: string | null
+  error: string | null
+}
+
+export interface AlgoState {
+  kill_active: boolean
+  enabled_strategies: string[]
+}
+
+declare module './http' {} // keep TS happy when this file is imported as a side-effect
+
+export interface AlgoApi {
+  listStrategies(): Promise<AlgoStrategy[]>
+  createStrategy(body: AlgoStrategyCreate): Promise<AlgoStrategy>
+  getStrategy(id: string): Promise<AlgoStrategy>
+  updateStrategy(id: string, body: AlgoStrategyUpdate): Promise<AlgoStrategy>
+  deleteStrategy(id: string): Promise<void>
+  backtest(id: string, body: { bars: number }): Promise<AlgoBacktestResult>
+  getRun(runId: string): Promise<AlgoBacktestResult>
+  listSignals(args?: { strategy_id?: string; limit?: number }): Promise<AlgoSignal[]>
+  state(): Promise<AlgoState>
+  kill(): Promise<AlgoState>
+  unkill(): Promise<AlgoState>
+}
+
+export function getAlgoApi(): AlgoApi {
+  const cfg = useRuntimeConfig()
+  const fetch = ofetch.create({
+    baseURL: cfg.apiBaseUrl as string,
+    headers: { Authorization: `Bearer ${cfg.internalBearer as string}` },
+  })
+  return {
+    listStrategies: () => fetch('/algo/strategies'),
+    createStrategy: (body) => fetch('/algo/strategies', { method: 'POST', body }),
+    getStrategy: (id) => fetch(`/algo/strategies/${id}`),
+    updateStrategy: (id, body) => fetch(`/algo/strategies/${id}`, { method: 'PUT', body }),
+    deleteStrategy: async (id) => { await fetch(`/algo/strategies/${id}`, { method: 'DELETE' }) },
+    backtest: (id, body) => fetch(`/algo/strategies/${id}/backtest`, { method: 'POST', body }),
+    getRun: (runId) => fetch(`/algo/runs/${runId}`),
+    listSignals: (args = {}) => fetch('/algo/signals', { query: args }),
+    state: () => fetch('/algo/state'),
+    kill: () => fetch('/algo/kill', { method: 'POST' }),
+    unkill: () => fetch('/algo/unkill', { method: 'POST' }),
+  }
+}
+
 export function getApiClient() {
   const cfg = useRuntimeConfig()
   return new ApiClient({ baseUrl: cfg.apiBaseUrl as string, bearer: cfg.internalBearer as string })
