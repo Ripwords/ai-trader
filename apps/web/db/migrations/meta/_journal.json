@@ -15,6 +15,13 @@
       "when": 1778222677694,
       "tag": "0001_add_algo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778758800000,
+      "tag": "0002_algo_backtest_config",
+      "breakpoints": true
     }
   ]
 }

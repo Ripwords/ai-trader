@@ -46,9 +46,15 @@ export const algoStrategies = pgTable('algo_strategies', {
   name: varchar('name', { length: 128 }).notNull(),
   symbol: varchar('symbol', { length: 32 }).notNull(),
   cadence: varchar('cadence', { length: 8 }).notNull(),
-  qtyPerSignal: integer('qty_per_signal').notNull().default(1),
   code: text('code').notNull(),
   enabled: boolean('enabled').notNull().default(false),
+  // Backtest configuration — also used by the live scheduler for sizing.
+  initialCapital: numeric('initial_capital', { precision: 18, scale: 2 }).notNull().default('100000'),
+  commissionBps: integer('commission_bps').notNull().default(10),
+  slippageBps: integer('slippage_bps').notNull().default(5),
+  sizingMode: varchar('sizing_mode', { length: 16 }).notNull().default('fixed_qty'),
+  sizingValue: numeric('sizing_value', { precision: 18, scale: 4 }).notNull().default('1'),
+  pyramidingMax: integer('pyramiding_max').notNull().default(1),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 })
@@ -62,9 +68,9 @@ export const algoRuns = pgTable('algo_runs', {
     .references(() => algoStrategies.id, { onDelete: 'cascade' }),
   kind: varchar('kind', { length: 16 }).notNull(),
   status: varchar('status', { length: 16 }).notNull().default('pending'),
-  // Equity curve as [{ t, v }, ...], trades as [{ ts, side, qty, price, pnl }, ...],
-  // metrics as { pnl, win_rate, max_dd, sharpe, n_trades }.
   equityCurve: jsonb('equity_curve'),
+  benchmarkCurve: jsonb('benchmark_curve'),
+  priceBars: jsonb('price_bars'),
   trades: jsonb('trades'),
   metrics: jsonb('metrics'),
   error: text('error'),
