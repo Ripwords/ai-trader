@@ -3,6 +3,7 @@ import { DefaultChatTransport, isTextUIPart, type UIMessage } from 'ai'
 import { Chat } from '@ai-sdk/vue'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import type { Highlighter } from 'shiki'
+import { diffLines, type Change } from 'diff'
 
 const props = defineProps<{
   currentCode: string
@@ -16,8 +17,6 @@ const emit = defineEmits<{
 
 const input = ref('')
 
-// Local-only chat — these messages don't persist, mirroring how a side panel
-// in an IDE gives you a scratch conversation per file.
 const chat = new Chat({
   transport: new DefaultChatTransport({
     api: '/api/algo/codegen',
@@ -43,9 +42,10 @@ function onSubmit() {
 
 function reset() {
   chat.messages = []
+  blockState.value = new Map()
 }
 
-// --- Shiki rendering for code blocks the assistant produces ---------------
+// --- Shiki highlighter (used inline per diff line) ----------------------
 
 const highlighter = shallowRef<Highlighter | null>(null)
 
@@ -58,20 +58,99 @@ async function ensureHighlighter() {
   })
   return highlighter.value
 }
-
 onMounted(ensureHighlighter)
 
-interface RenderedBlock {
-  kind: 'text' | 'code'
-  text: string
-  html?: string
+// --- Per code-block state -----------------------------------------------
+
+type BlockStatus = 'pending' | 'applied' | 'discarded'
+
+interface BlockState {
+  status: BlockStatus
+  baseSnapshot: string  // currentCode at the moment the message arrived
+  appliedAt?: string
 }
 
-const rendered = ref<Map<string, RenderedBlock[]>>(new Map())
+const blockState = ref<Map<string, BlockState>>(new Map())
 
-/** Split a raw assistant response into text + python code segments. */
-function parse(text: string): RenderedBlock[] {
-  const out: RenderedBlock[] = []
+function blockKey(messageId: string, blockIndex: number): string {
+  return `${messageId}::${blockIndex}`
+}
+
+function getOrInitBlock(key: string): BlockState {
+  const existing = blockState.value.get(key)
+  if (existing) return existing
+  const state: BlockState = { status: 'pending', baseSnapshot: props.currentCode }
+  blockState.value.set(key, state)
+  blockState.value = new Map(blockState.value)
+  return state
+}
+
+function isStale(key: string): boolean {
+  const s = blockState.value.get(key)
+  if (!s || s.status !== 'pending') return false
+  return s.baseSnapshot !== props.currentCode
+}
+
+function apply(key: string, code: string) {
+  const s = blockState.value.get(key)
+  if (!s) return
+  if (s.baseSnapshot !== props.currentCode) {
+    const ok = window.confirm(
+      'Your draft has changed since this suggestion was made. Apply will overwrite your current draft. Continue?',
+    )
+    if (!ok) return
+  }
+  emit('apply', code)
+  s.status = 'applied'
+  s.appliedAt = new Date().toISOString()
+  blockState.value = new Map(blockState.value)
+}
+
+function discard(key: string) {
+  const s = blockState.value.get(key)
+  if (!s) return
+  s.status = 'discarded'
+  blockState.value = new Map(blockState.value)
+}
+
+// --- Diff rendering ------------------------------------------------------
+
+interface DiffLine {
+  kind: 'add' | 'remove' | 'context'
+  html: string
+}
+
+function buildDiff(base: string, proposed: string, h: Highlighter): DiffLine[] {
+  const changes: Change[] = diffLines(base, proposed)
+  const out: DiffLine[] = []
+  for (const c of changes) {
+    const lines = c.value.replace(/\n$/, '').split('\n')
+    const kind: DiffLine['kind'] = c.added ? 'add' : c.removed ? 'remove' : 'context'
+    for (const line of lines) {
+      const html = h.codeToHtml(line || ' ', {
+        lang: 'python',
+        theme: 'github-dark-default',
+      })
+      out.push({ kind, html })
+    }
+  }
+  return out
+}
+
+interface ParsedBlock {
+  kind: 'text' | 'code'
+  text: string
+  diff?: DiffLine[]
+}
+
+const renderedMessages = ref<Map<string, ParsedBlock[]>>(new Map())
+
+function rawText(m: UIMessage): string {
+  return m.parts.filter(isTextUIPart).map(p => p.text).join('')
+}
+
+function parseRaw(text: string): ParsedBlock[] {
+  const out: ParsedBlock[] = []
   const re = /```(?:python|py)?\s*\n([\s\S]*?)```/g
   let lastIdx = 0
   let m: RegExpExecArray | null
@@ -88,42 +167,51 @@ function parse(text: string): RenderedBlock[] {
   return out
 }
 
-async function rerenderMessage(id: string, raw: string) {
-  const blocks = parse(raw)
+async function rerenderMessage(m: UIMessage) {
+  const text = rawText(m)
+  const blocks = parseRaw(text)
   const h = await ensureHighlighter()
+  let codeIndex = 0
   for (const b of blocks) {
     if (b.kind === 'code') {
-      b.html = h.codeToHtml(b.text || ' ', {
-        lang: 'python',
-        theme: 'github-dark-default',
-      })
+      const key = blockKey(m.id, codeIndex)
+      const state = getOrInitBlock(key)
+      b.diff = buildDiff(state.baseSnapshot, b.text, h)
+      codeIndex++
     }
   }
-  rendered.value.set(id, blocks)
-  // Trigger reactive update on the Map (Vue 3 doesn't deep-track Map mutations).
-  rendered.value = new Map(rendered.value)
+  renderedMessages.value.set(m.id, blocks)
+  renderedMessages.value = new Map(renderedMessages.value)
 }
 
-// Stitch a UIMessage's text parts back together — same model the main chat uses.
-function rawText(m: UIMessage): string {
-  return m.parts
-    .filter(isTextUIPart)
-    .map(p => p.text)
-    .join('')
-}
-
+// Recompute diffs whenever a message's text changes (streaming).
 watch(
   () => chat.messages.map(m => ({ id: m.id, role: m.role, text: rawText(m) })),
   (list) => {
     for (const m of list) {
-      if (m.role === 'assistant') rerenderMessage(m.id, m.text)
+      if (m.role === 'assistant') {
+        const ref = chat.messages.find(x => x.id === m.id)
+        if (ref) rerenderMessage(ref)
+      }
     }
   },
   { deep: true },
 )
 
-function apply(code: string) {
-  emit('apply', code)
+// Helper for the template — get the per-code-block index when iterating.
+function codeBlockIndex(blocks: ParsedBlock[], i: number): number {
+  let n = 0
+  for (let j = 0; j < i; j++) if (blocks[j]!.kind === 'code') n++
+  return n
+}
+
+// Stable typed fallback for messages we haven't rendered yet (e.g. mid-stream
+// before the first watch tick). Returning a `ParsedBlock[]` keeps the v-for
+// element narrowing intact in the template.
+function messageBlocks(m: UIMessage): ParsedBlock[] {
+  const cached = renderedMessages.value.get(m.id)
+  if (cached) return cached
+  return [{ kind: 'text', text: rawText(m) }]
 }
 </script>
 
@@ -146,30 +234,66 @@ function apply(code: string) {
       </div>
 
       <div v-for="m in chat.messages" :key="m.id" class="space-y-2">
-        <!-- User bubble -->
         <div v-if="m.role === 'user'" class="flex justify-end">
           <div class="max-w-[90%] surface-1 px-3 py-2 text-sm text-[var(--paper-0)] whitespace-pre-wrap">
             {{ rawText(m) }}
           </div>
         </div>
 
-        <!-- Assistant bubble: parsed into text + code blocks -->
         <div v-else-if="m.role === 'assistant'" class="space-y-2">
-          <template v-for="(block, i) in rendered.get(m.id) || [{ kind: 'text', text: rawText(m) }]" :key="`${m.id}-${i}`">
+          <template v-for="(block, i) in messageBlocks(m)" :key="`${m.id}-${i}`">
             <div
               v-if="block.kind === 'text' && block.text.trim()"
               class="text-sm text-[var(--paper-1)] whitespace-pre-wrap leading-relaxed"
             >{{ block.text.trim() }}</div>
 
-            <div v-else-if="block.kind === 'code'" class="space-y-1">
+            <div v-else-if="block.kind === 'code'" class="space-y-1.5">
+              <div class="rounded border border-[rgba(255,245,230,0.08)] overflow-hidden bg-[var(--ink-1)] text-xs leading-relaxed font-mono">
+                <div
+                  v-for="(line, li) in block.diff || []"
+                  :key="li"
+                  class="px-3 flex items-start"
+                  :class="line.kind === 'add'
+                    ? 'bg-[rgba(126,201,156,0.10)]'
+                    : line.kind === 'remove'
+                      ? 'bg-[rgba(224,122,95,0.10)]'
+                      : ''"
+                >
+                  <span
+                    class="select-none w-4 shrink-0"
+                    :class="line.kind === 'add'
+                      ? 'text-[var(--tape-up)]'
+                      : line.kind === 'remove'
+                        ? 'text-[var(--tape-down)]'
+                        : 'text-[var(--paper-3)]'"
+                  >{{ line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' ' }}</span>
+                  <span class="flex-1 [&_pre.shiki]:!bg-transparent [&_pre.shiki]:m-0 [&_pre.shiki]:py-0 [&_pre.shiki]:px-0" v-html="line.html" />
+                </div>
+              </div>
+
               <div
-                class="rounded border border-[rgba(255,245,230,0.08)] overflow-x-auto bg-[var(--ink-1)] text-xs leading-relaxed [&_pre.shiki]:!bg-transparent [&_pre.shiki]:m-0 [&_pre.shiki]:p-3"
-                v-html="block.html"
-              />
-              <button
-                class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
-                @click="apply(block.text)"
-              >→ apply to editor</button>
+                class="flex items-center gap-2"
+                v-if="(blockState.get(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i))) || { status: 'pending' }).status === 'pending'"
+              >
+                <button
+                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
+                  @click="apply(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)), block.text)"
+                >✓ apply</button>
+                <button
+                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] rounded hover:text-[var(--paper-0)] hover:border-[var(--paper-2)]"
+                  @click="discard(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)))"
+                >✕ discard</button>
+                <span
+                  v-if="isStale(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i)))"
+                  class="font-mono text-xs text-[var(--paper-3)] italic"
+                >(draft moved since)</span>
+              </div>
+              <div
+                v-else
+                class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]"
+              >
+                {{ (blockState.get(blockKey(m.id, codeBlockIndex(renderedMessages.get(m.id) || [], i))) || { status: 'pending' }).status === 'applied' ? '✓ applied' : '✕ discarded' }}
+              </div>
             </div>
           </template>
         </div>
