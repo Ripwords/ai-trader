@@ -1,5 +1,5 @@
 export default defineNuxtConfig({
-  modules: ['@nuxt/ui'],
+  modules: ['@nuxt/ui', '@comark/nuxt'],
   css: ['~/assets/css/main.css'],
   // Disable path-prefix on auto-imported components so files like
   // app/components/chat/NewsCard.vue are reachable as <NewsCard>, not

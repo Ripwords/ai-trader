@@ -1,145 +1,35 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { Chat } from '@ai-sdk/vue'
+import { computed, onMounted, ref } from 'vue'
+import {
+  getToolName,
+  isReasoningUIPart,
+  isTextUIPart,
+  isToolUIPart,
+} from 'ai'
+import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
 
-type StreamChunk =
-  | { type: 'text-delta'; payload: { text: string } }
-  | { type: 'tool-call'; payload: { toolCallId: string; toolName: string; args?: unknown } }
-  | { type: 'tool-result'; payload: { toolCallId: string; toolName: string; result?: unknown } }
-  | { type: 'finish'; payload: { finishReason: string | null } }
-  | { type: 'error'; payload: { message: string } }
-
-interface KLineResult {
-  code: string
-  ktype: string
-  bars: { time: string; open: number; high: number; low: number; close: number; volume: number; turnover: number }[]
-}
-
-interface NewsResult { title: string; url: string; content: string; published_date?: string }
-
-interface PortfolioResult {
-  cash: number
-  market_val: number
-  total_assets: number
-  positions: { code: string; qty: number; cost_price: number; current_price: number; market_val: number; pl_val: number; pl_ratio: number }[]
-}
-
-type ChatBlock =
-  | { kind: 'text'; text: string }
-  | { kind: 'tool-call'; tool: string }
-  | { kind: 'chart'; result: KLineResult }
-  | { kind: 'news'; results: NewsResult[] }
-  | { kind: 'portfolio'; result: PortfolioResult }
-  | { kind: 'error'; message: string }
-
-interface Msg {
-  id: string
-  role: 'user' | 'assistant'
-  blocks: ChatBlock[]
-}
-
-const messages = ref<Msg[]>([])
 const input = ref('')
-const busy = ref(false)
-const scroller = ref<HTMLElement | null>(null)
 
-const clock = ref(formatClock(new Date()))
-function formatClock(d: Date): string {
-  return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' ET'
-}
-
-onMounted(() => {
-  setInterval(() => { clock.value = formatClock(new Date()) }, 1000)
+const chat = new Chat({
+  onError(err) { console.error('chat error', err) },
 })
 
-const hasMessages = computed(() => messages.value.length > 0)
-
-function scrollToBottom() {
-  nextTick(() => {
-    if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
-  })
-}
-
-watch(messages, scrollToBottom, { deep: true })
-
-// Append a text block (or merge into the last one if it's also text)
-function appendText(asst: Msg, text: string) {
-  const last = asst.blocks[asst.blocks.length - 1]
-  if (last && last.kind === 'text') last.text += text
-  else asst.blocks.push({ kind: 'text', text })
-}
-
-// Streaming NDJSON from /api/chat. TanStack Query doesn't model long-lived
-// event streams; raw fetch + ReadableStream reader is the right tool here.
-async function send() {
+function onSubmit() {
   const text = input.value.trim()
-  if (!text || busy.value) return
+  if (!text) return
+  chat.sendMessage({ text })
   input.value = ''
-  const userMsg: Msg = { id: crypto.randomUUID(), role: 'user', blocks: [{ kind: 'text', text }] }
-  messages.value.push(userMsg)
-  const asst: Msg = { id: crypto.randomUUID(), role: 'assistant', blocks: [] }
-  messages.value.push(asst)
-  busy.value = true
-  try {
-    const wirePayload = messages.value
-      .filter(m => m.blocks.some(b => b.kind === 'text'))
-      .map(m => ({
-        role: m.role,
-        content: m.blocks.filter((b): b is { kind: 'text'; text: string } => b.kind === 'text').map(b => b.text).join(''),
-      }))
-      .filter(p => p.content)
+}
 
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: wirePayload }),
-    })
-    if (!res.body) throw new Error('no body')
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        if (!line.trim()) continue
-        let chunk: StreamChunk | null = null
-        try { chunk = JSON.parse(line) as StreamChunk } catch { continue }
-        if (!chunk) continue
-        switch (chunk.type) {
-          case 'text-delta':
-            appendText(asst, chunk.payload.text)
-            break
-          case 'tool-call':
-            asst.blocks.push({ kind: 'tool-call', tool: chunk.payload.toolName })
-            break
-          case 'tool-result': {
-            const r = chunk.payload.result as { bars?: unknown[]; results?: NewsResult[]; positions?: unknown[]; accounts?: unknown[]; orders?: unknown[] } | undefined
-            if (r?.bars && Array.isArray(r.bars)) {
-              asst.blocks.push({ kind: 'chart', result: r as unknown as KLineResult })
-            } else if (r?.results && Array.isArray(r.results)) {
-              asst.blocks.push({ kind: 'news', results: r.results as NewsResult[] })
-            } else if (r?.positions && Array.isArray(r.positions)) {
-              asst.blocks.push({ kind: 'portfolio', result: r as unknown as PortfolioResult })
-            }
-            break
-          }
-          case 'error':
-            asst.blocks.push({ kind: 'error', message: chunk.payload.message })
-            break
-          case 'finish':
-            // no-op
-            break
-        }
-      }
-    }
-  } catch (e: unknown) {
-    asst.blocks.push({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
-  } finally {
-    busy.value = false
-  }
+function pickSuggestion(s: string) {
+  input.value = s
+  onSubmit()
+}
+
+function onSelect(code: string) {
+  input.value = `Show me ${code} daily`
+  onSubmit()
 }
 
 async function logout() {
@@ -147,10 +37,23 @@ async function logout() {
   await navigateTo('/login')
 }
 
-function onSelect(code: string) {
-  input.value = `Show me ${code} daily`
-  send()
+// Live ET-style clock for the header
+const clock = ref(formatClock(new Date()))
+function formatClock(d: Date): string {
+  return (
+    d.toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }) + ' ET'
+  )
 }
+onMounted(() => {
+  setInterval(() => { clock.value = formatClock(new Date()) }, 1000)
+})
+
+const hasMessages = computed(() => chat.messages.length > 0)
 
 const suggestions = [
   'Show me NVDA daily',
@@ -158,9 +61,16 @@ const suggestions = [
   'What\'s on my watchlist?',
   'Show my paper portfolio',
 ]
-function pickSuggestion(s: string) {
-  input.value = s
-  send()
+
+const llmModel = 'deepseek/deepseek-v4-flash'
+
+// Branch on tool name to decide whether to render a rich custom card
+// or fall back to the default UChatTool indicator.
+function getToolOutput(part: unknown): unknown {
+  return (part as { output?: unknown })?.output
+}
+function hasOutput(part: unknown): boolean {
+  return (part as { state?: string })?.state === 'output-available'
 }
 </script>
 
@@ -169,7 +79,7 @@ function pickSuggestion(s: string) {
     <WatchlistSidebar @select="onSelect" />
 
     <div class="flex-1 flex flex-col min-w-0 relative z-10">
-      <!-- Top bar — brand wordmark, market clock, sign out -->
+      <!-- Top bar -->
       <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
         <div class="flex items-baseline gap-4">
           <div class="brand-mark">
@@ -188,12 +98,12 @@ function pickSuggestion(s: string) {
         </div>
       </header>
 
-      <!-- Conversation -->
-      <main ref="scroller" class="flex-1 overflow-y-auto">
+      <!-- Body -->
+      <main class="flex-1 overflow-hidden flex flex-col">
         <!-- Empty state -->
         <div
           v-if="!hasMessages"
-          class="h-full flex flex-col items-center justify-center px-6 max-w-2xl mx-auto text-center gap-10"
+          class="flex-1 flex flex-col items-center justify-center px-6 max-w-2xl mx-auto text-center gap-10"
         >
           <div class="rise-in">
             <div class="text-5xl font-semibold tracking-tight text-[var(--paper-0)] leading-none">
@@ -215,74 +125,87 @@ function pickSuggestion(s: string) {
           </div>
         </div>
 
-        <!-- Messages -->
-        <div v-else class="max-w-3xl mx-auto px-6 py-12 space-y-12">
-          <div
-            v-for="m in messages"
-            :key="m.id"
-            class="flex flex-col gap-4 rise-in"
-          >
-            <div class="font-mono text-xs uppercase tracking-[0.22em]"
-              :class="m.role === 'user' ? 'text-[var(--paper-3)]' : 'text-[var(--accent)]'">
-              {{ m.role === 'user' ? 'you' : 'copilot' }}
-            </div>
-            <div v-for="(block, idx) in m.blocks" :key="idx" class="space-y-3">
-              <p
-                v-if="block.kind === 'text'"
-                class="whitespace-pre-wrap text-base leading-[1.6] text-[var(--paper-0)]"
-              >{{ block.text }}</p>
-              <div v-else-if="block.kind === 'tool-call'" class="tool-rule">
-                calling <span class="text-[var(--accent)] not-italic font-medium">{{ block.tool }}</span>…
-              </div>
-              <ChartCard
-                v-else-if="block.kind === 'chart'"
-                :code="block.result.code"
-                :ktype="block.result.ktype"
-                :bars="block.result.bars"
-              />
-              <NewsCard v-else-if="block.kind === 'news'" :results="block.results" />
-              <PortfolioCard
-                v-else-if="block.kind === 'portfolio'"
-                :cash="block.result.cash"
-                :market_val="block.result.market_val"
-                :total_assets="block.result.total_assets"
-                :positions="block.result.positions"
-              />
-              <div
-                v-else-if="block.kind === 'error'"
-                class="font-mono text-sm text-[var(--tape-down)] border-l-2 border-[var(--tape-down)] pl-3"
+        <!-- Chat list -->
+        <UChatMessages
+          v-else
+          :messages="chat.messages"
+          :status="chat.status"
+          class="flex-1 max-w-3xl mx-auto w-full px-6"
+        >
+          <template #content="{ message }">
+            <template v-for="(part, idx) in message.parts" :key="`${message.id}-${idx}`">
+              <!-- Reasoning (DeepSeek reasoner / Claude thinking / etc.) -->
+              <UChatReasoning
+                v-if="isReasoningUIPart(part)"
+                :text="part.text"
+                :streaming="isPartStreaming(part)"
               >
-                {{ block.message }}
-              </div>
-            </div>
-          </div>
-          <div v-if="busy" class="font-mono text-sm text-[var(--paper-3)] flex items-center gap-2">
-            <span class="w-1.5 h-1.5 rounded-full bg-[var(--accent)] dot-pulse" />
-            thinking…
-          </div>
-        </div>
+                <Comark :markdown="part.text" :streaming="isPartStreaming(part)" class="*:first:mt-0 *:last:mb-0" />
+              </UChatReasoning>
+
+              <!-- Tool call — render rich card when output is available, else show the
+                   default UChatTool indicator while it streams. -->
+              <template v-else-if="isToolUIPart(part)">
+                <ChartCard
+                  v-if="hasOutput(part) && getToolName(part) === 'market_kline' && (getToolOutput(part) as { bars?: unknown[] })?.bars"
+                  :code="(getToolOutput(part) as { code: string }).code"
+                  :ktype="(getToolOutput(part) as { ktype: string }).ktype"
+                  :bars="(getToolOutput(part) as { bars: any[] }).bars"
+                />
+                <NewsCard
+                  v-else-if="hasOutput(part) && (getToolName(part) === 'search_news' || getToolName(part) === 'search_web') && (getToolOutput(part) as { results?: unknown[] })?.results"
+                  :results="(getToolOutput(part) as { results: any[] }).results"
+                />
+                <PortfolioCard
+                  v-else-if="hasOutput(part) && getToolName(part) === 'trade_portfolio' && (getToolOutput(part) as { positions?: unknown[] })?.positions"
+                  :cash="(getToolOutput(part) as any).cash"
+                  :market_val="(getToolOutput(part) as any).market_val"
+                  :total_assets="(getToolOutput(part) as any).total_assets"
+                  :positions="(getToolOutput(part) as any).positions"
+                />
+                <UChatTool
+                  v-else
+                  :text="getToolName(part)"
+                  :streaming="isToolStreaming(part)"
+                />
+              </template>
+
+              <!-- Text content — Comark for assistant (markdown), plain for user -->
+              <template v-else-if="isTextUIPart(part)">
+                <Comark
+                  v-if="message.role === 'assistant'"
+                  :markdown="part.text"
+                  :streaming="isPartStreaming(part)"
+                  class="*:first:mt-0 *:last:mb-0 prose-invert"
+                />
+                <p
+                  v-else-if="message.role === 'user'"
+                  class="whitespace-pre-wrap text-base leading-[1.6] text-[var(--paper-0)]"
+                >{{ part.text }}</p>
+              </template>
+            </template>
+          </template>
+        </UChatMessages>
       </main>
 
       <!-- Composer -->
       <footer class="px-6 py-5 border-t hairline shrink-0">
-        <form class="max-w-3xl mx-auto flex items-center gap-3 surface-1 rounded-md px-5 py-4" @submit.prevent="send">
-          <span class="font-mono text-lg text-[var(--accent)] select-none leading-none">›</span>
-          <input
+        <div class="max-w-3xl mx-auto">
+          <UChatPrompt
             v-model="input"
-            class="flex-1 bg-transparent outline-none text-base text-[var(--paper-0)] placeholder:text-[var(--paper-3)]"
+            :error="chat.error"
             placeholder="Show me NVDA daily, what's on my watchlist, any news on…"
-            :disabled="busy"
-          />
-          <button
-            type="submit"
-            :disabled="busy || !input.trim()"
-            class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--accent)] hover:text-[var(--paper-0)] disabled:opacity-30 disabled:hover:text-[var(--accent)] transition-colors"
+            @submit="onSubmit"
           >
-            send <span aria-hidden="true">⏎</span>
-          </button>
-        </form>
-        <div class="max-w-3xl mx-auto mt-3 px-2 text-xs font-mono uppercase tracking-[0.18em] text-[var(--paper-3)]">
-          model · {{ 'deepseek/deepseek-v4-flash' }} · paper trading default
+            <UChatPromptSubmit
+              :status="chat.status"
+              @stop="chat.stop()"
+              @reload="chat.regenerate()"
+            />
+          </UChatPrompt>
+          <div class="mt-3 px-2 text-xs font-mono uppercase tracking-[0.18em] text-[var(--paper-3)]">
+            model · {{ llmModel }} · paper trading default
+          </div>
         </div>
       </footer>
     </div>

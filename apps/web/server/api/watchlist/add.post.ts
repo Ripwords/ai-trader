@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { getApiClient } from '../../mastra/http'
+import { getApiClient } from '../../llm/http'
 
 const Body = z.object({ code: z.string(), group: z.string().default('All') })
 
