@@ -290,6 +290,11 @@ export interface AlgoState {
 
 declare module './http' {} // keep TS happy when this file is imported as a side-effect
 
+export interface AlgoValidateResult {
+  ok: boolean
+  error: string | null
+}
+
 export interface AlgoApi {
   listStrategies(): Promise<AlgoStrategy[]>
   createStrategy(body: AlgoStrategyCreate): Promise<AlgoStrategy>
@@ -298,6 +303,7 @@ export interface AlgoApi {
   deleteStrategy(id: string): Promise<void>
   backtest(id: string, body: { bars: number }): Promise<AlgoBacktestResult>
   getRun(runId: string): Promise<AlgoBacktestResult>
+  validateCode(body: { code: string }): Promise<AlgoValidateResult>
   listSignals(args?: { strategy_id?: string; limit?: number }): Promise<AlgoSignal[]>
   state(): Promise<AlgoState>
   kill(): Promise<AlgoState>
@@ -318,6 +324,7 @@ export function getAlgoApi(): AlgoApi {
     deleteStrategy: async (id) => { await fetch(`/algo/strategies/${id}`, { method: 'DELETE' }) },
     backtest: (id, body) => fetch(`/algo/strategies/${id}/backtest`, { method: 'POST', body }),
     getRun: (runId) => fetch(`/algo/runs/${runId}`),
+    validateCode: (body) => fetch('/algo/validate', { method: 'POST', body }),
     listSignals: (args = {}) => fetch('/algo/signals', { query: args }),
     state: () => fetch('/algo/state'),
     kill: () => fetch('/algo/kill', { method: 'POST' }),

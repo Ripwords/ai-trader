@@ -58,6 +58,15 @@ class BacktestRequest(BaseModel):
     bars: int = Field(default=200, ge=10, le=2000)
 
 
+class ValidateCodeRequest(BaseModel):
+    code: str = Field(min_length=1)
+
+
+class ValidateCodeResult(BaseModel):
+    ok: bool
+    error: str | None = None
+
+
 class TradeRecord(BaseModel):
     ts: datetime
     side: Side

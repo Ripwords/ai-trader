@@ -13,6 +13,8 @@ from app.schemas.algo import (
     Strategy,
     StrategyCreate,
     StrategyUpdate,
+    ValidateCodeRequest,
+    ValidateCodeResult,
 )
 from app.services.algo import repo
 from app.services.algo.backtester import run_backtest
@@ -81,6 +83,21 @@ async def delete_strategy(strategy_id: str) -> None:
     ok = await repo.delete_strategy(strategy_id)
     if not ok:
         raise HTTPException(status_code=404, detail="strategy not found")
+
+
+@router.post("/validate", response_model=ValidateCodeResult)
+async def validate_code(body: ValidateCodeRequest) -> ValidateCodeResult:
+    """Run the same AST allowlist + Python parser the create/update routes
+    use, but return the result as a 200 response so the frontend can probe
+    code *before* committing it (e.g. the page checks resolved code before
+    PUT). Avoids surprise 422s on save."""
+    from app.services.algo.validator import ValidationError, validate
+
+    try:
+        validate(body.code)
+    except ValidationError as e:
+        return ValidateCodeResult(ok=False, error=str(e))
+    return ValidateCodeResult(ok=True)
 
 
 # --- backtest -------------------------------------------------------------

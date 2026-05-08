@@ -10,6 +10,7 @@ import {
   defaultKeymap,
   history,
   historyKeymap,
+  indentSelection,
   indentWithTab,
 } from '@codemirror/commands'
 import {
@@ -18,7 +19,6 @@ import {
   syntaxHighlighting,
   indentOnInput,
   indentUnit,
-  indentSelection,
   foldGutter,
   foldKeymap,
 } from '@codemirror/language'
@@ -246,6 +246,18 @@ onMounted(() => {
 })
 
 onUnmounted(() => unmountEditor())
+
+/** Re-indent the whole document using Python rules. The page uses this
+ *  from a global Cmd+S handler so Save can format-then-save regardless
+ *  of which element currently has focus. No-op while in diff mode. */
+function formatCode() {
+  if (!view) return
+  view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
+  indentSelection(view)
+  view.dispatch({ selection: { anchor: 0 } })
+}
+
+defineExpose({ formatCode })
 
 // ---------------------------------------------------------------------------
 // Diff-review mode — shiki-rendered unified diff with per-hunk controls

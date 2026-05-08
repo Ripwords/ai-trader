@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useMagicKeys, whenever } from '@vueuse/core'
 import type {
   AlgoBacktestResult,
   AlgoSignal,
@@ -69,6 +70,20 @@ async function save() {
   saveError.value = null
   saving.value = true
   try {
+    // Pre-validate the resolved code so the user sees Python syntax /
+    // sandbox errors *before* the PUT round-trip. The PUT endpoint
+    // re-runs the same validator, but its 422 surfaces less ergonomically
+    // and (more importantly) means the partial-accept "broken state"
+    // would have been written into network logs / observability before
+    // surfacing the real issue.
+    const probe = await $fetch<{ ok: boolean; error: string | null }>(
+      '/api/algo/validate',
+      { method: 'POST', body: { code: draft.value.code } },
+    ).catch(() => null)
+    if (probe && !probe.ok) {
+      saveError.value = probe.error ?? 'invalid code'
+      return
+    }
     await $fetch(`/api/algo/strategies/${id.value}`, {
       method: 'PUT',
       body: draft.value,
@@ -140,6 +155,34 @@ const finishedReview = ref<{ blockKey: string, summary: { accepted: number; tota
 // and revealed via a header toggle. On md+ it stays in the flex layout
 // permanently and `sidebarOpen` is irrelevant.
 const sidebarOpen = ref(false)
+
+// Ref to the CodeEditor so the global Cmd+S handler can call formatCode()
+// regardless of which element currently has focus. CodeMirror's own keymap
+// only fires when the editor itself has focus — so without this, pressing
+// Cmd+S while focus is on a config input or the chat would still drop
+// into the browser's "save page as HTML" dialog.
+const editorRef = ref<{ formatCode: () => void } | null>(null)
+
+// VueUse's useMagicKeys gives us a global keystroke listener that calls
+// preventDefault on the registered combos before the browser sees them,
+// so the "save page as HTML" dialog never appears regardless of focus.
+const keys = useMagicKeys({
+  passive: false,
+  onEventFired(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's' && e.type === 'keydown') {
+      e.preventDefault()
+    }
+  },
+})
+// The Proxy from useMagicKeys is typed as possibly-undefined per key, but
+// the runtime always returns a ComputedRef. Bang past the type to use it.
+whenever(keys['Meta+S']!, () => triggerSave())
+whenever(keys['Ctrl+S']!, () => triggerSave())
+
+function triggerSave() {
+  editorRef.value?.formatCode()
+  if (dirty.value && !saving.value) save()
+}
 
 function onReview(blockKey: string, base: string, proposed: string) {
   activeReview.value = {
@@ -352,6 +395,7 @@ async function runBacktest() {
           <div class="block">
             <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">strategy code</span>
             <CodeEditor
+              ref="editorRef"
               v-model="draft.code"
               :rows="18"
               :diff="activeReview"
