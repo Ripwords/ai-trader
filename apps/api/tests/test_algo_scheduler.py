@@ -78,8 +78,13 @@ async def _make_strategy(code: str, cadence: str = "1m") -> str:
             name="t",
             symbol="US.NVDA",
             cadence=cadence,
-            qty_per_signal=1,
             code=code,
+            initial_capital=100_000,
+            commission_bps=10,
+            slippage_bps=5,
+            sizing_mode="fixed_qty",
+            sizing_value=1,
+            pyramiding_max=1,
         )
     )
     await repo.update_strategy(s.id, StrategyUpdate(enabled=True))

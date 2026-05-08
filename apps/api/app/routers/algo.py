@@ -106,7 +106,16 @@ async def backtest(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     run_id = await repo.create_run(strategy_id, "backtest")
-    result = run_backtest(strategy.code, kline.bars, strategy.qty_per_signal)
+    result = run_backtest(
+        strategy.code,
+        kline.bars,
+        initial_capital=strategy.initial_capital,
+        commission_bps=strategy.commission_bps,
+        slippage_bps=strategy.slippage_bps,
+        sizing_mode=strategy.sizing_mode,
+        sizing_value=strategy.sizing_value,
+        pyramiding_max=strategy.pyramiding_max,
+    )
     result.run_id = run_id
     await repo.finalise_run(run_id, result)
     return result

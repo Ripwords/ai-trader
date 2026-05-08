@@ -59,13 +59,13 @@ class _Ctx:
         self.bars = bars
         self.position = position
         self.qty = qty
-        self.intent: tuple[str, int] | None = None
+        self.intent: tuple[str, int | None] | None = None
 
     def buy(self, qty: int | None = None) -> None:
-        self.intent = ("BUY", int(qty) if qty is not None else self.qty)
+        self.intent = ("BUY", int(qty) if qty is not None else None)
 
     def sell(self, qty: int | None = None) -> None:
-        self.intent = ("SELL", int(qty) if qty is not None else self.qty)
+        self.intent = ("SELL", int(qty) if qty is not None else None)
 
     def hold(self) -> None:
         self.intent = None
@@ -201,7 +201,20 @@ class Scheduler:
         except Exception:  # noqa: BLE001
             position = 0  # best-effort; strategy can still emit
 
-        ctx = _Ctx(_bars_to_df(bars), position=position, qty=s.qty_per_signal)
+        # Resolve a default ctx.qty using the strategy's sizing mode so
+        # `c.buy(c.qty)` works in any mode. Use last close as a fill-price
+        # proxy and approximate equity = initial_capital + position * close.
+        from app.services.algo.backtester import resolve_qty
+        last_close = float(bars[-1].close)
+        equity_estimate = s.initial_capital + position * last_close
+        default_qty = max(
+            1,
+            resolve_qty(
+                mode=s.sizing_mode, value=s.sizing_value,
+                equity=equity_estimate, fill_price=last_close,
+            ),
+        )
+        ctx = _Ctx(_bars_to_df(bars), position=position, qty=default_qty)
         try:
             on_bar(ctx)
         except Exception as exc:  # noqa: BLE001
@@ -214,13 +227,16 @@ class Scheduler:
         if ctx.intent is None:
             return
 
-        side, qty = ctx.intent
+        side, explicit_qty = ctx.intent
+
+        # Resolve final order qty: explicit arg from the strategy wins,
+        # otherwise reuse the default we computed above (sized off
+        # initial_capital + open MTM, with last close as fill_price proxy).
+        qty = max(0, int(explicit_qty)) if explicit_qty is not None else default_qty
         if qty <= 0:
             return
 
-        last_close = float(bars[-1].close)
         ts = _now_naive_utc()
-
         if kill_active:
             await repo.append_signal(
                 s.id, ts, side, qty, last_close, None,
