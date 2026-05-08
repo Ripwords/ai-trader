@@ -84,6 +84,7 @@ If a name isn't on this table, use your knowledge to determine market + ticker. 
 
 ### Trade routing rules
 - For the user's account list (and especially live orders), prefer accounts where \`acc_role\` is NOT \`MASTER\` and where \`trdmarket_auth\` includes the target market (HK / US / etc.).
+- **SKIP accounts where \`acc_role\` is \`IPO\`** — those are IPO-subscription-only and the moomoo API will refuse \`order_list_query\` / \`deal_list_query\` / \`place_order\` with a "does not support" 502. If you call trade_orders / trade_fills against an IPO account, you'll get a 502 with a body like "IPO account ... does not support the Get Today's Executed Trades interface" — that is NOT an OpenD outage, just retry with a NORMAL acc_id.
 - Use the last 4 digits of \`uni_card_num\` (returned in account info) when referring to live accounts in chat — that's what the user recognises from the moomoo app.
 
 ### Trading session for US stocks

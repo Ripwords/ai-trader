@@ -92,7 +92,10 @@ export function makeTools(client: ApiClient) {
     }),
 
     'trade_orders': tool({
-      description: 'List today\'s orders for an account.',
+      description:
+        'List today\'s orders for an account. ' +
+        'Skip accounts where acc_role is "IPO" — moomoo refuses this call on IPO accounts ' +
+        '(502 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
       inputSchema: z.object({
         acc_id: z.number().int(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
@@ -101,7 +104,10 @@ export function makeTools(client: ApiClient) {
     }),
 
     'trade_fills': tool({
-      description: 'List today\'s fills (executed trades) for an account.',
+      description:
+        'List today\'s fills (executed trades) for an account. ' +
+        'Skip accounts where acc_role is "IPO" — moomoo refuses this call on IPO accounts ' +
+        '(502 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
       inputSchema: z.object({
         acc_id: z.number().int(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),

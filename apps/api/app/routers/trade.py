@@ -14,6 +14,18 @@ from app.schemas.trade import (
 )
 from app.services.opend import OpendAdapter, OpendError
 
+
+def _opend_to_http(exc: OpendError) -> HTTPException:
+    """Map OpendError → the right HTTP status. 'does not support' / IPO-account
+    rejections aren't a gateway problem — the agent should treat them as a
+    bad-input case (4xx) and pick a different account / interface."""
+    msg = str(exc)
+    if "does not support" in msg or "IPO account" in msg:
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=msg)
+    if "unlock needed" in msg.lower() or "trade is locked" in msg.lower():
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=msg)
+    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=msg)
+
 router = APIRouter(
     prefix="/trade",
     tags=["trade"],
@@ -26,7 +38,7 @@ async def accounts(opend: OpendAdapter = Depends(get_opend)) -> list[Account]:
     try:
         return opend.list_accounts()
     except OpendError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise _opend_to_http(exc) from exc
 
 
 @router.get("/portfolio", response_model=Portfolio)
@@ -38,7 +50,7 @@ async def portfolio(
     try:
         return opend.get_portfolio(acc_id=acc_id, trd_env=trd_env)
     except OpendError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise _opend_to_http(exc) from exc
 
 
 @router.get("/orders", response_model=list[Order])
@@ -50,7 +62,7 @@ async def orders(
     try:
         return opend.list_orders(acc_id=acc_id, trd_env=trd_env)
     except OpendError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise _opend_to_http(exc) from exc
 
 
 @router.get("/fills", response_model=list[Fill])
@@ -62,7 +74,7 @@ async def fills(
     try:
         return opend.list_fills(acc_id=acc_id, trd_env=trd_env)
     except OpendError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise _opend_to_http(exc) from exc
 
 
 @router.post("/order/place", response_model=PlaceOrderResult)
@@ -81,7 +93,7 @@ async def place_order(
             acc_id=body.acc_id,
         )
     except OpendError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise _opend_to_http(exc) from exc
 
 
 @router.post("/order/modify")
@@ -98,7 +110,7 @@ async def modify_order(
             trd_env=body.trd_env,
         )
     except OpendError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise _opend_to_http(exc) from exc
 
 
 @router.post("/order/cancel")
@@ -113,4 +125,4 @@ async def cancel_order(
             trd_env=body.trd_env,
         )
     except OpendError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise _opend_to_http(exc) from exc
