@@ -112,26 +112,53 @@ def test_sandbox_runs_simple_strategy() -> None:
     assert ctx.actions == ["buy:1"]
 
 
-def test_sandbox_strategy_cannot_import_os_at_runtime() -> None:
-    """Belt-and-suspenders: even if validator missed it, the restricted
-    __builtins__ has no __import__ so `import os` inside the function body
-    fails at exec time."""
-    # Use a construction that bypasses the validator's static check —
-    # direct exec'd `__import__`. The validator catches `__import__` as a Name,
-    # so we craft via getattr-equivalent. Easiest: confirm the sandbox namespace
-    # genuinely lacks __import__.
-    fn = compile_strategy("def on_bar(c): pass")
-    # The compiled function's globals must not contain dangerous builtins.
-    g = fn.__globals__ if hasattr(fn, "__globals__") else {}
-    # fn here is a wrapper; reach into the closed-over user fn via inspect.
+def test_sandbox_runs_strategy_with_import_math() -> None:
+    """Regression: validator allowed `import math` so the wire-format strategy
+    contained one, but the sandbox's restricted __builtins__ lacked
+    __import__ — so executing the import statement raised
+    `NameError: __import__ not found` at backtest time. Sandbox now exposes
+    a restricted __import__ that mirrors the validator's allowlist."""
+    src = (
+        "import math\n"
+        "def on_bar(c):\n"
+        "    c.last = math.sqrt(4)\n"
+    )
+    fn = compile_strategy(src)
+
+    class FakeCtx:
+        last: float = 0.0
+
+        def buy(self, qty: int = 1) -> None: ...
+        def sell(self, qty: int = 1) -> None: ...
+        def hold(self) -> None: ...
+
+    ctx = FakeCtx()
+    fn(ctx)
+    assert ctx.last == 2.0
+
+
+def test_sandbox_import_rejects_disallowed_modules_at_runtime() -> None:
+    """Belt-and-suspenders: the restricted __import__ refuses anything
+    outside the validator's allowlist, so even if a strategy reached
+    runtime with an `import os`, the import call would raise."""
     import inspect
 
+    fn = compile_strategy("def on_bar(c): pass")
     cells = inspect.getclosurevars(fn).nonlocals
     user_fn = cells.get("fn")
     assert user_fn is not None, "wrapper must close over the user fn"
     builtins = user_fn.__globals__.get("__builtins__", {})
-    if isinstance(builtins, dict):
-        assert "__import__" not in builtins
-        assert "open" not in builtins
-        assert "eval" not in builtins
-        assert "exec" not in builtins
+    assert isinstance(builtins, dict)
+    # __import__ is exposed (necessary for `import math` to work), but
+    # restricted; eval/exec/open/etc. remain absent entirely.
+    assert "__import__" in builtins
+    assert "open" not in builtins
+    assert "eval" not in builtins
+    assert "exec" not in builtins
+    safe_import = builtins["__import__"]
+    with pytest.raises(ImportError):
+        safe_import("os")
+    with pytest.raises(ImportError):
+        safe_import("subprocess")
+    # Allowed modules still resolve.
+    assert safe_import("math").sqrt(4) == 2.0
