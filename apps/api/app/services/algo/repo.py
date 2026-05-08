@@ -70,9 +70,14 @@ def _row_to_strategy(row: asyncpg.Record) -> Strategy:
         name=row["name"],
         symbol=row["symbol"],
         cadence=row["cadence"],
-        qty_per_signal=row["qty_per_signal"],
         code=row["code"],
         enabled=row["enabled"],
+        initial_capital=float(row["initial_capital"]),
+        commission_bps=int(row["commission_bps"]),
+        slippage_bps=int(row["slippage_bps"]),
+        sizing_mode=row["sizing_mode"],
+        sizing_value=float(row["sizing_value"]),
+        pyramiding_max=int(row["pyramiding_max"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -104,16 +109,23 @@ async def create_strategy(body: StrategyCreate) -> Strategy:
         row = await conn.fetchrow(
             """
             INSERT INTO algo_strategies
-              (user_id, name, symbol, cadence, qty_per_signal, code)
-            VALUES ($1, $2, $3, $4, $5, $6)
+              (user_id, name, symbol, cadence, code,
+               initial_capital, commission_bps, slippage_bps,
+               sizing_mode, sizing_value, pyramiding_max)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING *
             """,
             owner_id,
             body.name,
             body.symbol,
             body.cadence,
-            body.qty_per_signal,
             body.code,
+            body.initial_capital,
+            body.commission_bps,
+            body.slippage_bps,
+            body.sizing_mode,
+            body.sizing_value,
+            body.pyramiding_max,
         )
     return _row_to_strategy(row)
 
@@ -180,14 +192,18 @@ async def finalise_run(run_id: str, result: BacktestResult) -> None:
             UPDATE algo_runs
             SET status = $1,
                 equity_curve = $2,
-                trades = $3,
-                metrics = $4,
-                error = $5,
+                benchmark_curve = $3,
+                price_bars = $4,
+                trades = $5,
+                metrics = $6,
+                error = $7,
                 finished_at = now()
-            WHERE id = $6
+            WHERE id = $8
             """,
             result.status,
             json.dumps([p.model_dump(mode="json") for p in result.equity_curve]),
+            json.dumps([p.model_dump(mode="json") for p in result.benchmark_curve]),
+            json.dumps([b.model_dump(mode="json") for b in result.price_bars]),
             json.dumps([t.model_dump(mode="json") for t in result.trades]),
             json.dumps(result.metrics.model_dump()) if result.metrics else None,
             result.error,
@@ -196,20 +212,28 @@ async def finalise_run(run_id: str, result: BacktestResult) -> None:
 
 
 async def get_run(run_id: str) -> BacktestResult | None:
+    from app.schemas.quote import Bar
+
     async with get_pool().acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM algo_runs WHERE id = $1", run_id)
     if not row:
         return None
-    eq_raw = row["equity_curve"]
-    eq = json.loads(eq_raw) if isinstance(eq_raw, str) else (eq_raw or [])
-    tr_raw = row["trades"]
-    tr = json.loads(tr_raw) if isinstance(tr_raw, str) else (tr_raw or [])
+
+    def _load_json(raw: Any) -> list[Any]:
+        return json.loads(raw) if isinstance(raw, str) else (raw or [])
+
+    eq = _load_json(row["equity_curve"])
+    bench = _load_json(row["benchmark_curve"])
+    price_raw = _load_json(row["price_bars"])
+    tr = _load_json(row["trades"])
     mt_raw = row["metrics"]
     mt = json.loads(mt_raw) if isinstance(mt_raw, str) else mt_raw
     return BacktestResult(
         run_id=str(row["id"]),
         status=row["status"],
         equity_curve=[EquityPoint(**p) for p in eq],
+        benchmark_curve=[EquityPoint(**p) for p in bench],
+        price_bars=[Bar(**b) for b in price_raw],
         trades=[TradeRecord(**t) for t in tr],
         metrics=Metrics(**mt) if mt else None,
         error=row["error"],
