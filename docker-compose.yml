@@ -48,12 +48,10 @@ services:
 
   web:
     build: ./apps/web
-    # NOTE: bind-mounting ./apps/web for HMR is preferable but Docker Desktop
-    # rejects paths not added under Settings → Resources → File Sharing.
-    # If you want HMR, add /Users/<you>/Documents/ai-trader to file sharing
-    # then re-add the volumes here. Otherwise: `docker compose up -d --build web`.
+    # Container ships the Nitro prod bundle (no bind mount, no HMR).
+    # After editing apps/web: `docker compose up -d --build web`.
     environment:
-      # Mastra reads these via process.env when routing "<provider>/<model-id>".
+      # Provider routing reads these via process.env from "<provider>/<model-id>".
       # Set whichever provider you actually use; LLM_MODEL picks the route.
       LLM_MODEL: ${LLM_MODEL}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
