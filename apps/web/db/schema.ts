@@ -93,3 +93,20 @@ export const algoSignals = pgTable('algo_signals', {
   orderId: varchar('order_id', { length: 64 }),
   error: text('error'),
 })
+
+// Research signals emitted by analyst agents and LLM personas (Buffett,
+// Lynch, etc.). Keyed by user + symbol + source so the /research page can
+// show a per-symbol breakdown and synthesize_decisions can aggregate.
+export const researchSignals = pgTable('research_signals', {
+  id: serial('id').primaryKey(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  symbol: varchar('symbol', { length: 32 }).notNull(),
+  source: varchar('source', { length: 64 }).notNull(),
+  signal: varchar('signal', { length: 16 }).notNull(),
+  confidence: integer('confidence').notNull(),
+  reasoning: text('reasoning').notNull(),
+  metadata: jsonb('metadata'),
+  ts: timestamp('ts').defaultNow().notNull(),
+})

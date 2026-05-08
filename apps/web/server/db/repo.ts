@@ -1,6 +1,6 @@
 import { and, asc, desc, eq } from 'drizzle-orm'
 import { getDb } from '../../db/client'
-import { chatMessages, chatThreads, users } from '../../db/schema'
+import { chatMessages, chatThreads, researchSignals, users } from '../../db/schema'
 
 const SINGLE_USER_NAME = 'owner'
 
@@ -102,4 +102,69 @@ export function titleFromText(text: string): string {
   const trimmed = text.trim().replace(/\s+/g, ' ')
   if (trimmed.length <= 60) return trimmed
   return trimmed.slice(0, 57) + '…'
+}
+
+export interface ResearchSignalInput {
+  symbol: string
+  source: string
+  signal: 'bullish' | 'bearish' | 'neutral'
+  confidence: number
+  reasoning: string
+  metadata?: Record<string, unknown> | null
+}
+
+export async function recordResearchSignal(
+  userId: string,
+  input: ResearchSignalInput,
+): Promise<number> {
+  const db = getDb()
+  const inserted = await db
+    .insert(researchSignals)
+    .values({
+      userId,
+      symbol: input.symbol,
+      source: input.source,
+      signal: input.signal,
+      confidence: input.confidence,
+      reasoning: input.reasoning,
+      metadata: input.metadata ?? null,
+    })
+    .returning({ id: researchSignals.id })
+  if (!inserted[0]) throw new Error('failed to record research signal')
+  return inserted[0].id
+}
+
+export async function listResearchSignals(
+  userId: string,
+  opts: { symbol?: string; source?: string; limit?: number } = {},
+): Promise<Array<ResearchSignalInput & { id: number; ts: Date }>> {
+  const db = getDb()
+  const filters = [eq(researchSignals.userId, userId)]
+  if (opts.symbol) filters.push(eq(researchSignals.symbol, opts.symbol))
+  if (opts.source) filters.push(eq(researchSignals.source, opts.source))
+  const rows = await db
+    .select({
+      id: researchSignals.id,
+      symbol: researchSignals.symbol,
+      source: researchSignals.source,
+      signal: researchSignals.signal,
+      confidence: researchSignals.confidence,
+      reasoning: researchSignals.reasoning,
+      metadata: researchSignals.metadata,
+      ts: researchSignals.ts,
+    })
+    .from(researchSignals)
+    .where(and(...filters))
+    .orderBy(desc(researchSignals.ts))
+    .limit(opts.limit ?? 100)
+  return rows.map(r => ({
+    id: r.id,
+    symbol: r.symbol,
+    source: r.source,
+    signal: r.signal as 'bullish' | 'bearish' | 'neutral',
+    confidence: r.confidence,
+    reasoning: r.reasoning,
+    metadata: (r.metadata as Record<string, unknown> | null) ?? null,
+    ts: r.ts,
+  }))
 }
