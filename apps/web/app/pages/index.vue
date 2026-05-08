@@ -286,26 +286,23 @@ function hasOutput(part: unknown): boolean {
             v-model="input"
             :error="chat.error"
             placeholder="Show me NVDA daily, what's on my watchlist, any news on…"
+            :ui="{
+              body: '!pe-11',
+            }"
             @submit="onSubmit"
           >
-            <template #footer>
-              <!-- Left spacer reserves room for future controls (attachments, etc.).
-                   Footer slot is `flex items-center justify-between gap-1.5` so the
-                   submit button is pushed to the right. -->
-              <div />
-              <UChatPromptSubmit
-                :status="chat.status"
-                color="neutral"
-                variant="solid"
-                :ui="{
-                  base: '!bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !rounded-md !p-0 !size-8 !inline-flex !items-center !justify-center',
-                  leadingIcon: '!size-4',
-                  trailingIcon: '!size-4',
-                }"
-                @stop="chat.stop()"
-                @reload="chat.regenerate()"
-              />
-            </template>
+            <UChatPromptSubmit
+              :status="chat.status"
+              color="neutral"
+              variant="solid"
+              :ui="{
+                base: '!absolute !bottom-0 !end-0 !size-8 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
+                leadingIcon: '!size-4',
+                trailingIcon: '!size-4',
+              }"
+              @stop="chat.stop()"
+              @reload="chat.regenerate()"
+            />
           </UChatPrompt>
           <div class="mt-3 px-2 text-xs font-mono uppercase tracking-[0.18em] text-[var(--paper-3)]">
             model · {{ llmModel }} · live data · paper writes

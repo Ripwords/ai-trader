@@ -7,7 +7,8 @@ export default defineNuxtConfig({
   components: [
     { path: '~/components', pathPrefix: false },
   ],
-  devtools: { enabled: true },
+  // Devtools floating button clutters the composer area — turn it off.
+  devtools: { enabled: false },
   typescript: { strict: true },
   app: {
     head: {
