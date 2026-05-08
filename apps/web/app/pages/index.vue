@@ -58,7 +58,8 @@ async function loadConversation(id: string | null) {
     console.error('failed to load conversation', e)
     chat.messages = []
     chatId.value = null
-    router.replace({ query: { ...route.query, c: undefined } })
+    const { c: _, ...rest1 } = route.query
+    router.replace({ query: rest1 })
   }
 }
 
@@ -75,8 +76,10 @@ watch(() => route.query.c, async (next) => {
 
 function startNewChat() {
   chatId.value = null
-  chat.setMessages([])
-  router.replace({ query: { ...route.query, c: undefined } })
+  chat.messages = []
+  // Drop ?c= from URL — Vue Router's `c: undefined` keeps the key.
+  const { c: _drop, ...rest } = route.query
+  router.replace({ query: rest })
 }
 
 function onSelectConversation(id: string) {
