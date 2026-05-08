@@ -35,58 +35,82 @@ export interface DiffPayload {
 /**
  * Build a list of hunks from base→proposed using `diff.structuredPatch`.
  *
- * `structuredPatch` emits hunks where each line is prefixed with one of
- * ' ' (context), '-' (removed from base), '+' (added in proposed). We
- * partition those lines into context-before / changed / context-after by
- * scanning until the first non-space marker, collecting changes, and then
- * collecting trailing space-prefixed lines as context-after.
+ * `structuredPatch` emits "patch hunks" where each line is prefixed with
+ * one of ' ' (context), '-' (removed from base), '+' (added in proposed).
+ * Crucially, when two changed regions are within 2*context lines of each
+ * other, structuredPatch coalesces them into the SAME patch hunk — so a
+ * single returned hunk can contain multiple distinct edits separated by
+ * inner context lines.
  *
- * `baseStart` is 1-indexed in base and points at the first removed line.
- * If a hunk is a pure insertion (no `-` lines), `baseStart` points at the
- * line *after* the leading context (the insertion point).
+ * For per-hunk accept/reject UX we want each contiguous run of '-'/'+'
+ * lines to be its own user-decidable Hunk. So we walk each patch hunk and
+ * split at every run boundary; inner context lines stay as context, never
+ * as part of any change.
+ *
+ * `baseStart` is 1-indexed in base and points at the first base line the
+ * change covers. For a pure insertion (no '-' lines), `baseStart` is the
+ * insertion point — the line *before which* the new lines should appear.
  */
 export function buildHunks(base: string, proposed: string): Hunk[] {
   const patch = structuredPatch('a', 'b', base, proposed, '', '', { context: 3 })
   const out: Hunk[] = []
+  let counter = 0
 
-  for (let i = 0; i < patch.hunks.length; i++) {
-    const h = patch.hunks[i]!
+  for (const h of patch.hunks) {
     const lines = h.lines
+    let baseLineNum = h.oldStart  // 1-indexed cursor into base
+    let i = 0
 
-    // Find leading context (pure ' ' lines), then the changed block, then
-    // trailing context.
-    let leadIdx = 0
-    while (leadIdx < lines.length && lines[leadIdx]!.startsWith(' ')) leadIdx++
+    while (i < lines.length) {
+      // Skip context lines until we hit the start of a changed run.
+      while (i < lines.length && lines[i]!.startsWith(' ')) {
+        baseLineNum++
+        i++
+      }
+      if (i >= lines.length) break
 
-    let trailStart = lines.length
-    while (trailStart > leadIdx && lines[trailStart - 1]!.startsWith(' ')) trailStart--
+      // Collect up to 3 context lines immediately preceding this run.
+      const contextBefore: string[] = []
+      for (let j = i - 1; j >= 0 && contextBefore.length < 3; j--) {
+        if (!lines[j]!.startsWith(' ')) break
+        contextBefore.unshift(stripMarker(lines[j]!))
+      }
 
-    const contextBefore = lines.slice(0, leadIdx).map(stripMarker)
-    const contextAfter = lines.slice(trailStart).map(stripMarker)
-    const changed = lines.slice(leadIdx, trailStart)
+      // Collect the contiguous run of '-' and '+' lines.
+      const runStart = baseLineNum
+      const baseLines: string[] = []
+      const proposedLines: string[] = []
+      while (i < lines.length && !lines[i]!.startsWith(' ')) {
+        const ln = lines[i]!
+        if (ln.startsWith('-')) {
+          baseLines.push(stripMarker(ln))
+          baseLineNum++  // '-' consumes a base line
+        } else if (ln.startsWith('+')) {
+          proposedLines.push(stripMarker(ln))
+          // '+' consumes nothing in base
+        }
+        i++
+      }
 
-    const baseLines: string[] = []
-    const proposedLines: string[] = []
-    for (const ln of changed) {
-      if (ln.startsWith('-')) baseLines.push(stripMarker(ln))
-      else if (ln.startsWith('+')) proposedLines.push(stripMarker(ln))
-      // ' ' inside a changed block shouldn't happen with context=3 splitting
-      // far-apart hunks, but if it does we treat it as context lost — skip.
+      // Collect up to 3 context lines immediately following this run
+      // (without consuming them — they may be the contextBefore of the
+      // next run).
+      const contextAfter: string[] = []
+      for (let j = i; j < lines.length && contextAfter.length < 3; j++) {
+        if (!lines[j]!.startsWith(' ')) break
+        contextAfter.push(stripMarker(lines[j]!))
+      }
+
+      out.push({
+        id: `h${counter++}`,
+        baseStart: runStart,
+        baseEnd: runStart + baseLines.length,
+        baseLines,
+        proposedLines,
+        contextBefore,
+        contextAfter,
+      })
     }
-
-    // baseStart in base = oldStart + leading-context-count.
-    const baseStart = h.oldStart + leadIdx
-    const baseEnd = baseStart + baseLines.length
-
-    out.push({
-      id: `h${i}`,
-      baseStart,
-      baseEnd,
-      baseLines,
-      proposedLines,
-      contextBefore: contextBefore.slice(-3),
-      contextAfter: contextAfter.slice(0, 3),
-    })
   }
 
   return out

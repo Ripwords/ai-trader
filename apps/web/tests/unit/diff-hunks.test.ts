@@ -31,6 +31,27 @@ describe('buildHunks', () => {
     expect(hunks[0]!.contextBefore).toEqual(['b', 'c', 'd'])
     expect(hunks[0]!.contextAfter).toEqual(['f', 'g', 'h'])
   })
+
+  // Regression: when two changes are within 2*context lines, structuredPatch
+  // emits ONE patch hunk that covers both. Previously buildHunks lumped both
+  // changes plus the inner context lines into a single Hunk — so the user
+  // could only accept-or-reject the whole blob, AND the inner context (b,c,d
+  // here) got dropped from resolveCode output.
+  it('splits coalesced patch hunks at every contiguous run of changes', () => {
+    const base = 'a\nb\nc\nd\ne\n'
+    const proposed = 'A\nb\nc\nd\nE\n'
+    const hunks = buildHunks(base, proposed)
+    expect(hunks).toHaveLength(2)
+    expect(hunks[0]!.baseLines).toEqual(['a'])
+    expect(hunks[0]!.proposedLines).toEqual(['A'])
+    expect(hunks[0]!.baseStart).toBe(1)
+    expect(hunks[1]!.baseLines).toEqual(['e'])
+    expect(hunks[1]!.proposedLines).toEqual(['E'])
+    expect(hunks[1]!.baseStart).toBe(5)
+    // Inner context attaches to both hunks' contextAfter / contextBefore
+    expect(hunks[0]!.contextAfter).toEqual(['b', 'c', 'd'])
+    expect(hunks[1]!.contextBefore).toEqual(['b', 'c', 'd'])
+  })
 })
 
 describe('resolveCode', () => {
@@ -76,6 +97,38 @@ describe('resolveCode', () => {
     expect(hunks).toHaveLength(1)
     const decisions = new Map([[hunks[0]!.id, 'accepted' as const]])
     expect(resolveCode(base, hunks, decisions)).toBe(proposed)
+  })
+
+  // Regression: with the previous lump-everything-into-one-hunk behaviour,
+  // accepting all of a coalesced patch produced a result that was missing
+  // the inner context lines (e.g. "A\nE\n" instead of "A\nb\nc\nd\nE\n").
+  // The user reported "existing code sometimes don't get removed properly"
+  // and accept being "treated as one big edit" — this verifies both.
+  it('preserves inner context when both halves of a coalesced patch are accepted', () => {
+    const base = 'a\nb\nc\nd\ne\n'
+    const proposed = 'A\nb\nc\nd\nE\n'
+    const hunks = buildHunks(base, proposed)
+    const decisions = new Map([
+      [hunks[0]!.id, 'accepted' as const],
+      [hunks[1]!.id, 'accepted' as const],
+    ])
+    expect(resolveCode(base, hunks, decisions)).toBe('A\nb\nc\nd\nE\n')
+  })
+
+  it('lets the user accept one half of a coalesced patch and reject the other', () => {
+    const base = 'a\nb\nc\nd\ne\n'
+    const proposed = 'A\nb\nc\nd\nE\n'
+    const hunks = buildHunks(base, proposed)
+    const onlyFirst = new Map([
+      [hunks[0]!.id, 'accepted' as const],
+      [hunks[1]!.id, 'rejected' as const],
+    ])
+    expect(resolveCode(base, hunks, onlyFirst)).toBe('A\nb\nc\nd\ne\n')
+    const onlySecond = new Map([
+      [hunks[0]!.id, 'rejected' as const],
+      [hunks[1]!.id, 'accepted' as const],
+    ])
+    expect(resolveCode(base, hunks, onlySecond)).toBe('a\nb\nc\nd\nE\n')
   })
 })
 
