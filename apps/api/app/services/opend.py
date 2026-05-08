@@ -61,31 +61,63 @@ class OpendAdapter:
         )
 
     def get_kline(self, code: str, *, ktype: KLineType, num: int) -> KLineResponse:
+        """Fetch latest N bars via request_history_kline (no subscribe needed).
+
+        get_cur_kline requires a prior ctx.subscribe() — fragile across calls.
+        request_history_kline returns historical bars by date range, which is
+        what we want for a chart anyway. We compute a buffered start date and
+        slice to the latest N bars.
+        """
+        from datetime import date, timedelta
+
+        # Buffer: daily/intraday — pick a window wide enough to contain N bars
+        # accounting for weekends/holidays and intraday session gaps.
+        buffer_days = {
+            "1m": max(2, num // 200 + 1),
+            "3m": max(2, num // 100 + 1),
+            "5m": max(3, num // 80 + 1),
+            "15m": max(5, num // 30 + 1),
+            "30m": max(7, num // 15 + 1),
+            "60m": max(10, num // 7 + 1),
+            "1d": int(num * 1.6) + 5,
+            "1w": int(num * 7 * 1.2) + 7,
+            "1M": int(num * 31) + 31,
+        }.get(ktype, num * 2)
+
+        end = date.today()
+        start = end - timedelta(days=buffer_days)
+
         ctx = self._ctx_factory()
         try:
-            # moomoo SDK enums are only resolvable when the package is installed.
-            # When running under a fake ctx (tests without the SDK), the import
-            # raises ImportError and we fall back to passing raw strings, which
-            # FakeQuoteCtx accepts. The "moomoo" type-check guards the case where
-            # the SDK *is* installed but a fake ctx is injected (full-dep test env).
-            from moomoo import AuType, KLType  # type: ignore[import-not-found]
-            sdk_ktype = getattr(KLType, _KTYPE_TO_SDK[ktype], None) if "moomoo" in str(type(ctx)) else _KTYPE_TO_SDK[ktype]
-            ret, data = ctx.get_cur_kline(
-                code,
-                num=num,
-                ktype=sdk_ktype if sdk_ktype is not None else _KTYPE_TO_SDK[ktype],
-                autype=getattr(AuType, "QFQ", "QFQ") if "moomoo" in str(type(ctx)) else "QFQ",
-            )
-        except ImportError:
-            ret, data = ctx.get_cur_kline(code, num=num, ktype=_KTYPE_TO_SDK[ktype], autype="QFQ")
+            try:
+                from moomoo import AuType, KLType  # type: ignore[import-not-found]
+                is_real_sdk = "moomoo" in str(type(ctx))
+                sdk_ktype = getattr(KLType, _KTYPE_TO_SDK[ktype]) if is_real_sdk else _KTYPE_TO_SDK[ktype]
+                au_type = AuType.QFQ if is_real_sdk else "QFQ"
+            except ImportError:
+                sdk_ktype = _KTYPE_TO_SDK[ktype]
+                au_type = "QFQ"
+
+            # Fake ctx in tests still uses get_cur_kline shape; production uses request_history_kline.
+            if hasattr(ctx, "request_history_kline") and "moomoo" in str(type(ctx)):
+                ret, data, _page_key = ctx.request_history_kline(
+                    code,
+                    start=start.isoformat(),
+                    end=end.isoformat(),
+                    ktype=sdk_ktype,
+                    autype=au_type,
+                    max_count=max(num * 2, 100),
+                )
+            else:
+                ret, data = ctx.get_cur_kline(code, num=num, ktype=sdk_ktype, autype=au_type)
         finally:
             try:
                 ctx.close()
             except Exception:
                 pass
         if ret != 0:
-            raise OpendError(f"get_cur_kline failed: {data}")
-        bars = [
+            raise OpendError(f"get_kline failed: {data}")
+        all_bars = [
             Bar(
                 time=datetime.fromisoformat(str(row["time_key"])),
                 open=float(row["open"]),
@@ -97,7 +129,7 @@ class OpendAdapter:
             )
             for _, row in data.iterrows()
         ]
-        return KLineResponse(code=code, ktype=ktype, bars=bars)
+        return KLineResponse(code=code, ktype=ktype, bars=all_bars[-num:])
 
     def list_watchlist(self, *, group: str = "All") -> list[WatchlistItem]:
         ctx = self._ctx_factory()
@@ -158,18 +190,32 @@ class OpendAdapter:
         if data.empty:
             raise OpendError(f"snapshot empty for {code}")
         row = data.iloc[0].to_dict()
+        last = float(row["last_price"])
+        prev_close = float(row["prev_close_price"])
+        # change_rate isn't a top-level field in regular hours — compute it.
+        # Returned as a decimal (0.0123 = +1.23%).
+        change_rate = (last - prev_close) / prev_close if prev_close else 0.0
+        update_time_raw = row.get("update_time")
+        try:
+            update_time = (
+                datetime.fromisoformat(str(update_time_raw))
+                if update_time_raw
+                else datetime.now()
+            )
+        except ValueError:
+            update_time = datetime.now()
         return Snapshot(
             code=row["code"],
             name=row.get("name") if isinstance(row.get("name"), str) else None,
-            last_price=float(row["last_price"]),
+            last_price=last,
             open_price=float(row["open_price"]),
             high_price=float(row["high_price"]),
             low_price=float(row["low_price"]),
-            prev_close_price=float(row["prev_close_price"]),
-            change_rate=float(row["change_rate"]),
+            prev_close_price=prev_close,
+            change_rate=change_rate,
             volume=int(row["volume"]),
             turnover=float(row["turnover"]),
-            update_time=datetime.fromisoformat(str(row["update_time"])),
+            update_time=update_time,
         )
 
     # ------------------------------------------------------------------
