@@ -1,0 +1,104 @@
+"""AST-walk allowlist for user-authored strategy code.
+
+Rejects anything that could escape the sandbox: filesystem, network,
+dynamic import, dunder access, or known-dangerous builtins. Allows the
+small set of math/data-analysis modules a strategy needs.
+"""
+
+from __future__ import annotations
+
+import ast
+from dataclasses import dataclass
+
+# Top-level module names the strategy is allowed to import.
+ALLOWED_MODULES: frozenset[str] = frozenset(
+    {"math", "numpy", "pandas", "statistics"}
+)
+
+# Builtins a strategy must not reference. Anything that lets it reach into
+# the interpreter (eval/exec/compile/__import__), the filesystem (open),
+# or the call stack/globals (vars/globals/locals/getattr-by-name).
+BANNED_NAMES: frozenset[str] = frozenset(
+    {
+        "__import__",
+        "eval",
+        "exec",
+        "compile",
+        "open",
+        "input",
+        "breakpoint",
+        "globals",
+        "locals",
+        "vars",
+        "getattr",
+        "setattr",
+        "delattr",
+        "exit",
+        "quit",
+        "help",
+    }
+)
+
+# Dunder attributes that are allowed (everything else starting and ending
+# with __ is rejected — that closes the `obj.__class__.__bases__` escape).
+_ALLOWED_DUNDERS: frozenset[str] = frozenset({"__name__", "__doc__"})
+
+
+@dataclass
+class ValidationError(Exception):
+    message: str
+    line: int | None = None
+
+    def __str__(self) -> str:
+        if self.line is not None:
+            return f"line {self.line}: {self.message}"
+        return self.message
+
+
+class _Visitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.errors: list[ValidationError] = []
+
+    def _err(self, node: ast.AST, msg: str) -> None:
+        self.errors.append(ValidationError(msg, getattr(node, "lineno", None)))
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            root = alias.name.split(".", 1)[0]
+            if root not in ALLOWED_MODULES:
+                self._err(node, f"import of '{alias.name}' is not allowed")
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        root = (node.module or "").split(".", 1)[0]
+        if root and root not in ALLOWED_MODULES:
+            self._err(node, f"import from '{node.module}' is not allowed")
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id in BANNED_NAMES:
+            self._err(node, f"'{node.id}' is not allowed")
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        attr = node.attr
+        if (
+            attr.startswith("__")
+            and attr.endswith("__")
+            and attr not in _ALLOWED_DUNDERS
+        ):
+            self._err(node, f"dunder attribute '{attr}' is not allowed")
+        self.generic_visit(node)
+
+
+def validate(src: str) -> None:
+    """Raise ValidationError if `src` contains disallowed constructs."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError as e:
+        raise ValidationError(f"syntax error: {e.msg}", e.lineno) from e
+
+    v = _Visitor()
+    v.visit(tree)
+    if v.errors:
+        joined = "; ".join(str(e) for e in v.errors)
+        raise ValidationError(joined, v.errors[0].line)

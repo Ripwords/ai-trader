@@ -35,11 +35,16 @@ services:
       INTERNAL_BEARER: ${INTERNAL_BEARER}
       OPEND_HOST: ${OPEND_HOST}
       OPEND_PORT: ${OPEND_PORT}
+      # Same DB Drizzle migrates — algo persistence (strategies/runs/signals)
+      # is read/written from this side via asyncpg.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
+      drizzle-migrate:
+        condition: service_completed_successfully
 
   web:
     build: ./apps/web

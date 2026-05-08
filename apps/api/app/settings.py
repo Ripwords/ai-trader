@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     INTERNAL_BEARER: str = "dev-bearer"
     OPEND_HOST: str = "127.0.0.1"
     OPEND_PORT: int = 11111
+    # postgresql://user:pass@host:port/db — points at the same DB the web
+    # app uses (Drizzle owns the schema; algo persistence reads/writes via asyncpg).
+    DATABASE_URL: str = ""
 
 
 @lru_cache(maxsize=1)

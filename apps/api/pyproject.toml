@@ -9,6 +9,11 @@ dependencies = [
   "pydantic-settings>=2.5",
   "moomoo-api>=10.4.6408",
   "httpx>=0.27",
+  # Algo strategy sandbox + backtester data prep.
+  "numpy>=2.0",
+  "pandas>=2.2",
+  # Async DB access for algo persistence (strategies/runs/signals).
+  "asyncpg>=0.29",
 ]
 
 [dependency-groups]
