@@ -9,6 +9,20 @@ export default defineNuxtConfig({
   ],
   devtools: { enabled: true },
   typescript: { strict: true },
+  app: {
+    head: {
+      title: 'ai·trader',
+      titleTemplate: '%s · copilot',
+      meta: [
+        { name: 'description', content: 'Trading copilot — moomoo data, AI chat, charts, news, portfolio.' },
+        { name: 'theme-color', content: '#0d0f12' },
+      ],
+      link: [
+        { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
+        { rel: 'mask-icon', href: '/icon-mark.svg', color: '#d4a96a' },
+      ],
+    },
+  },
   runtimeConfig: {
     appPassword: '',
     sessionSecret: '',
