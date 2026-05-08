@@ -148,12 +148,7 @@ function fmt(t: string): string {
 
           <label class="block">
             <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">strategy code</span>
-            <textarea
-              v-model="draft.code"
-              rows="14"
-              class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-sm leading-relaxed text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-              spellcheck="false"
-            />
+            <CodeEditor v-model="draft.code" :rows="14" aria-label="strategy code" class="mt-1" />
           </label>
 
           <div v-if="error" class="font-mono text-sm text-[var(--tape-down)] whitespace-pre-wrap">

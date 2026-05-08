@@ -147,8 +147,9 @@ async function runBacktest() {
       </div>
     </header>
 
-    <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-5xl mx-auto px-7 py-8 space-y-6">
+    <div class="flex-1 min-h-0 flex">
+      <main class="flex-1 min-w-0 overflow-y-auto scroll-hidden">
+        <div class="max-w-5xl mx-auto px-7 py-8 space-y-6">
         <!-- Header card -->
         <div class="flex items-baseline justify-between">
           <div>
@@ -226,12 +227,7 @@ async function runBacktest() {
 
           <label class="block">
             <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">strategy code</span>
-            <textarea
-              v-model="draft.code"
-              rows="18"
-              spellcheck="false"
-              class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-sm leading-relaxed text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-            />
+            <CodeEditor v-model="draft.code" :rows="18" aria-label="strategy code" class="mt-1" />
           </label>
 
           <div v-if="saveError" class="font-mono text-sm text-[var(--tape-down)] whitespace-pre-wrap">
@@ -330,7 +326,17 @@ async function runBacktest() {
             </table>
           </div>
         </div>
+        </div>
+      </main>
+
+      <div class="w-[400px] shrink-0">
+        <StrategyAssistant
+          :current-code="draft.code"
+          :symbol="draft.symbol"
+          :cadence="draft.cadence"
+          @apply="(code) => { draft.code = code }"
+        />
       </div>
-    </main>
+    </div>
   </div>
 </template>
