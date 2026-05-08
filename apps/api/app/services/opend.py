@@ -183,29 +183,31 @@ class OpendAdapter:
             ))
         return items
 
-    def add_watchlist_item(self, code: str, *, group: str = "All") -> None:
+    def _modify_watchlist(self, code: str, *, group: str, op_name: str) -> None:
+        """Apply ADD/DEL via SDK. Args are positional (group, op, codes) and op
+        must be a ModifyUserSecurityOp enum member (raw strings are rejected
+        despite the misleading 'must str' error message)."""
         ctx = self._ctx_factory()
         try:
-            ret, data = ctx.modify_user_security(group, [code], "ADD")
+            try:
+                from moomoo import ModifyUserSecurityOp  # type: ignore[import-not-found]
+                op = getattr(ModifyUserSecurityOp, op_name)
+            except ImportError:
+                op = op_name  # tests against fake ctx accept the bare string
+            ret, data = ctx.modify_user_security(group, op, [code])
         finally:
             try:
                 ctx.close()
             except Exception:
                 pass
         if ret != 0:
-            raise OpendError(f"modify_user_security ADD failed: {data}")
+            raise OpendError(f"modify_user_security {op_name} failed: {data}")
+
+    def add_watchlist_item(self, code: str, *, group: str = "All") -> None:
+        self._modify_watchlist(code, group=group, op_name="ADD")
 
     def remove_watchlist_item(self, code: str, *, group: str = "All") -> None:
-        ctx = self._ctx_factory()
-        try:
-            ret, data = ctx.modify_user_security(group, [code], "DEL")
-        finally:
-            try:
-                ctx.close()
-            except Exception:
-                pass
-        if ret != 0:
-            raise OpendError(f"modify_user_security DEL failed: {data}")
+        self._modify_watchlist(code, group=group, op_name="DEL")
 
     def get_snapshot(self, code: str) -> Snapshot:
         ctx = self._ctx_factory()

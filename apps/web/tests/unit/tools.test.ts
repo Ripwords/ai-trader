@@ -50,11 +50,12 @@ describe('tool catalogue', () => {
     expect((out as { items: unknown[] }).items.length).toBe(1)
   })
 
-  it('search.web throws without TAVILY_API_KEY', async () => {
+  it('search throws when no provider keys are set', async () => {
     delete process.env.TAVILY_API_KEY
+    delete process.env.BRAVE_API_KEY
     const tools = makeTools(fakeClient() as unknown as ApiClient)
     await expect(
       (tools['search_web'] as { execute: (args: { query: string; maxResults: number }) => Promise<unknown> }).execute({ query: 'x', maxResults: 3 }),
-    ).rejects.toThrow(/TAVILY_API_KEY/)
+    ).rejects.toThrow(/BRAVE_API_KEY|TAVILY_API_KEY|search provider/)
   })
 })

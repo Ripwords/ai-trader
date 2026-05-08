@@ -16,8 +16,8 @@ class FakeWatchlistCtx:
         import pandas as pd
         return 0, pd.DataFrame([row for row in self._payload if row.get("group") == group or group == "All"])
 
-    def modify_user_security(self, group, codes, op):
-        self.modify_calls.append((group, codes, op))
+    def modify_user_security(self, group, op, codes):
+        self.modify_calls.append((group, op, codes))
         if self._modify_ret != 0:
             return self._modify_ret, "modify failed"
         return 0, None
@@ -50,7 +50,12 @@ def test_add_watchlist_item_calls_modify():
     _set(fake)
     a = OpendAdapter(host="ignored", port=0, _ctx_factory=lambda: _ctx)
     a.add_watchlist_item("US.AAPL", group="All")
-    assert fake.modify_calls == [("All", ["US.AAPL"], "ADD")]
+    # SDK signature: (group, op, codes). Op is the enum from moomoo (or the
+    # raw string when running tests without the SDK installed).
+    assert len(fake.modify_calls) == 1
+    group, op, codes = fake.modify_calls[0]
+    assert (group, codes) == ("All", ["US.AAPL"])
+    assert str(op) == "ADD" or op == "ADD"
 
 
 def test_remove_watchlist_item_calls_modify():
@@ -58,7 +63,10 @@ def test_remove_watchlist_item_calls_modify():
     _set(fake)
     a = OpendAdapter(host="ignored", port=0, _ctx_factory=lambda: _ctx)
     a.remove_watchlist_item("US.AAPL", group="All")
-    assert fake.modify_calls == [("All", ["US.AAPL"], "DEL")]
+    assert len(fake.modify_calls) == 1
+    group, op, codes = fake.modify_calls[0]
+    assert (group, codes) == ("All", ["US.AAPL"])
+    assert str(op) == "DEL" or op == "DEL"
 
 
 def test_modify_raises_on_error():
