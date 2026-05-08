@@ -79,6 +79,7 @@ interface BlockState {
   baseSnapshot: string  // currentCode at the moment the message arrived
   appliedAt?: string
   summary?: { accepted: number; total: number }
+  autoFired?: boolean   // true once we've auto-triggered review for this block
 }
 
 const blockState = ref<Map<string, BlockState>>(new Map())
@@ -199,16 +200,31 @@ async function rerenderMessage(m: UIMessage) {
   const blocks = parseRaw(text)
   const h = await ensureHighlighter()
   let codeIndex = 0
+  // Auto-fire review for the FIRST eligible code block in this message.
+  // We pick at most one because the activeReviewKey prop won't update until
+  // the parent re-renders, so firing for multiple blocks in the same tick
+  // would just race to overwrite each other in the page state.
+  let toAutoFire: { key: string; code: string } | null = null
   for (const b of blocks) {
     if (b.kind === 'code') {
       const key = blockKey(m.id, codeIndex)
       const state = getOrInitBlock(key)
       b.diff = buildDiff(state.baseSnapshot, b.text, h)
+      if (
+        !toAutoFire
+        && !state.autoFired
+        && state.status === 'pending'
+        && props.activeReviewKey === null
+      ) {
+        state.autoFired = true
+        toAutoFire = { key, code: b.text }
+      }
       codeIndex++
     }
   }
   renderedMessages.value.set(m.id, blocks)
   renderedMessages.value = new Map(renderedMessages.value)
+  if (toAutoFire) review(toAutoFire.key, toAutoFire.code)
 }
 
 // Recompute diffs whenever a message's text changes (streaming).

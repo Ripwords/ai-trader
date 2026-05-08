@@ -121,6 +121,64 @@ function syncRanges() {
   })
 }
 
+// Mirror the crosshair from one chart onto the other so hovering on the
+// price chart also shows the cursor on the equity chart at the same time
+// (and vice versa). lightweight-charts' setCrosshairPosition needs a
+// (price, time, series) triple; for the mirror we use the latest known
+// value of the target chart's primary series at that timestamp, with a
+// fallback to clearing when the cursor leaves the source chart.
+let crosshairSyncing = false
+function syncCrosshair() {
+  if (!priceChart || !equityChart || !candle || !equityLine) return
+
+  // Build quick-lookup maps from time → value for each chart's primary series.
+  // Rebuilt on every render() through the watch below.
+  function buildLookups() {
+    priceByTime.clear()
+    for (const b of props.priceBars) priceByTime.set(toUnix(b.time), b.close)
+    equityByTime.clear()
+    for (const p of props.equity) equityByTime.set(toUnix(p.t), p.v)
+  }
+  buildLookups()
+  // Re-build whenever data changes; cheap.
+  watch(() => [props.priceBars, props.equity], buildLookups, { deep: false })
+
+  priceChart.subscribeCrosshairMove((param) => {
+    if (crosshairSyncing) return
+    crosshairSyncing = true
+    if (param.time === undefined) {
+      equityChart!.clearCrosshairPosition()
+    } else {
+      const v = equityByTime.get(param.time as UTCTimestamp)
+      if (v !== undefined && equityLine) {
+        equityChart!.setCrosshairPosition(v, param.time, equityLine)
+      } else {
+        equityChart!.clearCrosshairPosition()
+      }
+    }
+    crosshairSyncing = false
+  })
+
+  equityChart.subscribeCrosshairMove((param) => {
+    if (crosshairSyncing) return
+    crosshairSyncing = true
+    if (param.time === undefined) {
+      priceChart!.clearCrosshairPosition()
+    } else {
+      const c = priceByTime.get(param.time as UTCTimestamp)
+      if (c !== undefined && candle) {
+        priceChart!.setCrosshairPosition(c, param.time, candle)
+      } else {
+        priceChart!.clearCrosshairPosition()
+      }
+    }
+    crosshairSyncing = false
+  })
+}
+
+const priceByTime = new Map<UTCTimestamp, number>()
+const equityByTime = new Map<UTCTimestamp, number>()
+
 onMounted(() => {
   if (priceEl.value) {
     priceChart = createChart(priceEl.value, { ...makeBaseOptions(), height: 240 })
@@ -142,6 +200,7 @@ onMounted(() => {
     })
   }
   syncRanges()
+  syncCrosshair()
   render()
 })
 

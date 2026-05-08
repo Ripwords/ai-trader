@@ -136,6 +136,11 @@ function shortTs(t: string): string {
 const activeReview = ref<DiffPayload | null>(null)
 const finishedReview = ref<{ blockKey: string, summary: { accepted: number; total: number } } | null>(null)
 
+// Mobile-only: the chat sidebar is off-canvas by default at narrow widths
+// and revealed via a header toggle. On md+ it stays in the flex layout
+// permanently and `sidebarOpen` is irrelevant.
+const sidebarOpen = ref(false)
+
 function onReview(blockKey: string, base: string, proposed: string) {
   activeReview.value = {
     blockKey,
@@ -201,6 +206,12 @@ async function runBacktest() {
         <NuxtLink to="/algo" class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]">
           ← strategies
         </NuxtLink>
+        <button
+          class="md:hidden font-mono text-xs uppercase tracking-[0.18em] px-3 py-2 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] rounded hover:text-[var(--accent)] hover:border-[var(--accent)]"
+          @click="sidebarOpen = !sidebarOpen"
+          :aria-expanded="sidebarOpen"
+          aria-controls="strategy-assistant-sidebar"
+        >{{ sidebarOpen ? '✕ chat' : '💬 chat' }}</button>
       </div>
     </header>
 
@@ -451,16 +462,34 @@ async function runBacktest() {
         </div>
       </main>
 
-      <div class="w-[400px] shrink-0">
-        <StrategyAssistant
-          :current-code="draft.code"
-          :symbol="draft.symbol"
-          :cadence="draft.cadence"
-          :active-review-key="activeReview?.blockKey ?? null"
-          :finished-review="finishedReview"
-          @review="onReview"
-          @apply="(code) => { draft.code = code }"
-        />
+      <!-- Backdrop for the off-canvas sidebar on mobile only. -->
+      <div
+        v-if="sidebarOpen"
+        class="md:hidden fixed inset-0 bg-black/40 z-40"
+        @click="sidebarOpen = false"
+      />
+      <!-- Sidebar: in-flow on md+, off-canvas slide-in on mobile. -->
+      <div
+        id="strategy-assistant-sidebar"
+        class="shrink-0 transition-transform duration-200 md:static md:translate-x-0 md:w-[400px] md:h-auto fixed inset-y-0 right-0 w-[90vw] max-w-[400px] z-50"
+        :class="sidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'"
+      >
+        <div class="relative h-full">
+          <button
+            class="md:hidden absolute top-2 right-2 z-10 font-mono text-xs uppercase tracking-wider px-2 py-1 text-[var(--paper-3)] hover:text-[var(--accent)]"
+            @click="sidebarOpen = false"
+            aria-label="close chat"
+          >✕</button>
+          <StrategyAssistant
+            :current-code="draft.code"
+            :symbol="draft.symbol"
+            :cadence="draft.cadence"
+            :active-review-key="activeReview?.blockKey ?? null"
+            :finished-review="finishedReview"
+            @review="onReview"
+            @apply="(code) => { draft.code = code }"
+          />
+        </div>
       </div>
     </div>
   </div>
