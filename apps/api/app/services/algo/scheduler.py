@@ -1,0 +1,251 @@
+"""Live algo scheduler — paper-only, asyncio-based.
+
+Runs as a single background task in the FastAPI lifespan. Every TICK_SEC
+seconds it wakes, queries enabled strategies, and re-runs any that are
+due based on their cadence. A strategy that emits a buy/sell intent has
+that intent placed as a moomoo paper order via OpendAdapter, with the
+signal (success or failure) persisted to algo_signals.
+
+Hard rules:
+- We only ever pass trd_env=SIMULATE to place_order. There is no path
+  here that touches live money — the route surface enforces that
+  separately.
+- The global kill switch (app_settings.algo_kill_active) stops all
+  emission. It does not stop fetching klines / running on_bar — that
+  way the user can still see what *would* have fired in the signals
+  feed once they unkill.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import hashlib
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable
+
+
+def _now_naive_utc() -> datetime:
+    """Naive UTC datetime, matching the timestamp (sans-tz) columns Drizzle owns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+import pandas as pd
+
+from app.schemas.algo import Strategy
+from app.services.algo import repo
+from app.services.algo.sandbox import compile_strategy
+
+logger = logging.getLogger(__name__)
+
+# How often the scheduler loop wakes. Must be <= the shortest cadence.
+TICK_SEC = 30
+
+# Cadence string → seconds.
+CADENCE_SECS: dict[str, int] = {
+    "1m": 60,
+    "5m": 5 * 60,
+    "15m": 15 * 60,
+    "1h": 60 * 60,
+    "1d": 24 * 60 * 60,
+}
+
+
+class _Ctx:
+    """Minimal runtime context handed to a strategy on a live tick."""
+
+    def __init__(self, bars: pd.DataFrame, position: int, qty: int) -> None:
+        self.bars = bars
+        self.position = position
+        self.qty = qty
+        self.intent: tuple[str, int] | None = None
+
+    def buy(self, qty: int | None = None) -> None:
+        self.intent = ("BUY", int(qty) if qty is not None else self.qty)
+
+    def sell(self, qty: int | None = None) -> None:
+        self.intent = ("SELL", int(qty) if qty is not None else self.qty)
+
+    def hold(self) -> None:
+        self.intent = None
+
+
+def _bars_to_df(bars: list[Any]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "time": [b.time for b in bars],
+            "open": [b.open for b in bars],
+            "high": [b.high for b in bars],
+            "low": [b.low for b in bars],
+            "close": [b.close for b in bars],
+            "volume": [b.volume for b in bars],
+        }
+    )
+
+
+def _code_hash(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:16]
+
+
+class Scheduler:
+    """A single asyncio loop that ticks enabled strategies on cadence.
+
+    Inject `place_order` and `get_position` callables — that keeps the
+    scheduler decoupled from the moomoo SDK, makes it testable, and
+    keeps a clear seam between strategy logic and order routing.
+    """
+
+    def __init__(
+        self,
+        *,
+        get_klines: Callable[[str, int], Awaitable[list[Any]]],
+        get_position: Callable[[str], Awaitable[int]],
+        place_paper_order: Callable[[str, str, int], Awaitable[str | None]],
+        tick_sec: int = TICK_SEC,
+    ) -> None:
+        self._get_klines = get_klines
+        self._get_position = get_position
+        self._place = place_paper_order
+        self._tick_sec = tick_sec
+        # Last-fire timestamp per strategy (monotonic seconds).
+        self._last_fire: dict[str, float] = {}
+        # Compiled strategy cache, keyed by code-hash.
+        self._compiled: dict[str, Callable[[Any], None]] = {}
+        self._task: asyncio.Task[None] | None = None
+        self._stopping = asyncio.Event()
+
+    # --- lifecycle --------------------------------------------------------
+
+    def start(self) -> None:
+        if self._task is None:
+            self._stopping.clear()
+            self._task = asyncio.create_task(self._run(), name="algo-scheduler")
+            logger.info("algo scheduler started (tick=%ss)", self._tick_sec)
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._stopping.set()
+        with contextlib.suppress(asyncio.CancelledError):
+            self._task.cancel()
+            await self._task
+        self._task = None
+        logger.info("algo scheduler stopped")
+
+    # --- core loop --------------------------------------------------------
+
+    async def _run(self) -> None:
+        while not self._stopping.is_set():
+            try:
+                await self._tick()
+            except Exception:  # noqa: BLE001 — never let one tick kill the loop
+                logger.exception("algo scheduler tick failed")
+            try:
+                await asyncio.wait_for(
+                    self._stopping.wait(), timeout=self._tick_sec
+                )
+            except asyncio.TimeoutError:
+                continue
+
+    async def _tick(self) -> None:
+        kill = await repo.get_kill_active()
+        strategies = await repo.list_strategies()
+        now_mono = time.monotonic()
+
+        for s in strategies:
+            if not s.enabled:
+                # Drop the timer so a re-enable doesn't immediately fire.
+                self._last_fire.pop(s.id, None)
+                continue
+            cadence = CADENCE_SECS.get(s.cadence)
+            if cadence is None:
+                continue
+            last = self._last_fire.get(s.id)
+            if last is not None and now_mono - last < cadence:
+                continue
+            self._last_fire[s.id] = now_mono
+            await self._fire(s, kill_active=kill)
+
+    async def _fire(self, s: Strategy, *, kill_active: bool) -> None:
+        """Run one strategy tick: fetch bars, run on_bar, route intent."""
+        try:
+            bars = await self._get_klines(s.symbol, 200)
+        except Exception as exc:  # noqa: BLE001
+            await repo.append_signal(
+                s.id, _now_naive_utc(), "BUY", 0, None, None,
+                f"klines failed: {exc}",
+            )
+            return
+
+        if len(bars) < 2:
+            return
+
+        # Compile on first sight, cache by content hash so editing the code
+        # picks up automatically.
+        h = _code_hash(s.code)
+        on_bar = self._compiled.get(h)
+        if on_bar is None:
+            try:
+                on_bar = compile_strategy(s.code)
+            except Exception as exc:  # noqa: BLE001
+                await repo.append_signal(
+                    s.id, _now_naive_utc(), "BUY", 0, None, None,
+                    f"compile failed: {exc}",
+                )
+                return
+            self._compiled[h] = on_bar
+
+        try:
+            position = await self._get_position(s.symbol)
+        except Exception:  # noqa: BLE001
+            position = 0  # best-effort; strategy can still emit
+
+        ctx = _Ctx(_bars_to_df(bars), position=position, qty=s.qty_per_signal)
+        try:
+            on_bar(ctx)
+        except Exception as exc:  # noqa: BLE001
+            await repo.append_signal(
+                s.id, _now_naive_utc(), "BUY", 0, None, None,
+                f"on_bar raised: {exc}",
+            )
+            return
+
+        if ctx.intent is None:
+            return
+
+        side, qty = ctx.intent
+        if qty <= 0:
+            return
+
+        last_close = float(bars[-1].close)
+        ts = _now_naive_utc()
+
+        if kill_active:
+            await repo.append_signal(
+                s.id, ts, side, qty, last_close, None,
+                "blocked: kill switch active",
+            )
+            return
+
+        try:
+            order_id = await self._place(s.symbol, side, qty)
+            await repo.append_signal(
+                s.id, ts, side, qty, last_close, order_id, None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await repo.append_signal(
+                s.id, ts, side, qty, last_close, None, f"place_order: {exc}",
+            )
+
+
+_singleton: Scheduler | None = None
+
+
+def get_scheduler() -> Scheduler | None:
+    return _singleton
+
+
+def install_scheduler(s: Scheduler) -> None:
+    global _singleton
+    _singleton = s

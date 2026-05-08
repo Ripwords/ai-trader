@@ -1,25 +1,86 @@
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import Depends, FastAPI
 
-from app.deps import require_internal_bearer
+from app.deps import _build_adapter, require_internal_bearer
 from app.routers import algo, health, quote, trade, watchlist
 from app.services.algo import repo as algo_repo
+from app.services.algo.scheduler import Scheduler, install_scheduler
 from app.settings import get_settings
+
+
+def _make_opend_bridges():
+    """Return (get_klines, get_position, place_paper_order) callables that
+    wrap the sync OpendAdapter into asyncio. We resolve the adapter lazily
+    so a missing/down OpenD doesn't crash app startup."""
+    settings = get_settings()
+
+    def _adapter():
+        return _build_adapter(settings.OPEND_HOST, settings.OPEND_PORT)
+
+    async def get_klines(symbol: str, num: int):
+        return await asyncio.to_thread(
+            lambda: _adapter().get_kline(code=symbol, ktype="1d", num=num).bars
+        )
+
+    async def get_position(symbol: str) -> int:
+        def _do() -> int:
+            ad = _adapter()
+            for acc in ad.list_accounts():
+                if acc.trd_env != "SIMULATE":
+                    continue
+                try:
+                    pf = ad.get_portfolio(acc_id=acc.acc_id, trd_env="SIMULATE")
+                except Exception:
+                    continue
+                for p in pf.positions:
+                    if p.code == symbol:
+                        return int(p.qty)
+            return 0
+
+        return await asyncio.to_thread(_do)
+
+    async def place_paper_order(symbol: str, side: str, qty: int) -> str | None:
+        def _do() -> str | None:
+            ad = _adapter()
+            res = ad.place_order(
+                code=symbol,
+                side=side,  # type: ignore[arg-type]
+                qty=qty,
+                price=None,
+                order_type="MARKET",
+                trd_env="SIMULATE",
+                acc_id=None,
+            )
+            return res.order_id
+
+        return await asyncio.to_thread(_do)
+
+    return get_klines, get_position, place_paper_order
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Open the DB pool used by the algo surface, and (when wired) start
-    the live scheduler. Shut both down on app exit.
-    """
+    """Open the algo DB pool and start the live scheduler."""
     settings = get_settings()
+    scheduler: Scheduler | None = None
     if settings.DATABASE_URL:
         await algo_repo.init_pool(settings.DATABASE_URL)
+        get_klines, get_position, place = _make_opend_bridges()
+        scheduler = Scheduler(
+            get_klines=get_klines,
+            get_position=get_position,
+            place_paper_order=place,
+        )
+        install_scheduler(scheduler)
+        scheduler.start()
     try:
         yield
     finally:
+        if scheduler is not None:
+            await scheduler.stop()
         await algo_repo.close_pool()
 
 
