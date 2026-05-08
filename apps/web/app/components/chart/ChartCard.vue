@@ -1,6 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { CandlestickSeries, HistogramSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import {
+  CandlestickSeries,
+  HistogramSeries,
+  createChart,
+  type IChartApi,
+  type ISeriesApi,
+  type UTCTimestamp,
+} from 'lightweight-charts'
 
 interface Bar {
   time: string
@@ -18,6 +25,9 @@ let chart: IChartApi | undefined
 let candle: ISeriesApi<'Candlestick'> | undefined
 let vol: ISeriesApi<'Histogram'> | undefined
 
+const UP = '#7ec99c'
+const DOWN = '#e07a5f'
+
 function toUnix(t: string): UTCTimestamp {
   return Math.floor(new Date(t).getTime() / 1000) as UTCTimestamp
 }
@@ -25,13 +35,13 @@ function toUnix(t: string): UTCTimestamp {
 function render() {
   if (!chart || !candle || !vol) return
   candle.setData(
-    props.bars.map((b) => ({ time: toUnix(b.time), open: b.open, high: b.high, low: b.low, close: b.close })),
+    props.bars.map(b => ({ time: toUnix(b.time), open: b.open, high: b.high, low: b.low, close: b.close })),
   )
   vol.setData(
-    props.bars.map((b) => ({
+    props.bars.map(b => ({
       time: toUnix(b.time),
       value: b.volume,
-      color: b.close >= b.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
+      color: b.close >= b.open ? `${UP}44` : `${DOWN}44`,
     })),
   )
   chart.timeScale().fitContent()
@@ -40,24 +50,36 @@ function render() {
 onMounted(() => {
   if (!el.value) return
   chart = createChart(el.value, {
-    layout: { background: { color: 'transparent' }, textColor: '#888' },
-    grid: { vertLines: { color: 'rgba(127,127,127,0.1)' }, horzLines: { color: 'rgba(127,127,127,0.1)' } },
-    height: 360,
+    layout: {
+      background: { color: 'transparent' },
+      textColor: '#b6b1a4',
+      fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+      fontSize: 12,
+    },
+    grid: {
+      vertLines: { color: 'rgba(255, 245, 230, 0.04)' },
+      horzLines: { color: 'rgba(255, 245, 230, 0.04)' },
+    },
+    rightPriceScale: { borderColor: 'rgba(255, 245, 230, 0.08)' },
+    timeScale: { borderColor: 'rgba(255, 245, 230, 0.08)' },
+    crosshair: {
+      vertLine: { color: '#d4a96a', width: 1, style: 2, labelBackgroundColor: '#d4a96a' },
+      horzLine: { color: '#d4a96a', width: 1, style: 2, labelBackgroundColor: '#d4a96a' },
+    },
+    height: 420,
     autoSize: true,
   })
   candle = chart.addSeries(CandlestickSeries, {
-    upColor: '#26a69a',
-    downColor: '#ef5350',
+    upColor: UP,
+    downColor: DOWN,
     borderVisible: false,
-    wickUpColor: '#26a69a',
-    wickDownColor: '#ef5350',
+    wickUpColor: UP,
+    wickDownColor: DOWN,
   })
   vol = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: '' })
-  vol.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } })
+  vol.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
   render()
 })
-
-watch(() => props.bars, render)
 
 onUnmounted(() => {
   chart?.remove()
@@ -65,18 +87,51 @@ onUnmounted(() => {
   candle = undefined
   vol = undefined
 })
+
+watch(() => props.bars, render)
+
+const last = computed(() => props.bars[props.bars.length - 1])
+const prev = computed(() => props.bars[props.bars.length - 2])
+const change = computed(() => {
+  if (!last.value || !prev.value) return null
+  const d = last.value.close - prev.value.close
+  const pct = (d / prev.value.close) * 100
+  return { d, pct, up: d >= 0 }
+})
+
+const ktypeLabel: Record<string, string> = {
+  '1m': '1-min', '3m': '3-min', '5m': '5-min', '15m': '15-min', '30m': '30-min',
+  '60m': '1-hour', '1d': 'daily', '1w': 'weekly', '1M': 'monthly',
+}
 </script>
 
 <template>
-  <UCard>
-    <template #header>
-      <div class="flex justify-between items-center">
-        <div class="font-medium">{{ props.code }} · {{ props.ktype }}</div>
-        <div v-if="props.bars.length > 0" class="text-xs text-gray-500">
-          last {{ props.bars[props.bars.length - 1]?.close ?? '—' }}
+  <div class="surface-1 rounded-md overflow-hidden">
+    <header class="px-5 pt-4 pb-4 border-b hairline flex items-end justify-between">
+      <div>
+        <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">
+          {{ props.code }} · {{ ktypeLabel[props.ktype] || props.ktype }}
+        </div>
+        <div v-if="last" class="flex items-baseline gap-3 mt-2">
+          <div class="font-mono text-3xl text-[var(--paper-0)] tracking-tight" data-mono>
+            {{ last.close.toFixed(2) }}
+          </div>
+          <div
+            v-if="change"
+            class="font-mono text-sm"
+            :class="change.up ? 'tape-up' : 'tape-down'"
+            data-mono
+          >
+            {{ change.d >= 0 ? '+' : '' }}{{ change.d.toFixed(2) }}
+            ({{ change.pct >= 0 ? '+' : '' }}{{ change.pct.toFixed(2) }}%)
+          </div>
         </div>
       </div>
-    </template>
-    <div ref="el" class="w-full h-[360px]" />
-  </UCard>
+      <div class="text-right">
+        <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">bars</div>
+        <div class="font-mono text-sm text-[var(--paper-2)]" data-mono>{{ props.bars.length }}</div>
+      </div>
+    </header>
+    <div ref="el" class="w-full h-[420px] bg-[var(--ink-0)]" />
+  </div>
 </template>

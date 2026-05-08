@@ -1,2 +1,145 @@
+/* Distinctive type pairing for the trading desk aesthetic.
+   - Instrument Serif: editorial display face (brand wordmark, chat paragraph copy)
+   - JetBrains Mono:    numerics, symbols, tickers, system text
+   - Geist:             default UI sans (buttons, labels, controls)
+   Font @imports MUST precede other @imports per CSS spec. */
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap');
 @import "tailwindcss";
 @import "@nuxt/ui";
+
+@theme {
+  --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-serif: 'Instrument Serif', ui-serif, Georgia, serif;
+}
+
+:root {
+  /* Trading-desk palette — deep ink with a warm overlay */
+  --ink-0: #07080a;
+  --ink-1: #0d0f12;
+  --ink-2: #15181c;
+  --ink-3: #1f242a;
+  --ink-line: rgba(255, 245, 230, 0.06);
+  --ink-line-strong: rgba(255, 245, 230, 0.12);
+
+  --paper-0: #f7f4ee;
+  --paper-1: #e8e3d8;
+  --paper-2: #b6b1a4;
+  --paper-3: #6f6c63;
+
+  --accent: #d4a96a;          /* amber — the only chromatic brand color */
+  --accent-soft: #d4a96a26;
+  --tape-up: #7ec99c;          /* muted teal — gains */
+  --tape-down: #e07a5f;        /* muted coral — losses */
+
+  color-scheme: dark;
+}
+
+html, body, #__nuxt {
+  background: var(--ink-0);
+  color: var(--paper-0);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Hairline grid texture — printed across the entire page background.
+   Two layered linear gradients form a subtle 32px grid; opacity is so low
+   it reads as paper grain rather than a chart. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(to right, var(--ink-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--ink-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: radial-gradient(ellipse at 50% 30%, black 0%, transparent 80%);
+}
+
+/* Numerals: tabular-nums everywhere a price might land. */
+.num,
+.font-mono,
+[data-mono] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'zero' 1, 'cv11' 1;
+  letter-spacing: -0.01em;
+}
+
+.font-serif,
+[data-serif] {
+  font-family: var(--font-serif);
+  letter-spacing: -0.005em;
+}
+
+/* Direction tape — color-coded gain/loss numerals */
+.tape-up { color: var(--tape-up); }
+.tape-down { color: var(--tape-down); }
+
+/* Hairline divider — the workhorse separator throughout the app */
+.hairline { border-color: var(--ink-line); }
+.hairline-strong { border-color: var(--ink-line-strong); }
+
+/* Layered surface — used for the chat composer rim and tool cards */
+.surface-1 {
+  background: linear-gradient(180deg, var(--ink-1) 0%, var(--ink-0) 100%);
+  border: 1px solid var(--ink-line);
+}
+.surface-2 {
+  background: var(--ink-2);
+  border: 1px solid var(--ink-line);
+}
+
+/* Brand wordmark — italic Instrument Serif with a thin rule under it */
+.brand-mark {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  font-size: 1.625rem;  /* 26px — display weight, not microcopy */
+  line-height: 1;
+}
+.brand-mark span:first-child { color: var(--accent); }
+
+/* Subtle blink on a status dot */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.dot-pulse {
+  animation: pulse-soft 2.6s ease-in-out infinite;
+}
+
+/* Stagger reveal — used for first-paint chat / sidebar entrance */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rise-in { animation: rise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.rise-1 { animation-delay: 0.04s; }
+.rise-2 { animation-delay: 0.10s; }
+.rise-3 { animation-delay: 0.18s; }
+.rise-4 { animation-delay: 0.26s; }
+
+/* Refine focus rings — Nuxt UI's default is too loud for a dark dashboard */
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Tool-call indicator — a thin amber rule that flickers while the agent
+   is reasoning. Used in chat messages with class `tool-rule`. */
+.tool-rule {
+  position: relative;
+  padding-left: 0.875rem;
+  border-left: 1px solid var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.9375rem;  /* 15px */
+  color: var(--paper-2);
+  font-style: italic;
+}

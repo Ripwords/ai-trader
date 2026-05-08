@@ -115,6 +115,10 @@ export class ApiClient {
     return snakeToCamel(raw) as unknown as Snapshot
   }
 
+  async getOpendState(): Promise<{ reachable: boolean; qot_logined: boolean; trd_logined: boolean; server_ver?: string }> {
+    return this.fetch('/quote/state')
+  }
+
   async listWatchlist(args: { group?: string } = {}): Promise<WatchlistItem[]> {
     return this.fetch('/watchlist/list', { query: args })
   }

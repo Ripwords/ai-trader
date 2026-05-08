@@ -1,18 +1,22 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 interface Item { code: string; name: string | null; group: string }
+interface OpendStatus { reachable: boolean; qot_logined: boolean; trd_logined: boolean; server_ver?: string }
 
 const items = ref<Item[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 const newCode = ref('')
+const status = ref<OpendStatus>({ reachable: false, qot_logined: false, trd_logined: false })
+
+const emit = defineEmits<{ select: [code: string] }>()
 
 async function refresh() {
   loading.value = true
   error.value = null
   try {
-    items.value = await $fetch('/api/watchlist')
+    items.value = await $fetch<Item[]>('/api/watchlist')
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'failed to load'
   } finally {
@@ -20,8 +24,30 @@ async function refresh() {
   }
 }
 
+async function refreshStatus() {
+  try {
+    status.value = await $fetch<OpendStatus>('/api/opend-status')
+  } catch {
+    status.value = { reachable: false, qot_logined: false, trd_logined: false }
+  }
+}
+
+const statusLabel = computed(() => {
+  if (!status.value.reachable) return 'opend down'
+  if (!status.value.qot_logined) return 'opend unlocked'
+  return 'opend live'
+})
+
+const statusColor = computed(() => {
+  if (!status.value.reachable) return 'var(--tape-down)'
+  if (!status.value.qot_logined) return 'var(--accent)'
+  return 'var(--tape-up)'
+})
+
+let pollHandle: ReturnType<typeof setInterval> | undefined
+
 async function add() {
-  const code = newCode.value.trim()
+  const code = newCode.value.trim().toUpperCase()
   if (!code) return
   error.value = null
   try {
@@ -43,35 +69,100 @@ async function remove(code: string) {
   }
 }
 
-const emit = defineEmits<{ select: [code: string] }>()
+function split(code: string): [string, string] {
+  const i = code.indexOf('.')
+  if (i < 0) return ['', code]
+  return [code.slice(0, i), code.slice(i + 1)]
+}
 
-onMounted(refresh)
+onMounted(() => {
+  refresh()
+  refreshStatus()
+  pollHandle = setInterval(refreshStatus, 6000)
+})
+
+onUnmounted(() => {
+  if (pollHandle) clearInterval(pollHandle)
+})
 </script>
 
 <template>
-  <aside class="w-64 border-r flex flex-col h-full">
-    <div class="px-3 py-2 border-b font-medium text-sm">Watchlist</div>
-    <form class="flex gap-1 p-2 border-b" @submit.prevent="add">
-      <UInput v-model="newCode" placeholder="US.NVDA" size="xs" class="flex-1" />
-      <UButton size="xs" type="submit">+</UButton>
+  <aside class="w-[300px] shrink-0 border-r hairline flex flex-col h-full bg-[var(--ink-0)] relative z-10">
+    <!-- Header strip -->
+    <div class="px-5 pt-5 pb-4 flex items-end justify-between border-b hairline">
+      <div>
+        <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">Watchlist</div>
+        <div class="font-serif italic text-2xl text-[var(--paper-0)] leading-none mt-2">your tape</div>
+      </div>
+      <div class="font-mono text-sm text-[var(--paper-2)]">{{ items.length }}</div>
+    </div>
+
+    <!-- Add input -->
+    <form class="px-5 py-4 border-b hairline flex items-center gap-2" @submit.prevent="add">
+      <span class="font-mono text-base text-[var(--paper-3)] select-none">+</span>
+      <input
+        v-model="newCode"
+        placeholder="us.nvda"
+        spellcheck="false"
+        autocapitalize="characters"
+        class="flex-1 bg-transparent outline-none font-mono text-base text-[var(--paper-0)] placeholder:text-[var(--paper-3)] uppercase"
+      />
+      <button
+        v-if="newCode"
+        type="submit"
+        class="font-mono text-xs uppercase tracking-[0.15em] text-[var(--accent)] hover:text-[var(--paper-0)] transition-colors"
+      >
+        add
+      </button>
     </form>
+
+    <!-- Body -->
     <div class="flex-1 overflow-y-auto">
-      <div v-if="loading" class="px-3 py-2 text-xs text-gray-500">Loading…</div>
-      <div v-if="error" class="px-3 py-2 text-xs text-red-500">{{ error }}</div>
-      <ul>
+      <div v-if="loading" class="px-5 py-10 font-mono text-sm text-[var(--paper-3)] text-center">
+        loading…
+      </div>
+      <div v-if="error" class="px-5 py-3 font-mono text-sm text-[var(--tape-down)]">
+        {{ error }}
+      </div>
+      <ul v-if="!loading && !error" class="py-1">
         <li
           v-for="i in items"
           :key="i.code"
-          class="group flex items-center justify-between px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer text-sm"
+          class="group px-5 py-2.5 hover:bg-[var(--ink-2)] cursor-pointer flex items-center gap-3 transition-colors border-l-2 border-transparent hover:border-[var(--accent)]"
           @click="emit('select', i.code)"
         >
-          <span>
-            <span class="font-mono">{{ i.code }}</span>
-            <span class="text-gray-500 ml-2">{{ i.name }}</span>
-          </span>
-          <UButton size="xs" variant="ghost" class="opacity-0 group-hover:opacity-100" @click.stop="remove(i.code)">×</UButton>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-baseline gap-2">
+              <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">
+                {{ split(i.code)[0] }}
+              </span>
+              <span class="font-mono text-base font-medium text-[var(--paper-0)]">
+                {{ split(i.code)[1] }}
+              </span>
+            </div>
+            <div class="text-sm text-[var(--paper-3)] truncate mt-0.5 font-serif">
+              {{ i.name || '—' }}
+            </div>
+          </div>
+          <button
+            class="opacity-0 group-hover:opacity-100 font-mono text-lg text-[var(--paper-3)] hover:text-[var(--tape-down)] transition leading-none"
+            title="Remove"
+            @click.stop="remove(i.code)"
+          >
+            ×
+          </button>
         </li>
       </ul>
+    </div>
+
+    <!-- Footer — live OpenD reachability dot -->
+    <div class="px-5 py-3 border-t hairline flex items-center gap-2">
+      <span
+        class="w-1.5 h-1.5 rounded-full"
+        :class="{ 'dot-pulse': status.reachable && status.qot_logined }"
+        :style="{ background: statusColor }"
+      />
+      <span class="font-mono text-xs uppercase tracking-[0.15em] text-[var(--paper-3)]">{{ statusLabel }}</span>
     </div>
   </aside>
 </template>

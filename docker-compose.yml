@@ -43,6 +43,10 @@ services:
 
   web:
     build: ./apps/web
+    # NOTE: bind-mounting ./apps/web for HMR is preferable but Docker Desktop
+    # rejects paths not added under Settings → Resources → File Sharing.
+    # If you want HMR, add /Users/<you>/Documents/ai-trader to file sharing
+    # then re-add the volumes here. Otherwise: `docker compose up -d --build web`.
     environment:
       # Mastra reads these via process.env when routing "<provider>/<model-id>".
       # Set whichever provider you actually use; LLM_MODEL picks the route.

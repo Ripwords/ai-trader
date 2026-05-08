@@ -20,8 +20,15 @@ let _agent: Agent | undefined
  */
 function buildModel(spec: string) {
   const slash = spec.indexOf('/')
-  const provider = slash >= 0 ? spec.slice(0, slash) : 'anthropic'
-  const modelId = slash >= 0 ? spec.slice(slash + 1) : spec
+  if (slash < 0) {
+    throw new Error(
+      `LLM_MODEL must be "<provider>/<model-id>" (got "${spec}"). ` +
+        `Examples: anthropic/claude-sonnet-4-6, openai/gpt-4o, ` +
+        `google/gemini-2.5-pro, deepseek/deepseek-v4-flash.`,
+    )
+  }
+  const provider = spec.slice(0, slash)
+  const modelId = spec.slice(slash + 1)
 
   switch (provider) {
     case 'anthropic':

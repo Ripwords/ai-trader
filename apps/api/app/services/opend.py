@@ -131,6 +131,37 @@ class OpendAdapter:
         ]
         return KLineResponse(code=code, ktype=ktype, bars=all_bars[-num:])
 
+    def get_global_state(self) -> dict[str, bool | str | int]:
+        """Probe OpenD reachability + login state. Cheap call.
+
+        Returns a small dict with reachable + login flags so the UI can
+        decide whether to render a green or red status indicator. If the
+        connection itself fails, returns reachable=False without raising
+        (the caller wants to render "down" not 500).
+        """
+        try:
+            ctx = self._ctx_factory()
+        except Exception:
+            return {"reachable": False, "qot_logined": False, "trd_logined": False}
+        try:
+            ret, data = ctx.get_global_state()
+        except Exception:
+            return {"reachable": False, "qot_logined": False, "trd_logined": False}
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            return {"reachable": False, "qot_logined": False, "trd_logined": False}
+        d = data if isinstance(data, dict) else {}
+        return {
+            "reachable": True,
+            "qot_logined": bool(d.get("qot_logined", False)),
+            "trd_logined": bool(d.get("trd_logined", False)),
+            "server_ver": str(d.get("server_ver", "")),
+        }
+
     def list_watchlist(self, *, group: str = "All") -> list[WatchlistItem]:
         ctx = self._ctx_factory()
         try:

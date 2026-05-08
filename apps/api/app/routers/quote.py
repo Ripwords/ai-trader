@@ -33,3 +33,10 @@ async def kline(
         return opend.get_kline(code, ktype=ktype, num=num)
     except OpendError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@router.get("/state")
+async def state(opend: OpendAdapter = Depends(get_opend)) -> dict[str, bool | str | int]:
+    """OpenD reachability + login state. Never raises — returns reachable=False
+    when OpenD is down so the UI can render a clear status indicator."""
+    return opend.get_global_state()
