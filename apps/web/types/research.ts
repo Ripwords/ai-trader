@@ -38,6 +38,14 @@ export interface ResearchRunResponse {
   signals: Signal[]
 }
 
+export type ResearchSourceName = AnalystName | PersonaName
+
+export type ResearchEvent =
+  | { kind: 'progress'; source: ResearchSourceName; phase: 'started' }
+  | { kind: 'signal'; source: ResearchSourceName; signal: Signal }
+  | { kind: 'error'; source: ResearchSourceName; message: string; fatal: boolean }
+  | { kind: 'done' }
+
 export interface SynthesisRequest {
   symbols: string[]
   signals: Signal[]
