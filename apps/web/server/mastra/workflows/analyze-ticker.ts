@@ -5,9 +5,11 @@ import { getResearchApi } from '../../llm/http'
 import { findPersona, runPersona } from '../../llm/personas'
 import {
   getCompanyNews,
+  getEarningsInfo,
   getFinancialMetrics,
   getHistorical,
   getInsiderTrades,
+  type EarningsInfo,
   type FinancialMetrics,
   type InsiderTrade,
   type NewsItem,
@@ -54,6 +56,7 @@ const FetchedSchema = InputSchema.extend({
   insider: z.array(z.unknown()),
   news: z.array(z.unknown()),
   holdings: z.unknown(),
+  earnings: z.unknown(),
 })
 
 const fetchBundleStep = createStep({
@@ -61,14 +64,15 @@ const fetchBundleStep = createStep({
   inputSchema: InputSchema,
   outputSchema: FetchedSchema,
   execute: async ({ inputData }) => {
-    const [metrics, history, insider, news, holdings] = await Promise.all([
+    const [metrics, history, insider, news, holdings, earnings] = await Promise.all([
       getFinancialMetrics(inputData.symbol),
       getHistorical(inputData.symbol, 5),
       getInsiderTrades(inputData.symbol, 200),
       getCompanyNews(inputData.symbol, 50),
       getHoldingForSymbol(inputData.symbol),
+      getEarningsInfo(inputData.symbol),
     ])
-    return { ...inputData, metrics, history, insider, news, holdings }
+    return { ...inputData, metrics, history, insider, news, holdings, earnings }
   },
 })
 
@@ -86,6 +90,7 @@ const collectSignalsStep = createStep({
     const insider = inputData.insider as InsiderTrade[]
     const news = inputData.news as NewsItem[]
     const holdings = inputData.holdings as HoldingSummary
+    const earnings = inputData.earnings as EarningsInfo | undefined
     const bundle = { metrics, history: inputData.history }
 
     const analystResults = await Promise.all(
@@ -110,7 +115,7 @@ const collectSignalsStep = createStep({
         const persona = findPersona(id)
         if (!persona) return null
         try {
-          return await runPersona(persona, inputData.symbol, bundle, holdings)
+          return await runPersona(persona, inputData.symbol, bundle, holdings, earnings)
         } catch (err) {
           console.error(`[analyze-ticker] persona ${id} failed`, err)
           return null

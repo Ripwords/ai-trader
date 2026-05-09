@@ -3,6 +3,7 @@ import { getResearchApi } from '../../llm/http'
 import { findPersona, runPersona } from '../../llm/personas'
 import {
   getCompanyNews,
+  getEarningsInfo,
   getFinancialMetrics,
   getHistorical,
   getInsiderTrades,
@@ -33,12 +34,13 @@ export default defineEventHandler(async (event): Promise<ResearchRunResponse> =>
   const ownerId = await getOwnerId()
   const api = getResearchApi()
 
-  const [metrics, history, insider, news, holdings] = await Promise.all([
+  const [metrics, history, insider, news, holdings, earnings] = await Promise.all([
     getFinancialMetrics(symbol),
     getHistorical(symbol, 5),
     getInsiderTrades(symbol, 200),
     getCompanyNews(symbol, 50),
     getHoldingForSymbol(symbol),
+    getEarningsInfo(symbol),
   ])
   const bundle = { metrics, history }
 
@@ -64,7 +66,7 @@ export default defineEventHandler(async (event): Promise<ResearchRunResponse> =>
       const persona = findPersona(name)
       if (!persona) return null
       try {
-        const sig = await runPersona(persona, symbol, bundle, holdings)
+        const sig = await runPersona(persona, symbol, bundle, holdings, earnings)
         await recordResearchSignal(ownerId, sig)
         return sig
       } catch (err) {

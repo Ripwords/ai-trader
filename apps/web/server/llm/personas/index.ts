@@ -1,5 +1,6 @@
 import { generateObject } from 'ai'
 import { z } from 'zod'
+import type { EarningsInfo } from '../../lib/yahoo'
 import { buildModel } from '../model'
 import type { HoldingSummary } from '../../lib/holdings'
 import { buffett } from './buffett'
@@ -35,23 +36,39 @@ function compactHoldings(h: HoldingSummary): Record<string, unknown> {
   }
 }
 
+function hasEarningsData(e: EarningsInfo): boolean {
+  return (
+    e.next_earnings_date !== null
+    || e.last_earnings_date !== null
+    || e.last_eps_actual !== null
+    || e.last_eps_estimate !== null
+    || e.last_eps_surprise_pct !== null
+  )
+}
+
 export async function runPersona(
   persona: Persona,
   symbol: string,
   bundle: unknown,
   holdings?: HoldingSummary | null,
+  earnings?: EarningsInfo | null,
 ): Promise<Signal> {
-  const holdingsBlock = holdings && holdings.positions.length > 0
-    ? `\n\nCurrent holdings:\n${JSON.stringify(compactHoldings(holdings), null, 2)}`
-    : holdings
-      ? '\n\nCurrent holdings: none (user does not currently hold this symbol).'
-      : ''
+  let prompt = `Analyze ${symbol} given this fundamentals data:\n\n${JSON.stringify(bundle, null, 2)}`
+  if (holdings && holdings.positions.length > 0) {
+    prompt += `\n\nCurrent holdings:\n${JSON.stringify(compactHoldings(holdings), null, 2)}`
+  } else if (holdings) {
+    prompt += '\n\nCurrent holdings: none (user does not currently hold this symbol).'
+  }
+  if (earnings && hasEarningsData(earnings)) {
+    prompt += `\n\nEarnings:\n${JSON.stringify(earnings, null, 2)}`
+  }
+  prompt += '\n\nReturn your signal.'
 
   const { object } = await generateObject({
     model: buildModel(),
     schema: SignalSchema,
     system: persona.prompt,
-    prompt: `Analyze ${symbol} given this fundamentals data:\n\n${JSON.stringify(bundle, null, 2)}${holdingsBlock}\n\nReturn your signal.`,
+    prompt,
   })
   return { source: `persona:${persona.id}`, symbol, ...object }
 }

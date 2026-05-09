@@ -54,6 +54,24 @@ export interface NewsItem {
   sentiment: 'positive' | 'negative' | 'neutral' | null
 }
 
+export interface EarningsInfo {
+  next_earnings_date: string | null
+  days_until_earnings: number | null
+  last_earnings_date: string | null
+  last_eps_actual: number | null
+  last_eps_estimate: number | null
+  last_eps_surprise_pct: number | null
+}
+
+const EMPTY_EARNINGS: EarningsInfo = {
+  next_earnings_date: null,
+  days_until_earnings: null,
+  last_earnings_date: null,
+  last_eps_actual: null,
+  last_eps_estimate: null,
+  last_eps_surprise_pct: null,
+}
+
 const EMPTY_METRICS = (symbol: string): FinancialMetrics => ({
   symbol,
   market_cap: null, pe_ratio: null, pb_ratio: null, ps_ratio: null,
@@ -243,4 +261,46 @@ export async function getFundamentalsBundle(symbol: string): Promise<Fundamental
     getHistorical(symbol, 5),
   ])
   return { metrics, history }
+}
+
+export async function getEarningsInfo(symbol: string): Promise<EarningsInfo> {
+  const yfSym = toYahooSymbol(symbol)
+  try {
+    const q = await yahoo.quoteSummary(yfSym, {
+      modules: ['calendarEvents', 'earningsHistory'],
+    })
+
+    const earnings = q.calendarEvents?.earnings
+    const dates = earnings?.earningsDate ?? []
+    const nextDate = dates[0] ? new Date(dates[0]) : null
+    const next_earnings_date = nextDate && !Number.isNaN(nextDate.getTime())
+      ? nextDate.toISOString().slice(0, 10)
+      : null
+
+    let days_until_earnings: number | null = null
+    if (nextDate && !Number.isNaN(nextDate.getTime())) {
+      const ms = nextDate.getTime() - Date.now()
+      days_until_earnings = Math.round(ms / 86_400_000)
+    }
+
+    const history = q.earningsHistory?.history ?? []
+    // Most recent quarter is typically the last entry (Yahoo orders chronologically)
+    const last = history.length > 0 ? history[history.length - 1] : null
+    const lastQuarter = last?.quarter ? new Date(last.quarter) : null
+    const last_earnings_date = lastQuarter && !Number.isNaN(lastQuarter.getTime())
+      ? lastQuarter.toISOString().slice(0, 10)
+      : null
+
+    return {
+      next_earnings_date,
+      days_until_earnings,
+      last_earnings_date,
+      last_eps_actual: num(last?.epsActual),
+      last_eps_estimate: num(last?.epsEstimate),
+      last_eps_surprise_pct: num(last?.surprisePercent),
+    }
+  } catch (err) {
+    console.error('[yahoo] getEarningsInfo failed', symbol, err)
+    return { ...EMPTY_EARNINGS }
+  }
 }
