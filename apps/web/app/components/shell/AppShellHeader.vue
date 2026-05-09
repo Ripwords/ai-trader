@@ -61,7 +61,10 @@ async function logout(): Promise<void> {
         <span>live · paper</span>
       </div>
       <div class="clock" data-mono>{{ clockText }}</div>
-      <button class="signout" @click="logout">sign out</button>
+      <button class="signout" aria-label="Sign out" title="Sign out" @click="logout">
+        <UIcon name="i-lucide-log-out" class="signout-icon" />
+        <span class="signout-text">sign out</span>
+      </button>
     </div>
 
     <div class="model-tag" data-mono>
@@ -140,6 +143,7 @@ async function logout(): Promise<void> {
 .brand-trader { color: var(--paper-0); }
 
 .brand-section {
+  display: none;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.7rem;
   letter-spacing: 0.22em;
@@ -147,6 +151,9 @@ async function logout(): Promise<void> {
   color: var(--paper-3);
   padding-left: 0.85rem;
   border-left: 1px solid var(--hairline, rgba(255,255,255,0.08));
+}
+@media (min-width: 640px) {
+  .brand-section { display: inline; }
 }
 
 /* ---------------- middle: section nav --------------------- */
@@ -200,15 +207,24 @@ async function logout(): Promise<void> {
 }
 
 .signout {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.7rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--paper-3);
-  padding: 0.4rem 0.6rem;
-  transition: color 160ms ease;
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  transition: color 160ms ease, background-color 160ms ease;
 }
-.signout:hover { color: var(--accent); }
+.signout:hover { color: var(--accent); background: var(--ink-2); }
+.signout-icon { width: 16px; height: 16px; flex-shrink: 0; }
+.signout-text { display: none; }
+@media (min-width: 768px) {
+  .signout-text { display: inline; }
+}
 
 /* ---------------- bottom strip: model tag ---------------- */
 .model-tag {
