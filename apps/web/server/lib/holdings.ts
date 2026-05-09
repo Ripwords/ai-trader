@@ -428,7 +428,11 @@ async function fetchGhostfolioFullSlice(): Promise<GhostfolioFullSlice> {
       if (positionsValue == null && netWorthTotal != null && cashTotal != null) {
         positionsValue = netWorthTotal - cashTotal
       }
-      const pnlRaw = toNumber(summary.netPerformancePercent)
+      // Ghostfolio key is `netPerformancePercentage` (not `Percent`); also
+      // accept `WithCurrencyEffect` and the legacy spelling as fallbacks.
+      const pnlRaw = toNumber(summary.netPerformancePercentage)
+        ?? toNumber(summary.netPerformancePercentageWithCurrencyEffect)
+        ?? toNumber(summary.netPerformancePercent)
         ?? toNumber(summary.netPerformancePercentWithCurrencyEffect)
       totalPnlPct = pnlRaw != null ? pnlRaw * 100 : null
       const cur = typeof summary.baseCurrency === 'string' ? summary.baseCurrency : null
