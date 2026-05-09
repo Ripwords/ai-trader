@@ -137,15 +137,15 @@ async function synthesize() {
                 @keyup.enter="canRun && runResearch()"
               />
             </label>
-            <UButton
-              :loading="running"
+            <button
+              type="button"
+              class="run-btn"
               :disabled="!canRun"
-              color="primary"
-              class="font-mono text-xs uppercase tracking-[0.18em]"
               @click="runResearch"
             >
-              {{ running ? 'running…' : 'run research' }}
-            </UButton>
+              <span v-if="running" class="spinner" aria-hidden="true" />
+              <span>{{ running ? 'running…' : 'run research →' }}</span>
+            </button>
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
@@ -202,16 +202,15 @@ async function synthesize() {
         <!-- Synthesize CTA + result -->
         <section v-if="signals.length > 0" class="space-y-4">
           <div class="flex items-center gap-4">
-            <UButton
-              :loading="synthesizing"
+            <button
+              type="button"
+              class="run-btn"
               :disabled="!canSynthesize"
-              color="primary"
-              variant="solid"
-              class="font-mono text-xs uppercase tracking-[0.18em]"
               @click="synthesize"
             >
-              {{ synthesizing ? 'synthesizing…' : 'synthesize decisions' }}
-            </UButton>
+              <span v-if="synthesizing" class="spinner" aria-hidden="true" />
+              <span>{{ synthesizing ? 'synthesizing…' : 'synthesize decisions →' }}</span>
+            </button>
             <span class="font-mono text-xs text-[var(--paper-3)]">
               fan signals into a single decision per symbol
             </span>
@@ -255,4 +254,43 @@ async function synthesize() {
   border-color: var(--accent);
 }
 .chip.is-on:hover { background: #b88a4f; border-color: #b88a4f; }
+
+.run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: #07080a;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 0.65rem 1.1rem;
+  border-radius: 6px;
+  transition: background-color 160ms ease, border-color 160ms ease, opacity 160ms ease;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.run-btn:hover:not(:disabled) {
+  background: #b88a4f;
+  border-color: #b88a4f;
+}
+.run-btn:disabled {
+  background: rgba(212, 169, 106, 0.18);
+  border-color: rgba(212, 169, 106, 0.25);
+  color: rgba(7, 8, 10, 0.55);
+  cursor: not-allowed;
+}
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(7, 8, 10, 0.3);
+  border-top-color: #07080a;
+  border-radius: 50%;
+  animation: spin 720ms linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
