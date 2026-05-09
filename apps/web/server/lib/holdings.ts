@@ -24,6 +24,10 @@ export interface HoldingSummary {
   cash_paper_usd: number
   cash_live_usd: number
   ghostfolio_status: GhostfolioStatus
+  // Names of every Ghostfolio account, surfaced for context. Ghostfolio's
+  // get_portfolio_holdings aggregates a symbol across all accounts, so we
+  // can't attribute per-position without reconstructing from get_orders.
+  ghostfolio_accounts: string[]
 }
 
 /**
@@ -131,6 +135,7 @@ interface GhostfolioSlice {
   total_market_value: number
   net_worth_total: number | null
   status: GhostfolioStatus
+  account_names: string[]
 }
 
 // Verified against the user's mhajder/ghostfolio-mcp server. Older Ghostfolio
@@ -138,11 +143,12 @@ interface GhostfolioSlice {
 // the canonical snake_case names first.
 const GHOSTFOLIO_HOLDINGS_TOOL_CANDIDATES = ['get_portfolio_holdings', 'getHoldings', 'holdings']
 const GHOSTFOLIO_DETAILS_TOOL_CANDIDATES = ['get_portfolio_details', 'getPortfolioDetails']
+const GHOSTFOLIO_ACCOUNTS_TOOL_CANDIDATES = ['get_accounts', 'getAccounts']
 
 async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
   const status = await getGhostfolioStatus()
   if (status !== 'ok') {
-    return { positions: [], total_market_value: 0, net_worth_total: null, status }
+    return { positions: [], total_market_value: 0, net_worth_total: null, status, account_names: [] }
   }
 
   // Ghostfolio uses Yahoo-style symbols (NVDA, 0700.HK, 600519.SS, 0828EA.KL).
@@ -162,7 +168,7 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
 
   if (raw == null) {
     if (lastErr) console.warn('[holdings] ghostfolio holdings tool probe failed:', lastErr instanceof Error ? lastErr.message : String(lastErr))
-    return { positions: [], total_market_value: 0, net_worth_total: null, status: 'failing' }
+    return { positions: [], total_market_value: 0, net_worth_total: null, status: 'failing', account_names: [] }
   }
 
   let holdingsArr: unknown[] = []
@@ -199,6 +205,29 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
     }
   }
 
+  // Best-effort fetch of account names so the agent has cross-broker context
+  // (e.g. "you hold this across IBKR + Moomoo accounts"). Per-position
+  // attribution would need a get_orders reconstruction — out of scope.
+  const account_names: string[] = []
+  for (const name of GHOSTFOLIO_ACCOUNTS_TOOL_CANDIDATES) {
+    try {
+      const acctRes = await callGhostfolioTool(name, {})
+      const acctList: unknown = isRecord(acctRes)
+        ? (Array.isArray(acctRes.accounts) ? acctRes.accounts : null)
+        : (Array.isArray(acctRes) ? acctRes : null)
+      if (Array.isArray(acctList)) {
+        for (const a of acctList) {
+          if (isRecord(a) && typeof a.name === 'string' && a.name) {
+            account_names.push(a.name)
+          }
+        }
+        if (account_names.length > 0) break
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
   const positions: HoldingPosition[] = []
   let totalMv = 0
   for (const h of holdingsArr) {
@@ -209,6 +238,8 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
     const qty = toNumber(h.quantity) ?? toNumber(h.qty) ?? 0
     const mv = toNumber(h.valueInBaseCurrency) ?? toNumber(h.marketValue) ?? toNumber(h.value) ?? null
     const investment = toNumber(h.investment)
+    // Weighted-average cost basis across all accounts holding this symbol.
+    // Per-lot granularity would require reconstructing from get_orders.
     const avg = qty > 0 && investment != null ? investment / qty : null
     const cur = toNumber(h.marketPrice) ?? toNumber(h.currentPrice) ?? null
     const pnlPctRaw = toNumber(h.netPerformancePercent) ?? toNumber(h.netPerformancePercentWithCurrencyEffect)
@@ -223,12 +254,12 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
       current_price: cur,
       market_value: mv,
       unrealized_pnl_pct: pnlPct,
-      account_label: String(h.name ?? 'Ghostfolio'),
+      account_label: 'Ghostfolio (aggregate)',
     })
     if (mv != null) totalMv += mv
   }
 
-  return { positions, total_market_value: totalMv, net_worth_total: netWorthTotal, status: 'ok' }
+  return { positions, total_market_value: totalMv, net_worth_total: netWorthTotal, status: 'ok', account_names }
 }
 
 export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummary> {
@@ -239,7 +270,7 @@ export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummar
 
   const ghos: GhostfolioSlice = ghosRes.status === 'fulfilled'
     ? ghosRes.value
-    : { positions: [], total_market_value: 0, net_worth_total: null, status: 'failing' }
+    : { positions: [], total_market_value: 0, net_worth_total: null, status: 'failing', account_names: [] }
 
   const moomoo: MoomooSlice = moomooRes.status === 'fulfilled'
     ? moomooRes.value
@@ -262,6 +293,7 @@ export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummar
     cash_paper_usd: moomoo.cash_paper_usd,
     cash_live_usd: moomoo.cash_live_usd,
     ghostfolio_status: ghos.status,
+    ghostfolio_accounts: ghos.account_names,
   }
 }
 

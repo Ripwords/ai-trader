@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS "research_signals" (
+CREATE TABLE "research_signals" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" uuid NOT NULL,
 	"symbol" varchar(32) NOT NULL,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import type { Decision, DecisionAction } from '../../../types/research'
 
 interface PlaceOrderResponse {
@@ -16,9 +16,36 @@ interface PlaceOrderResponse {
   }
 }
 
+interface PaperAccount {
+  acc_id: string
+  acc_type: string
+  acc_role: string | null
+  markets: string[]
+}
+
 const props = defineProps<{ decisions: Decision[] }>()
 const toast = useToast()
 const inFlight = reactive<Set<string>>(new Set())
+const paperAccounts = ref<PaperAccount[]>([])
+const selectedAccountId = ref<string | undefined>(undefined)
+
+onMounted(async () => {
+  try {
+    const r = await $fetch<{ accounts: PaperAccount[] }>('/api/research/paper-accounts')
+    paperAccounts.value = r.accounts
+    if (r.accounts.length === 1) selectedAccountId.value = r.accounts[0]?.acc_id
+  } catch (err) {
+    console.error('[SynthesisCard] paper-accounts fetch failed', err)
+  }
+})
+
+const accountOptions = computed(() =>
+  paperAccounts.value.map(a => ({
+    value: a.acc_id,
+    label: `${a.acc_type} · ${a.acc_id}`,
+  })),
+)
+const showAccountPicker = computed(() => paperAccounts.value.length > 1)
 
 function actionColor(action: DecisionAction): 'success' | 'error' | 'warning' | 'neutral' {
   switch (action) {
@@ -61,7 +88,12 @@ async function sendToPaper(d: Decision): Promise<void> {
   try {
     const res = await $fetch<PlaceOrderResponse>('/api/research/send-to-paper', {
       method: 'POST',
-      body: { symbol: d.symbol, action: d.action, quantity: d.quantity },
+      body: {
+        symbol: d.symbol,
+        action: d.action,
+        quantity: d.quantity,
+        acc_id: selectedAccountId.value,
+      },
     })
     toast.add({
       title: 'Paper order placed',
@@ -99,9 +131,19 @@ function extractErrorMessage(err: unknown): string {
 
 <template>
   <div class="surface-1 rounded-md overflow-hidden">
-    <header class="px-5 py-4 border-b hairline flex items-baseline justify-between">
+    <header class="px-5 py-4 border-b hairline flex items-baseline justify-between gap-4">
       <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">Synthesis · decisions</div>
-      <div class="font-mono text-xs text-[var(--paper-3)]" data-mono>{{ props.decisions.length }} symbols</div>
+      <div class="flex items-baseline gap-3">
+        <USelect
+          v-if="showAccountPicker"
+          v-model="selectedAccountId"
+          :items="accountOptions"
+          size="xs"
+          placeholder="paper acct"
+          class="font-mono text-xs"
+        />
+        <div class="font-mono text-xs text-[var(--paper-3)]" data-mono>{{ props.decisions.length }} symbols</div>
+      </div>
     </header>
 
     <div v-if="props.decisions.length === 0" class="px-5 py-6 text-center font-mono text-sm text-[var(--paper-3)]">

@@ -15,10 +15,11 @@ export interface SendToPaperResponse {
 }
 
 export default defineEventHandler(async (event): Promise<SendToPaperResponse> => {
-  const body = await readBody<{ symbol?: string; action?: string; quantity?: number }>(event)
+  const body = await readBody<{ symbol?: string; action?: string; quantity?: number; acc_id?: string }>(event)
   const symbol = body?.symbol?.trim()
   const action = body?.action?.toLowerCase()
   const qty = Number(body?.quantity ?? 0)
+  const acc_id = body?.acc_id?.trim() || undefined
   if (!symbol || !action) {
     throw createError({ statusCode: 400, statusMessage: 'symbol and action required' })
   }
@@ -35,6 +36,7 @@ export default defineEventHandler(async (event): Promise<SendToPaperResponse> =>
     qty,
     order_type: 'MARKET',
     trd_env: 'SIMULATE',
+    acc_id,
   })
   return { ok: true, order: result }
 })

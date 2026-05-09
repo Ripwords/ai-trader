@@ -173,22 +173,46 @@ export async function getHistorical(symbol: string, limit = 5): Promise<Historic
   }
 }
 
+/**
+ * Classify Yahoo's free-text `transactionText`. Only real money-flow events
+ * (open-market sales/purchases) are returned to sentiment scoring; grants,
+ * RSU vests, gifts, exercises and other mechanical filings are noise that
+ * skews insider direction and are filtered out here.
+ */
+function classifyInsiderText(text: string): 'buy' | 'sell' | null {
+  const t = text.toLowerCase()
+  // Mechanical filings — not signal. Check first since "Stock Gift" doesn't
+  // contain "sale" but neither is it a real buy.
+  if (t.includes('grant') || t.includes('award')) return null
+  if (t.includes('gift')) return null
+  if (t.includes('exercise') || t.includes('conversion')) return null
+  if (t.includes('vest')) return null
+  if (t.includes('statement of ownership')) return null
+  // Real signal.
+  if (t.includes('sale') || t.includes('sell')) return 'sell'
+  if (t.includes('purchase') || t.includes('buy')) return 'buy'
+  return null
+}
+
 export async function getInsiderTrades(symbol: string, limit = 20): Promise<InsiderTrade[]> {
   const yfSym = toYahooSymbol(symbol)
   try {
     const q = await yahoo.quoteSummary(yfSym, { modules: ['insiderTransactions'] })
     const txns = q.insiderTransactions?.transactions ?? []
-    return txns.slice(0, limit).map((t) => {
-      const text = String(t.transactionText ?? '').toLowerCase()
-      const isSell = text.includes('sale') || text.includes('sell')
-      return {
+    const out: InsiderTrade[] = []
+    for (const t of txns) {
+      if (out.length >= limit) break
+      const direction = classifyInsiderText(String(t.transactionText ?? ''))
+      if (!direction) continue
+      out.push({
         date: t.startDate ? new Date(t.startDate).toISOString().slice(0, 10) : '',
         insider_name: t.filerName ?? '',
-        transaction_type: isSell ? 'sell' as const : 'buy' as const,
+        transaction_type: direction,
         shares: num(t.shares) ?? 0,
         value: num(t.value),
-      }
-    })
+      })
+    }
+    return out
   } catch (err) {
     console.error('[yahoo] getInsiderTrades failed', symbol, err)
     return []

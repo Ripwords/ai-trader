@@ -1,12 +1,16 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { tool } from 'ai'
+import { tool, type Tool } from 'ai'
 import { z } from 'zod'
+
+// MCP tool args are dynamic (JSON Schema from the server), so we deliberately
+// erase the type to align with how `streamText` consumes the merged tool record.
+type McpTool = Tool
 
 /** Cached singleton — opening an MCP connection is non-trivial; we don't
  *  want to do it per request. */
 let _client: Client | null = null
-let _toolsCache: Record<string, ReturnType<typeof tool>> | null = null
+let _toolsCache: Record<string, McpTool> | null = null
 
 async function getClient(): Promise<Client | null> {
   if (_client) return _client
@@ -36,24 +40,24 @@ async function getClient(): Promise<Client | null> {
  * Returns {} if Ghostfolio isn't configured — the agent simply doesn't
  * see those tools and can't invent calls to them.
  */
-export async function getGhostfolioTools(): Promise<Record<string, ReturnType<typeof tool>>> {
+export async function getGhostfolioTools(): Promise<Record<string, McpTool>> {
   if (_toolsCache) return _toolsCache
   const client = await getClient()
   if (!client) return {}
 
   try {
     const list = await client.listTools()
-    const out: Record<string, ReturnType<typeof tool>> = {}
+    const out: Record<string, McpTool> = {}
     for (const t of list.tools) {
       const safeName = `ghostfolio_${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`
+      // MCP args are dynamic (JSON Schema from the server). Use a permissive
+      // record schema and erase the inferred type so this tool slots into the
+      // merged tool record alongside strictly-typed native tools.
       out[safeName] = tool({
         description: t.description || `Ghostfolio: ${t.name}`,
-        // MCP returns JSON Schema; we coerce to a permissive zod object so the
-        // SDK accepts arbitrary args. The MCP server validates the actual
-        // arguments server-side anyway.
         inputSchema: z.record(z.string(), z.unknown()),
-        execute: async (args) => {
-          const result = await client.callTool({ name: t.name, arguments: args as Record<string, unknown> })
+        execute: async (args: Record<string, unknown>) => {
+          const result = await client.callTool({ name: t.name, arguments: args })
           // MCP returns content blocks; prefer text, otherwise stringified JSON
           const blocks = result.content as Array<{ type: string; text?: string; data?: unknown }>
           const text = blocks
@@ -65,7 +69,7 @@ export async function getGhostfolioTools(): Promise<Record<string, ReturnType<ty
           }
           return result
         },
-      })
+      }) as McpTool
     }
     _toolsCache = out
     return out
