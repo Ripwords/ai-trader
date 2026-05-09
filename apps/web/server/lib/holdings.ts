@@ -1,6 +1,7 @@
 import { callGhostfolioTool, getGhostfolioStatus, type GhostfolioStatus } from '../llm/mcp'
 import { getApiClient } from '../llm/http'
 import type { Account, Portfolio, Position } from '../llm/http'
+import { toYahooSymbol } from './yahoo'
 
 export interface HoldingPosition {
   source: 'ghostfolio' | 'moomoo_live' | 'moomoo_paper'
@@ -132,11 +133,11 @@ interface GhostfolioSlice {
   status: GhostfolioStatus
 }
 
-// Tool name candidates the ghostfolio-mcp server might expose. The exact
-// names vary between MCP server implementations; we probe in order and
-// take the first successful response.
-const GHOSTFOLIO_HOLDINGS_TOOL_CANDIDATES = ['holdings', 'getHoldings', 'getPortfolioDetails', 'portfolio', 'getPortfolio']
-const GHOSTFOLIO_PERFORMANCE_TOOL_CANDIDATES = ['performance', 'getPerformance', 'getPortfolioPerformance']
+// Verified against the user's mhajder/ghostfolio-mcp server. Older Ghostfolio
+// MCP forks may use camelCase aliases — we keep those as fallbacks but try
+// the canonical snake_case names first.
+const GHOSTFOLIO_HOLDINGS_TOOL_CANDIDATES = ['get_portfolio_holdings', 'getHoldings', 'holdings']
+const GHOSTFOLIO_DETAILS_TOOL_CANDIDATES = ['get_portfolio_details', 'getPortfolioDetails']
 
 async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
   const status = await getGhostfolioStatus()
@@ -144,7 +145,9 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
     return { positions: [], total_market_value: 0, net_worth_total: null, status }
   }
 
-  const bare = stripMarketPrefix(symbol)
+  // Ghostfolio uses Yahoo-style symbols (NVDA, 0700.HK, 600519.SS, 0828EA.KL).
+  // Translate the moomoo input to that format for matching.
+  const targetYf = toYahooSymbol(symbol)
   let raw: unknown = null
   let lastErr: unknown = null
 
@@ -162,14 +165,10 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
     return { positions: [], total_market_value: 0, net_worth_total: null, status: 'failing' }
   }
 
-  // Try common shapes: { holdings: [...] }, { positions: [...] }, [...] directly,
-  // or { items: [...] }. Each holding may use { symbol, quantity, marketValue, ... }
-  // or { code, qty, market_val, ... }.
   let holdingsArr: unknown[] = []
   if (Array.isArray(raw)) holdingsArr = raw
   else if (isRecord(raw)) {
-    const candidates = ['holdings', 'positions', 'items', 'data']
-    for (const k of candidates) {
+    for (const k of ['holdings', 'positions', 'items', 'data']) {
       if (Array.isArray(raw[k])) {
         holdingsArr = raw[k] as unknown[]
         break
@@ -177,23 +176,26 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
     }
   }
 
+  // Net worth lives in get_portfolio_details.summary.totalValueInBaseCurrency.
+  // Fall back to currentValueInBaseCurrency / fireWealth.today if missing.
   let netWorthTotal: number | null = null
-  if (isRecord(raw)) {
-    netWorthTotal = toNumber(raw.netWorth) ?? toNumber(raw.totalValue) ?? toNumber(raw.total_value) ?? toNumber(raw.value) ?? null
-  }
-
-  // If we didn't find net worth in the holdings response, probe a performance/summary tool.
-  if (netWorthTotal == null) {
-    for (const name of GHOSTFOLIO_PERFORMANCE_TOOL_CANDIDATES) {
-      try {
-        const perf = await callGhostfolioTool(name, {})
-        if (isRecord(perf)) {
-          netWorthTotal = toNumber(perf.netWorth) ?? toNumber(perf.totalValue) ?? toNumber(perf.value) ?? null
+  for (const name of GHOSTFOLIO_DETAILS_TOOL_CANDIDATES) {
+    try {
+      const details = await callGhostfolioTool(name, {})
+      if (isRecord(details)) {
+        const summary = isRecord(details.summary) ? details.summary : null
+        if (summary) {
+          netWorthTotal = toNumber(summary.totalValueInBaseCurrency)
+            ?? toNumber(summary.currentValueInBaseCurrency)
+            ?? null
+          if (netWorthTotal == null && isRecord(summary.fireWealth) && isRecord(summary.fireWealth.today)) {
+            netWorthTotal = toNumber(summary.fireWealth.today.valueInBaseCurrency)
+          }
           if (netWorthTotal != null) break
         }
-      } catch {
-        // ignore — net worth is best-effort
       }
+    } catch {
+      // best-effort
     }
   }
 
@@ -202,15 +204,16 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
   for (const h of holdingsArr) {
     if (!isRecord(h)) continue
     const sym = String(h.symbol ?? h.code ?? h.ticker ?? '')
-    if (!sym) continue
-    if (stripMarketPrefix(sym) !== bare) continue
+    if (!sym || sym !== targetYf) continue
 
     const qty = toNumber(h.quantity) ?? toNumber(h.qty) ?? 0
-    const mv = toNumber(h.marketValue) ?? toNumber(h.market_val) ?? toNumber(h.value) ?? null
-    const avg = toNumber(h.averagePrice) ?? toNumber(h.avgPrice) ?? toNumber(h.cost_price) ?? null
-    const cur = toNumber(h.marketPrice) ?? toNumber(h.currentPrice) ?? toNumber(h.current_price) ?? null
-    const pnlPct = toNumber(h.netPerformancePercent) ?? toNumber(h.pl_ratio) ?? null
-    const acct = String(h.account ?? h.accountName ?? h.platform ?? 'Ghostfolio')
+    const mv = toNumber(h.valueInBaseCurrency) ?? toNumber(h.marketValue) ?? toNumber(h.value) ?? null
+    const investment = toNumber(h.investment)
+    const avg = qty > 0 && investment != null ? investment / qty : null
+    const cur = toNumber(h.marketPrice) ?? toNumber(h.currentPrice) ?? null
+    const pnlPctRaw = toNumber(h.netPerformancePercent) ?? toNumber(h.netPerformancePercentWithCurrencyEffect)
+    // Ghostfolio returns 0.4753 for "+47.53%"; normalize to percent for display.
+    const pnlPct = pnlPctRaw != null ? pnlPctRaw * 100 : null
 
     positions.push({
       source: 'ghostfolio',
@@ -220,7 +223,7 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
       current_price: cur,
       market_value: mv,
       unrealized_pnl_pct: pnlPct,
-      account_label: acct === 'Ghostfolio' ? 'Ghostfolio' : `Ghostfolio — ${acct}`,
+      account_label: String(h.name ?? 'Ghostfolio'),
     })
     if (mv != null) totalMv += mv
   }
