@@ -26,7 +26,7 @@ interface WorkflowRun {
 const symbolFilter = ref('')
 const expanded = ref<Set<number>>(new Set())
 
-const { data, refresh, pending } = await useFetch<{ runs: WorkflowRun[] }>('/api/research/runs', {
+const { data, refresh, pending } = useLazyFetch<{ runs: WorkflowRun[] }>('/api/research/runs', {
   query: { limit: 50 },
   default: () => ({ runs: [] }),
 })

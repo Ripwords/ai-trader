@@ -6,7 +6,7 @@ import type { FullPortfolio, FullPortfolioPosition } from '../../../server/lib/h
 
 useHead({ title: 'portfolio' })
 
-const { data, pending, error, refresh } = await useFetch<FullPortfolio>('/api/portfolio', {
+const { data, pending, error, refresh } = useLazyFetch<FullPortfolio>('/api/portfolio', {
   // We never want stale data here — the user just clicked into "portfolio" to
   // see a fresh number, not yesterday's cache.
   server: true,

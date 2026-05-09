@@ -148,29 +148,31 @@ async function synthesize() {
             </UButton>
           </div>
 
-          <div class="grid grid-cols-2 gap-6">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div>
               <div class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)] mb-3">analysts</div>
-              <div class="flex flex-wrap gap-3">
-                <UCheckbox
+              <div class="flex flex-wrap gap-2">
+                <button
                   v-for="a in ANALYSTS"
                   :key="a.value"
-                  :model-value="selectedAnalysts.includes(a.value)"
-                  :label="a.label"
-                  @update:model-value="toggleAnalyst(a.value)"
-                />
+                  type="button"
+                  class="chip"
+                  :class="{ 'is-on': selectedAnalysts.includes(a.value) }"
+                  @click="toggleAnalyst(a.value)"
+                >{{ a.label }}</button>
               </div>
             </div>
             <div>
               <div class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)] mb-3">personas <span class="opacity-60">(optional)</span></div>
-              <div class="flex flex-wrap gap-3">
-                <UCheckbox
+              <div class="flex flex-wrap gap-2">
+                <button
                   v-for="p in PERSONAS"
                   :key="p.value"
-                  :model-value="selectedPersonas.includes(p.value)"
-                  :label="p.label"
-                  @update:model-value="togglePersona(p.value)"
-                />
+                  type="button"
+                  class="chip"
+                  :class="{ 'is-on': selectedPersonas.includes(p.value) }"
+                  @click="togglePersona(p.value)"
+                >{{ p.label }}</button>
               </div>
             </div>
           </div>
@@ -232,3 +234,25 @@ async function synthesize() {
     </main>
   </div>
 </template>
+
+<style scoped>
+.chip {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--hairline, rgba(255,245,230,0.12));
+  border-radius: 6px;
+  color: var(--paper-2);
+  background: transparent;
+  transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+  cursor: pointer;
+}
+.chip:hover { border-color: var(--paper-3); color: var(--paper-0); }
+.chip.is-on {
+  color: #07080a;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.chip.is-on:hover { background: #b88a4f; border-color: #b88a4f; }
+</style>

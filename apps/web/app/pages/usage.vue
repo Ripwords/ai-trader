@@ -44,7 +44,7 @@ interface UsageResponse {
   recent: UsageRow[]
 }
 
-const { data, pending, error, refresh } = await useFetch<UsageResponse>('/api/usage')
+const { data, pending, error, refresh } = useLazyFetch<UsageResponse>('/api/usage')
 
 const maxCost = computed(() => {
   const rows = data.value?.summary.bySource ?? []
