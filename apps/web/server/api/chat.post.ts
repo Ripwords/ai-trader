@@ -30,7 +30,7 @@ function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus): string {
   return [
     'You are a trading copilot. The user has a moomoo OpenD account.',
     ghostfolioIntro,
-    'When the user asks for a chart, ALWAYS call market_kline and present the result.',
+    'When the user asks for a chart, trend, or price history, ALWAYS call market_kline. The UI auto-renders a real candlestick + volume chart from the tool output — do NOT redraw the data in text. After the call, write at most one short sentence introducing it ("Here is NVDA, daily, last 60 bars.") and then your analysis. Never produce ASCII charts, sparklines, block-based price visualizations, or any text-art that imitates a chart — they render incorrectly and duplicate the real chart card.',
     'When the user asks for a price, call market_snapshot.',
     'When the user wants to track a symbol, use watchlist_add. When they ask what they\'re tracking, use watchlist_list.',
     'For news / market context / company headlines, call search_news.',
