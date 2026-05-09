@@ -1,6 +1,6 @@
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, sql } from 'drizzle-orm'
 import { getDb } from '../../db/client'
-import { chatMessages, chatThreads, researchSignals, users, workflowRuns } from '../../db/schema'
+import { chatMessages, chatThreads, llmUsage, researchSignals, users, workflowRuns } from '../../db/schema'
 
 const SINGLE_USER_NAME = 'owner'
 
@@ -255,4 +255,158 @@ export async function listWorkflowRuns(
     return mapped.filter(r => r.inputSummary.symbol === opts.symbol)
   }
   return mapped
+}
+
+export interface LlmUsageInput {
+  source: string
+  modelSpec: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  estimatedCostUsd: number
+}
+
+export interface LlmUsageRow {
+  id: number
+  source: string
+  modelSpec: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  estimatedCostUsd: number
+  ts: Date
+}
+
+export interface LlmUsageBreakdownRow {
+  source: string
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  estimatedCostUsd: number
+}
+
+export interface LlmUsageSummary {
+  totals: {
+    today: { calls: number; totalTokens: number; estimatedCostUsd: number }
+    week: { calls: number; totalTokens: number; estimatedCostUsd: number }
+    month: { calls: number; totalTokens: number; estimatedCostUsd: number }
+    allTime: { calls: number; totalTokens: number; estimatedCostUsd: number }
+  }
+  bySource: LlmUsageBreakdownRow[]
+}
+
+export async function recordLlmUsage(userId: string, input: LlmUsageInput): Promise<number> {
+  const db = getDb()
+  const inserted = await db
+    .insert(llmUsage)
+    .values({
+      userId,
+      source: input.source,
+      modelSpec: input.modelSpec,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      totalTokens: input.totalTokens,
+      estimatedCostUsd: input.estimatedCostUsd.toString(),
+    })
+    .returning({ id: llmUsage.id })
+  if (!inserted[0]) throw new Error('failed to record llm usage')
+  return inserted[0].id
+}
+
+export async function listLlmUsage(
+  userId: string,
+  opts: { limit?: number; source?: string } = {},
+): Promise<LlmUsageRow[]> {
+  const db = getDb()
+  const filters = [eq(llmUsage.userId, userId)]
+  if (opts.source) filters.push(eq(llmUsage.source, opts.source))
+  const rows = await db
+    .select({
+      id: llmUsage.id,
+      source: llmUsage.source,
+      modelSpec: llmUsage.modelSpec,
+      inputTokens: llmUsage.inputTokens,
+      outputTokens: llmUsage.outputTokens,
+      totalTokens: llmUsage.totalTokens,
+      estimatedCostUsd: llmUsage.estimatedCostUsd,
+      ts: llmUsage.ts,
+    })
+    .from(llmUsage)
+    .where(and(...filters))
+    .orderBy(desc(llmUsage.ts))
+    .limit(opts.limit ?? 100)
+  return rows.map(r => ({
+    id: r.id,
+    source: r.source,
+    modelSpec: r.modelSpec,
+    inputTokens: r.inputTokens,
+    outputTokens: r.outputTokens,
+    totalTokens: r.totalTokens,
+    estimatedCostUsd: Number(r.estimatedCostUsd),
+    ts: r.ts,
+  }))
+}
+
+export async function getLlmUsageSummary(userId: string): Promise<LlmUsageSummary> {
+  const db = getDb()
+  const now = new Date()
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+
+  async function totalsSince(since: Date | null) {
+    const filters = [eq(llmUsage.userId, userId)]
+    if (since) filters.push(gte(llmUsage.ts, since))
+    const rows = await db
+      .select({
+        calls: sql<number>`count(*)::int`,
+        totalTokens: sql<number>`coalesce(sum(${llmUsage.totalTokens}), 0)::int`,
+        estimatedCostUsd: sql<string>`coalesce(sum(${llmUsage.estimatedCostUsd}), 0)::text`,
+      })
+      .from(llmUsage)
+      .where(and(...filters))
+    const r = rows[0]
+    return {
+      calls: Number(r?.calls ?? 0),
+      totalTokens: Number(r?.totalTokens ?? 0),
+      estimatedCostUsd: Number(r?.estimatedCostUsd ?? 0),
+    }
+  }
+
+  const [today, week, month, allTime] = await Promise.all([
+    totalsSince(startOfDay),
+    totalsSince(sevenDaysAgo),
+    totalsSince(thirtyDaysAgo),
+    totalsSince(null),
+  ])
+
+  const breakdown = await db
+    .select({
+      source: llmUsage.source,
+      calls: sql<number>`count(*)::int`,
+      inputTokens: sql<number>`coalesce(sum(${llmUsage.inputTokens}), 0)::int`,
+      outputTokens: sql<number>`coalesce(sum(${llmUsage.outputTokens}), 0)::int`,
+      totalTokens: sql<number>`coalesce(sum(${llmUsage.totalTokens}), 0)::int`,
+      estimatedCostUsd: sql<string>`coalesce(sum(${llmUsage.estimatedCostUsd}), 0)::text`,
+    })
+    .from(llmUsage)
+    .where(and(eq(llmUsage.userId, userId), gte(llmUsage.ts, thirtyDaysAgo)))
+    .groupBy(llmUsage.source)
+
+  const bySource: LlmUsageBreakdownRow[] = breakdown
+    .map(r => ({
+      source: r.source,
+      calls: Number(r.calls),
+      inputTokens: Number(r.inputTokens),
+      outputTokens: Number(r.outputTokens),
+      totalTokens: Number(r.totalTokens),
+      estimatedCostUsd: Number(r.estimatedCostUsd),
+    }))
+    .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
+
+  return {
+    totals: { today, week, month, allTime },
+    bySource,
+  }
 }

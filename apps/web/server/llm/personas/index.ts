@@ -1,5 +1,6 @@
 import { generateObject } from 'ai'
 import { z } from 'zod'
+import { recordUsageSafely } from '../../lib/llm-cost'
 import type { EarningsInfo } from '../../lib/yahoo'
 import { buildModel } from '../model'
 import type { HoldingSummary } from '../../lib/holdings'
@@ -64,12 +65,21 @@ export async function runPersona(
   }
   prompt += '\n\nReturn your signal.'
 
-  const { object } = await generateObject({
+  const { object, usage } = await generateObject({
     model: buildModel(),
     schema: SignalSchema,
     system: persona.prompt,
     prompt,
   })
+  if (usage) {
+    const modelSpec = process.env.LLM_MODEL || 'anthropic/claude-sonnet-4-6'
+    await recordUsageSafely({
+      source: `persona:${persona.id}`,
+      modelSpec,
+      inputTokens: usage.inputTokens ?? 0,
+      outputTokens: usage.outputTokens ?? 0,
+    })
+  }
   return { source: `persona:${persona.id}`, symbol, ...object }
 }
 

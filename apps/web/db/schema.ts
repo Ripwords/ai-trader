@@ -127,3 +127,20 @@ export const workflowRuns = pgTable('workflow_runs', {
   errorMessage: text('error_message'),
   startedAt: timestamp('started_at').defaultNow().notNull(),
 })
+
+// Per-call LLM token usage + estimated USD cost. One row per chat turn or
+// persona generateObject call. `source` distinguishes 'chat' from
+// 'persona:<id>'. `modelSpec` is the LLM_MODEL spec string at call time.
+export const llmUsage = pgTable('llm_usage', {
+  id: serial('id').primaryKey(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  source: varchar('source', { length: 64 }).notNull(),
+  modelSpec: varchar('model_spec', { length: 64 }).notNull(),
+  inputTokens: integer('input_tokens').notNull(),
+  outputTokens: integer('output_tokens').notNull(),
+  totalTokens: integer('total_tokens').notNull(),
+  estimatedCostUsd: numeric('estimated_cost_usd', { precision: 12, scale: 6 }).notNull().default('0'),
+  ts: timestamp('ts').defaultNow().notNull(),
+})

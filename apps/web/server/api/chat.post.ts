@@ -134,8 +134,23 @@ export default defineEventHandler(async (event) => {
   setResponseHeader(event, 'Access-Control-Expose-Headers', 'X-Chat-Id')
 
   // Persist the full assistant response when streaming completes.
+  const modelSpec = process.env.LLM_MODEL || 'anthropic/claude-sonnet-4-6'
   return result.toUIMessageStreamResponse({
     onFinish: async ({ messages: finalMessages }) => {
+      try {
+        const totalUsage = await result.totalUsage
+        if (totalUsage) {
+          const { recordUsageSafely } = await import('../lib/llm-cost')
+          await recordUsageSafely({
+            source: 'chat',
+            modelSpec,
+            inputTokens: totalUsage.inputTokens ?? 0,
+            outputTokens: totalUsage.outputTokens ?? 0,
+          })
+        }
+      } catch (err) {
+        console.error('[chat] usage record failed', err)
+      }
       const assistantOnly = finalMessages.filter(m => m.role === 'assistant')
       if (assistantOnly.length > 0) {
         await appendMessages(threadId!, assistantOnly as unknown as Parameters<typeof appendMessages>[1])

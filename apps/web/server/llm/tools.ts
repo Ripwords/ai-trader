@@ -351,6 +351,17 @@ export function makeTools(client: ApiClient) {
         return { ok: true, rate, converted: amount * rate, from, to }
       },
     }),
+
+    'usage_summary': tool({
+      description:
+        'Recent LLM usage summary: total cost today/week, breakdown by source. Use when the user asks "how much have I spent" or "is research expensive".',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getLlmUsageSummary, getOwnerId } = await import('../db/repo')
+        const ownerId = await getOwnerId()
+        return getLlmUsageSummary(ownerId)
+      },
+    }),
   }
 }
 
