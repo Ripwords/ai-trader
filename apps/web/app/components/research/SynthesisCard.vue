@@ -1,7 +1,24 @@
 <script setup lang="ts">
+import { reactive } from 'vue'
 import type { Decision, DecisionAction } from '../../../types/research'
 
+interface PlaceOrderResponse {
+  ok: true
+  order: {
+    order_id: string
+    code: string
+    side: 'BUY' | 'SELL'
+    qty: number
+    price: number
+    status: string
+    trd_env: 'SIMULATE' | 'REAL'
+    acc_id: string
+  }
+}
+
 const props = defineProps<{ decisions: Decision[] }>()
+const toast = useToast()
+const inFlight = reactive<Set<string>>(new Set())
 
 function actionColor(action: DecisionAction): 'success' | 'error' | 'warning' | 'neutral' {
   switch (action) {
@@ -22,6 +39,62 @@ function pct(n: number): string {
   const v = n <= 1 ? n * 100 : n
   return `${Math.max(0, Math.min(100, Math.round(v)))}%`
 }
+
+function paperSide(action: DecisionAction): 'BUY' | 'SELL' | null {
+  switch (action) {
+    case 'buy':
+    case 'cover':
+      return 'BUY'
+    case 'sell':
+    case 'short':
+      return 'SELL'
+    default:
+      return null
+  }
+}
+
+async function sendToPaper(d: Decision): Promise<void> {
+  if (inFlight.has(d.symbol)) return
+  const side = paperSide(d.action)
+  if (!side) return
+  inFlight.add(d.symbol)
+  try {
+    const res = await $fetch<PlaceOrderResponse>('/api/research/send-to-paper', {
+      method: 'POST',
+      body: { symbol: d.symbol, action: d.action, quantity: d.quantity },
+    })
+    toast.add({
+      title: 'Paper order placed',
+      description: `${res.order.side} ${res.order.qty} ${res.order.code}`,
+      color: 'success',
+      icon: 'i-lucide-check-circle',
+    })
+  } catch (err: unknown) {
+    const message = extractErrorMessage(err)
+    toast.add({
+      title: 'Paper order failed',
+      description: message,
+      color: 'error',
+      icon: 'i-lucide-alert-triangle',
+    })
+  } finally {
+    inFlight.delete(d.symbol)
+  }
+}
+
+function extractErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const e = err as { data?: { statusMessage?: string; message?: string }; statusMessage?: string; message?: string }
+    return (
+      e.data?.statusMessage
+      || e.data?.message
+      || e.statusMessage
+      || e.message
+      || 'unknown error'
+    )
+  }
+  return String(err)
+}
 </script>
 
 <template>
@@ -36,17 +109,18 @@ function pct(n: number): string {
     </div>
 
     <div v-else>
-      <div class="grid grid-cols-[1fr_0.7fr_0.6fr_0.7fr_2.5fr] gap-3 px-5 py-3 font-mono text-xs uppercase tracking-[0.15em] text-[var(--paper-3)] border-b hairline">
+      <div class="grid grid-cols-[1fr_0.7fr_0.6fr_0.7fr_2.2fr_auto] gap-3 px-5 py-3 font-mono text-xs uppercase tracking-[0.15em] text-[var(--paper-3)] border-b hairline">
         <div>symbol</div>
         <div>action</div>
         <div class="text-right">qty</div>
         <div class="text-right">conf</div>
         <div>reasoning</div>
+        <div class="text-right">paper</div>
       </div>
       <div
         v-for="(d, i) in props.decisions"
         :key="i"
-        class="grid grid-cols-[1fr_0.7fr_0.6fr_0.7fr_2.5fr] gap-3 px-5 py-3 border-b hairline last:border-b-0 hover:bg-[var(--ink-2)] transition-colors items-center"
+        class="grid grid-cols-[1fr_0.7fr_0.6fr_0.7fr_2.2fr_auto] gap-3 px-5 py-3 border-b hairline last:border-b-0 hover:bg-[var(--ink-2)] transition-colors items-center"
       >
         <div class="font-mono text-base text-[var(--paper-0)]" data-mono>{{ d.symbol }}</div>
         <div>
@@ -57,6 +131,22 @@ function pct(n: number): string {
         <div class="font-mono text-base text-[var(--paper-2)] text-right" data-mono>{{ d.quantity }}</div>
         <div class="font-mono text-base text-[var(--paper-2)] text-right" data-mono>{{ pct(d.confidence) }}</div>
         <div class="text-sm text-[var(--paper-2)] leading-snug line-clamp-3">{{ d.reasoning }}</div>
+        <div class="text-right">
+          <UButton
+            v-if="paperSide(d.action)"
+            size="xs"
+            color="neutral"
+            variant="outline"
+            icon="i-lucide-send"
+            :loading="inFlight.has(d.symbol)"
+            :disabled="inFlight.has(d.symbol)"
+            class="font-mono text-xs uppercase tracking-[0.15em]"
+            @click="sendToPaper(d)"
+          >
+            Send to paper
+          </UButton>
+          <span v-else class="font-mono text-xs text-[var(--paper-3)]">—</span>
+        </div>
       </div>
     </div>
   </div>
