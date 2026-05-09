@@ -61,7 +61,15 @@ const { event, data, status, close, open } = useEventSource(
   { immediate: false, autoReconnect: false },
 )
 
-const running = computed(() => status.value === 'OPEN' || status.value === 'CONNECTING')
+// VueUse seeds status as 'CONNECTING' on mount even when immediate: false
+// and no URL is set, so we can't derive `running` from it. Track it ourselves.
+const running = ref(false)
+
+// Network drop / server-side close while we still think we're running:
+// flip the flag so the button doesn't get stuck.
+watch(status, (s) => {
+  if (s === 'CLOSED' && running.value) running.value = false
+})
 const total = computed(() => sources.value.length)
 const completed = computed(() =>
   sources.value.filter(s => s.status === 'done' || s.status === 'error').length,
@@ -137,10 +145,12 @@ function runResearch() {
     personas: selectedPersonas.value.join(','),
   })
   url.value = `/api/research/run?${params.toString()}`
+  running.value = true
   open()
 }
 
 function stopResearch() {
+  running.value = false
   close()
   // Mark any still-pending/running source as error so the UI doesn't lie.
   for (const s of sources.value) {
@@ -179,9 +189,11 @@ watch([event, data], ([ev, dat]) => {
     }
     if (payload.fatal) {
       runError.value = payload.message
+      running.value = false
       close()
     }
   } else if (payload.kind === 'done') {
+    running.value = false
     close()
   }
 })
