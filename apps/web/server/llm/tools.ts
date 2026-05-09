@@ -338,6 +338,22 @@ export function makeTools(client: ApiClient) {
         return getHoldingForSymbol(symbol)
       },
     }),
+
+    'convert_fx': tool({
+      description:
+        "Convert an amount between currencies using live Yahoo FX rates (cached 1h). Useful when reasoning across the user's MYR / USD / HKD holdings. Returns the converted amount + the rate used. If the pair can't be resolved, returns rate: null and the agent should explicitly tell the user.",
+      inputSchema: z.object({
+        amount: z.number(),
+        from: z.string().describe('ISO 4217 like USD, MYR, HKD'),
+        to: z.string().describe('ISO 4217 like USD, MYR, HKD'),
+      }),
+      execute: async ({ amount, from, to }) => {
+        const { getFxRate } = await import('../lib/yahoo')
+        const rate = await getFxRate(from, to)
+        if (rate == null) return { ok: false, rate: null, converted: null, from, to }
+        return { ok: true, rate, converted: amount * rate, from, to }
+      },
+    }),
   }
 }
 

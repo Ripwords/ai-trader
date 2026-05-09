@@ -284,7 +284,6 @@ export async function getEarningsInfo(symbol: string): Promise<EarningsInfo> {
     }
 
     const history = q.earningsHistory?.history ?? []
-    // Most recent quarter is typically the last entry (Yahoo orders chronologically)
     const last = history.length > 0 ? history[history.length - 1] : null
     const lastQuarter = last?.quarter ? new Date(last.quarter) : null
     const last_earnings_date = lastQuarter && !Number.isNaN(lastQuarter.getTime())
@@ -302,5 +301,28 @@ export async function getEarningsInfo(symbol: string): Promise<EarningsInfo> {
   } catch (err) {
     console.error('[yahoo] getEarningsInfo failed', symbol, err)
     return { ...EMPTY_EARNINGS }
+  }
+}
+
+const FX_CACHE = new Map<string, { rate: number; expires: number }>()
+const FX_TTL_MS = 60 * 60 * 1000
+
+export async function getFxRate(from: string, to: string): Promise<number | null> {
+  const fromU = from.toUpperCase().trim()
+  const toU = to.toUpperCase().trim()
+  if (fromU === toU) return 1
+  const key = `${fromU}_${toU}`
+  const cached = FX_CACHE.get(key)
+  if (cached && cached.expires > Date.now()) return cached.rate
+  const pair = `${fromU}${toU}=X`
+  try {
+    const q = await yahoo.quote(pair)
+    const rate = num((q as { regularMarketPrice?: unknown }).regularMarketPrice)
+    if (rate == null || rate <= 0) return null
+    FX_CACHE.set(key, { rate, expires: Date.now() + FX_TTL_MS })
+    return rate
+  } catch (err) {
+    console.error('[yahoo] getFxRate failed', from, to, err)
+    return null
   }
 }
