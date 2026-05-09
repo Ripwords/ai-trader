@@ -129,24 +129,26 @@ onBeforeUnmount(() => {
 
     <Transition name="menu">
       <div v-if="open && hits.length > 0" class="sym-menu" role="listbox">
-        <button
-          v-for="(h, i) in hits"
-          :key="`${h.yahoo}-${i}`"
-          type="button"
-          class="sym-row"
-          :class="{ 'is-cursor': cursor === i, 'is-untradable': !h.moomoo }"
-          role="option"
-          :aria-selected="cursor === i"
-          @mousedown.prevent="pick(h)"
-          @mouseenter="cursor = i"
-        >
-          <span class="sym-row-sym">{{ h.moomoo ?? h.yahoo }}</span>
-          <span class="sym-row-name">{{ h.name }}</span>
-          <span class="sym-row-meta">
-            <span>{{ h.exchange }}</span>
-            <span class="sym-row-type">{{ h.type }}</span>
-          </span>
-        </button>
+        <div class="sym-rows">
+          <button
+            v-for="(h, i) in hits"
+            :key="`${h.yahoo}-${i}`"
+            type="button"
+            class="sym-row"
+            :class="{ 'is-cursor': cursor === i, 'is-untradable': !h.moomoo }"
+            role="option"
+            :aria-selected="cursor === i"
+            @mousedown.prevent="pick(h)"
+            @mouseenter="cursor = i"
+          >
+            <span class="sym-row-sym">{{ h.moomoo ?? h.yahoo }}</span>
+            <span class="sym-row-name">{{ h.name }}</span>
+            <span class="sym-row-meta">
+              <span>{{ h.exchange }}</span>
+              <span class="sym-row-type">{{ h.type }}</span>
+            </span>
+          </button>
+        </div>
         <div class="sym-foot">↑↓ to navigate · enter to pick · esc to close</div>
       </div>
     </Transition>
@@ -204,6 +206,13 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
   max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sym-rows {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -262,6 +271,7 @@ onBeforeUnmount(() => {
 .sym-row-type { opacity: 0.6; font-size: 0.55rem; }
 
 .sym-foot {
+  flex-shrink: 0;
   padding: 0.5rem 0.85rem;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.6rem;
