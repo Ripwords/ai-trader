@@ -60,6 +60,7 @@ function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus): string {
     '- research_ticker is a lighter multi-perspective pass — pick a subset of analysts/personas, get raw signals back without the synthesis step. Use when the user wants a quick read or specific personas only.',
     '- Default research_ticker to 3 personas (buffett, burry, wood) for a balanced read; ask before running all 5 (cost).',
     '- synthesize_decisions takes signals (or fetches fresh ones) and produces trade recommendations with risk-managed sizing. Read-only — never auto-places orders. Use after research_ticker when the user asks "what should I do" or "size this for me".',
+    '- holdings_context returns the user\'s current position for a symbol across Ghostfolio + Moomoo (paper + live). Call it when the user asks "what\'s my X exposure" or before suggesting a trade size — never recommend buying without checking allocation first if the user has Ghostfolio configured.',
     '',
     'Never invent symbols — ask if unsure. The lookup table below is authoritative for common names.',
     '',

@@ -325,6 +325,18 @@ export function makeTools(client: ApiClient) {
         return result.result
       },
     }),
+
+    'holdings_context': tool({
+      description:
+        "Get the user's current holdings for a symbol across both Ghostfolio (cross-broker truth) and Moomoo (paper + live). Returns positions per source, total quantity, allocation % of net worth, unrealized P&L, and available cash. Use when the user asks vague questions like 'what's my NVDA exposure', 'do I already own X', or before recommending a trade size. If Ghostfolio is misconfigured the response will indicate that explicitly via ghostfolio_status — surface it to the user.",
+      inputSchema: z.object({
+        symbol: z.string().describe('moomoo-style symbol like US.NVDA'),
+      }),
+      execute: async ({ symbol }) => {
+        const { getHoldingForSymbol } = await import('../lib/holdings')
+        return getHoldingForSymbol(symbol)
+      },
+    }),
   }
 }
 
