@@ -317,3 +317,307 @@ export async function getPaperPortfolioSlice(): Promise<PaperPortfolioSlice> {
     paper_positions_by_symbol: slice.paper_positions_by_symbol,
   }
 }
+
+// ---------------------------------------------------------------------------
+// Full portfolio aggregator (cross-broker). Powers the /portfolio page so the
+// user doesn't need to leave the app to check Ghostfolio.
+// ---------------------------------------------------------------------------
+
+export interface FullPortfolioAccount {
+  name: string
+  platform: string | null
+  currency: string
+  balance: number
+  value_in_base: number
+}
+
+export interface FullPortfolioPosition {
+  symbol: string
+  name: string
+  quantity: number
+  market_price: number
+  market_value: number
+  investment: number
+  allocation_pct: number
+  pnl_pct: number
+  asset_class: string
+  sectors: string[]
+  currency: string
+}
+
+export interface FullPortfolioMoomooPosition {
+  symbol: string
+  quantity: number
+  market_value: number
+  pnl_pct: number
+  account_id: string
+}
+
+export interface FullPortfolio {
+  net_worth_total: number | null
+  net_worth_currency: string
+  cash_total: number | null
+  positions_value: number | null
+  total_pnl_pct: number | null
+  accounts: FullPortfolioAccount[]
+  positions: FullPortfolioPosition[]
+  moomoo_paper: FullPortfolioMoomooPosition[]
+  moomoo_live: FullPortfolioMoomooPosition[]
+  ghostfolio_status: GhostfolioStatus
+}
+
+interface GhostfolioFullSlice {
+  status: GhostfolioStatus
+  net_worth_total: number | null
+  net_worth_currency: string
+  cash_total: number | null
+  positions_value: number | null
+  total_pnl_pct: number | null
+  accounts: FullPortfolioAccount[]
+  positions: FullPortfolioPosition[]
+}
+
+const EMPTY_GHOSTFOLIO_SLICE: GhostfolioFullSlice = {
+  status: 'not_configured',
+  net_worth_total: null,
+  net_worth_currency: 'MYR',
+  cash_total: null,
+  positions_value: null,
+  total_pnl_pct: null,
+  accounts: [],
+  positions: [],
+}
+
+function toStringArray(x: unknown): string[] {
+  if (!Array.isArray(x)) return []
+  const out: string[] = []
+  for (const v of x) {
+    if (typeof v === 'string' && v) out.push(v)
+    else if (isRecord(v) && typeof v.name === 'string' && v.name) out.push(v.name)
+  }
+  return out
+}
+
+async function fetchGhostfolioFullSlice(): Promise<GhostfolioFullSlice> {
+  const status = await getGhostfolioStatus()
+  if (status !== 'ok') {
+    return { ...EMPTY_GHOSTFOLIO_SLICE, status }
+  }
+
+  // get_portfolio_details — top-line summary
+  let netWorthTotal: number | null = null
+  let cashTotal: number | null = null
+  let positionsValue: number | null = null
+  let totalPnlPct: number | null = null
+  let baseCurrency = 'MYR'
+  for (const name of GHOSTFOLIO_DETAILS_TOOL_CANDIDATES) {
+    try {
+      const details = await callGhostfolioTool(name, {})
+      if (!isRecord(details)) continue
+      const summary = isRecord(details.summary) ? details.summary : null
+      if (!summary) continue
+      netWorthTotal = toNumber(summary.totalValueInBaseCurrency)
+        ?? toNumber(summary.currentValueInBaseCurrency)
+        ?? (isRecord(summary.fireWealth) && isRecord(summary.fireWealth.today)
+          ? toNumber(summary.fireWealth.today.valueInBaseCurrency)
+          : null)
+      cashTotal = toNumber(summary.cash)
+      // positions_value = currentValueInBaseCurrency typically excludes cash;
+      // fall back to (net_worth - cash) if not directly reported.
+      positionsValue = toNumber(summary.currentValueInBaseCurrency)
+      if (positionsValue == null && netWorthTotal != null && cashTotal != null) {
+        positionsValue = netWorthTotal - cashTotal
+      }
+      const pnlRaw = toNumber(summary.netPerformancePercent)
+        ?? toNumber(summary.netPerformancePercentWithCurrencyEffect)
+      totalPnlPct = pnlRaw != null ? pnlRaw * 100 : null
+      const cur = typeof summary.baseCurrency === 'string' ? summary.baseCurrency : null
+      if (cur) baseCurrency = cur
+      if (netWorthTotal != null) break
+    } catch {
+      // best-effort
+    }
+  }
+
+  // get_accounts — per-account balances + platform
+  const accounts: FullPortfolioAccount[] = []
+  for (const name of GHOSTFOLIO_ACCOUNTS_TOOL_CANDIDATES) {
+    try {
+      const acctRes = await callGhostfolioTool(name, {})
+      const acctList: unknown = isRecord(acctRes)
+        ? (Array.isArray(acctRes.accounts) ? acctRes.accounts : null)
+        : (Array.isArray(acctRes) ? acctRes : null)
+      if (!Array.isArray(acctList)) continue
+      for (const a of acctList) {
+        if (!isRecord(a)) continue
+        const accName = typeof a.name === 'string' ? a.name : ''
+        if (!accName) continue
+        const platformRec = isRecord(a.platform) ? a.platform : null
+        const platform = platformRec && typeof platformRec.name === 'string' ? platformRec.name : null
+        const currency = typeof a.currency === 'string' ? a.currency : baseCurrency
+        const balance = toNumber(a.balance) ?? 0
+        const valueInBase = toNumber(a.valueInBaseCurrency) ?? toNumber(a.value) ?? balance
+        accounts.push({
+          name: accName,
+          platform,
+          currency,
+          balance,
+          value_in_base: valueInBase,
+        })
+      }
+      if (accounts.length > 0) break
+    } catch {
+      // best-effort
+    }
+  }
+
+  // get_portfolio_holdings — every position
+  let raw: unknown = null
+  for (const name of GHOSTFOLIO_HOLDINGS_TOOL_CANDIDATES) {
+    try {
+      raw = await callGhostfolioTool(name, {})
+      if (raw) break
+    } catch {
+      // best-effort — fall through to next candidate
+    }
+  }
+  let holdingsArr: unknown[] = []
+  if (Array.isArray(raw)) holdingsArr = raw
+  else if (isRecord(raw)) {
+    for (const k of ['holdings', 'positions', 'items', 'data']) {
+      if (Array.isArray(raw[k])) {
+        holdingsArr = raw[k] as unknown[]
+        break
+      }
+    }
+  }
+
+  const positions: FullPortfolioPosition[] = []
+  for (const h of holdingsArr) {
+    if (!isRecord(h)) continue
+    const sym = String(h.symbol ?? h.code ?? h.ticker ?? '')
+    if (!sym) continue
+    const qty = toNumber(h.quantity) ?? toNumber(h.qty) ?? 0
+    const mv = toNumber(h.valueInBaseCurrency) ?? toNumber(h.marketValue) ?? toNumber(h.value) ?? 0
+    const investment = toNumber(h.investment) ?? 0
+    const marketPrice = toNumber(h.marketPrice) ?? toNumber(h.currentPrice) ?? 0
+    const allocRaw = toNumber(h.allocationInPercentage)
+    // Ghostfolio returns 0..1 fractions for percentages. Normalize to 0..100.
+    const allocPct = allocRaw != null
+      ? (allocRaw <= 1 ? allocRaw * 100 : allocRaw)
+      : 0
+    const pnlRaw = toNumber(h.netPerformancePercent)
+      ?? toNumber(h.netPerformancePercentWithCurrencyEffect)
+      ?? 0
+    const pnlPct = pnlRaw <= 1 && pnlRaw >= -1 ? pnlRaw * 100 : pnlRaw
+    positions.push({
+      symbol: sym,
+      name: typeof h.name === 'string' ? h.name : sym,
+      quantity: qty,
+      market_price: marketPrice,
+      market_value: mv,
+      investment,
+      allocation_pct: allocPct,
+      pnl_pct: pnlPct,
+      asset_class: typeof h.assetClass === 'string' ? h.assetClass : 'UNKNOWN',
+      sectors: toStringArray(h.sectors),
+      currency: typeof h.currency === 'string' ? h.currency : baseCurrency,
+    })
+  }
+
+  return {
+    status: 'ok',
+    net_worth_total: netWorthTotal,
+    net_worth_currency: baseCurrency,
+    cash_total: cashTotal,
+    positions_value: positionsValue,
+    total_pnl_pct: totalPnlPct,
+    accounts,
+    positions,
+  }
+}
+
+interface MoomooFullSlice {
+  paper: FullPortfolioMoomooPosition[]
+  live: FullPortfolioMoomooPosition[]
+}
+
+async function fetchMoomooFullSlice(): Promise<MoomooFullSlice> {
+  const empty: MoomooFullSlice = { paper: [], live: [] }
+  let client: ReturnType<typeof getApiClient>
+  try {
+    client = getApiClient()
+  } catch {
+    return empty
+  }
+
+  let accounts: Account[]
+  try {
+    accounts = await client.listAccounts()
+  } catch (err) {
+    console.warn('[holdings] moomoo listAccounts failed:', err instanceof Error ? err.message : String(err))
+    return empty
+  }
+
+  const tradingAccounts = accounts.filter(a => a.acc_role !== 'IPO')
+  const out: MoomooFullSlice = { paper: [], live: [] }
+
+  await Promise.all(
+    tradingAccounts.map(async (acc) => {
+      try {
+        const portfolio: Portfolio = await client.getPortfolio({ acc_id: acc.acc_id, trd_env: acc.trd_env })
+        const isPaper = acc.trd_env === 'SIMULATE'
+        const bucket = isPaper ? out.paper : out.live
+        for (const p of portfolio.positions) {
+          bucket.push({
+            symbol: p.code,
+            quantity: p.qty,
+            market_value: p.market_val ?? 0,
+            pnl_pct: p.pl_ratio ?? 0,
+            account_id: acc.acc_id,
+          })
+        }
+      } catch (err) {
+        console.warn(`[holdings] moomoo getPortfolio failed for ${acc.acc_id}:`, err instanceof Error ? err.message : String(err))
+      }
+    }),
+  )
+
+  return out
+}
+
+/**
+ * Aggregates the user's entire investment picture across Ghostfolio +
+ * Moomoo. Powers the /portfolio page; the agent's `holdings_context` tool
+ * still uses `getHoldingForSymbol` for per-symbol queries.
+ *
+ * Always resolves — partial failure (e.g. Ghostfolio offline) is reflected
+ * via `ghostfolio_status` and an empty positions/accounts list.
+ */
+export async function getFullPortfolio(): Promise<FullPortfolio> {
+  const [ghosRes, moomooRes] = await Promise.allSettled([
+    fetchGhostfolioFullSlice(),
+    fetchMoomooFullSlice(),
+  ])
+
+  const ghos: GhostfolioFullSlice = ghosRes.status === 'fulfilled'
+    ? ghosRes.value
+    : { ...EMPTY_GHOSTFOLIO_SLICE, status: 'failing' }
+
+  const moomoo: MoomooFullSlice = moomooRes.status === 'fulfilled'
+    ? moomooRes.value
+    : { paper: [], live: [] }
+
+  return {
+    net_worth_total: ghos.net_worth_total,
+    net_worth_currency: ghos.net_worth_currency,
+    cash_total: ghos.cash_total,
+    positions_value: ghos.positions_value,
+    total_pnl_pct: ghos.total_pnl_pct,
+    accounts: ghos.accounts,
+    positions: ghos.positions,
+    moomoo_paper: moomoo.paper,
+    moomoo_live: moomoo.live,
+    ghostfolio_status: ghos.status,
+  }
+}
