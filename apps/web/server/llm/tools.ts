@@ -335,7 +335,6 @@ export function makeTools(client: ApiClient) {
         return getHoldingForSymbol(symbol)
       },
     }),
-
     'convert_fx': tool({
       description:
         "Convert an amount between currencies using live Yahoo FX rates (cached 1h). Useful when reasoning across the user's MYR / USD / HKD holdings. Returns the converted amount + the rate used. If the pair can't be resolved, returns rate: null and the agent should explicitly tell the user.",

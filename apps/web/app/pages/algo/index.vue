@@ -1,4 +1,6 @@
 <script setup lang="ts">
+
+definePageMeta({ section: 'algo' })
 import { ref } from 'vue'
 import type { AlgoState, AlgoStrategy, AlgoCadence } from '../../../server/llm/http'
 
@@ -69,12 +71,9 @@ function fmt(t: string): string {
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-[var(--ink-0)] text-[var(--paper-0)]">
+  <div class="flex-1 flex flex-col min-w-0">
     <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
       <div class="flex items-baseline gap-4">
-        <NuxtLink to="/" class="brand-mark">
-          <span>ai</span><span class="text-[var(--paper-0)]">·trader</span>
-        </NuxtLink>
         <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">algo</span>
       </div>
       <div class="flex items-center gap-5">
@@ -86,9 +85,6 @@ function fmt(t: string): string {
             : 'border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)]'"
           @click="toggleKill"
         >{{ state.kill_active ? '◼ kill active' : '◯ kill switch' }}</button>
-        <NuxtLink to="/" class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]">
-          ← chat
-        </NuxtLink>
         <button
           class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-2 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
           @click="showNew = !showNew"

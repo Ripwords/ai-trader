@@ -1,4 +1,6 @@
 <script setup lang="ts">
+
+definePageMeta({ section: 'research' })
 import { computed, ref } from 'vue'
 import type { SignalDirection } from '../../../types/research'
 
@@ -205,12 +207,9 @@ function toggleExpand(id: number) {
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-[var(--ink-0)] text-[var(--paper-0)]">
+  <div class="flex-1 flex flex-col min-w-0">
     <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
       <div class="flex items-baseline gap-4">
-        <NuxtLink to="/" class="brand-mark">
-          <span>ai</span><span class="text-[var(--paper-0)]">·trader</span>
-        </NuxtLink>
         <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">research</span>
         <span class="font-mono text-xs text-[var(--paper-3)]">/</span>
         <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-1)]" data-mono>{{ symbol }}</span>

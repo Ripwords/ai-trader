@@ -1,4 +1,6 @@
 <script setup lang="ts">
+
+definePageMeta({ section: 'portfolio' })
 import { computed, ref } from 'vue'
 import type { FullPortfolio, FullPortfolioPosition } from '../../../server/lib/holdings'
 
@@ -96,12 +98,9 @@ const baseCcy = computed(() => data.value?.net_worth_currency ?? 'MYR')
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-[var(--ink-0)] text-[var(--paper-0)]">
+  <div class="flex-1 flex flex-col min-w-0">
     <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
       <div class="flex items-baseline gap-4">
-        <NuxtLink to="/" class="brand-mark">
-          <span>ai</span><span class="text-[var(--paper-0)]">·trader</span>
-        </NuxtLink>
         <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">portfolio</span>
       </div>
       <div class="flex items-center gap-5">
@@ -110,9 +109,6 @@ const baseCcy = computed(() => data.value?.net_worth_currency ?? 'MYR')
         </NuxtLink>
         <NuxtLink to="/algo" class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]">
           algo →
-        </NuxtLink>
-        <NuxtLink to="/" class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]">
-          ← chat
         </NuxtLink>
         <button
           class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]"
