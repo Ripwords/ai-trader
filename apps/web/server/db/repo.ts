@@ -1,6 +1,6 @@
 import { and, asc, desc, eq } from 'drizzle-orm'
 import { getDb } from '../../db/client'
-import { chatMessages, chatThreads, researchSignals, users } from '../../db/schema'
+import { chatMessages, chatThreads, researchSignals, users, workflowRuns } from '../../db/schema'
 
 const SINGLE_USER_NAME = 'owner'
 
@@ -167,4 +167,92 @@ export async function listResearchSignals(
     metadata: (r.metadata as Record<string, unknown> | null) ?? null,
     ts: r.ts,
   }))
+}
+
+export interface WorkflowRunStep {
+  id: string
+  status: string
+  ms: number
+  error?: string
+}
+
+export interface WorkflowRunInput {
+  workflowId: string
+  inputSummary: Record<string, unknown>
+  status: 'success' | 'failed'
+  totalMs: number
+  steps: WorkflowRunStep[]
+  errorMessage?: string | null
+}
+
+export interface WorkflowRunRow {
+  id: number
+  workflowId: string
+  inputSummary: Record<string, unknown>
+  status: 'success' | 'failed'
+  totalMs: number
+  steps: WorkflowRunStep[]
+  errorMessage: string | null
+  startedAt: Date
+}
+
+export async function recordWorkflowRun(
+  userId: string,
+  input: WorkflowRunInput,
+): Promise<number> {
+  const db = getDb()
+  const inserted = await db
+    .insert(workflowRuns)
+    .values({
+      userId,
+      workflowId: input.workflowId,
+      inputSummary: input.inputSummary,
+      status: input.status,
+      totalMs: input.totalMs,
+      steps: input.steps,
+      errorMessage: input.errorMessage ?? null,
+    })
+    .returning({ id: workflowRuns.id })
+  if (!inserted[0]) throw new Error('failed to record workflow run')
+  return inserted[0].id
+}
+
+export async function listWorkflowRuns(
+  userId: string,
+  opts: { workflowId?: string; symbol?: string; limit?: number } = {},
+): Promise<WorkflowRunRow[]> {
+  const db = getDb()
+  const filters = [eq(workflowRuns.userId, userId)]
+  if (opts.workflowId) filters.push(eq(workflowRuns.workflowId, opts.workflowId))
+  const rows = await db
+    .select({
+      id: workflowRuns.id,
+      workflowId: workflowRuns.workflowId,
+      inputSummary: workflowRuns.inputSummary,
+      status: workflowRuns.status,
+      totalMs: workflowRuns.totalMs,
+      steps: workflowRuns.steps,
+      errorMessage: workflowRuns.errorMessage,
+      startedAt: workflowRuns.startedAt,
+    })
+    .from(workflowRuns)
+    .where(and(...filters))
+    .orderBy(desc(workflowRuns.startedAt))
+    .limit(opts.limit ?? 50)
+
+  const mapped = rows.map((r): WorkflowRunRow => ({
+    id: r.id,
+    workflowId: r.workflowId,
+    inputSummary: (r.inputSummary as Record<string, unknown> | null) ?? {},
+    status: r.status as 'success' | 'failed',
+    totalMs: r.totalMs,
+    steps: Array.isArray(r.steps) ? (r.steps as WorkflowRunStep[]) : [],
+    errorMessage: r.errorMessage,
+    startedAt: r.startedAt,
+  }))
+
+  if (opts.symbol) {
+    return mapped.filter(r => r.inputSummary.symbol === opts.symbol)
+  }
+  return mapped
 }

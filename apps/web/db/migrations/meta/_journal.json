@@ -29,6 +29,13 @@
 			"when": 1778850000000,
 			"tag": "0003_research_signals",
 			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "7",
+			"when": 1778950000000,
+			"tag": "0004_workflow_runs",
+			"breakpoints": true
 		}
 	]
 }

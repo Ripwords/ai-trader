@@ -311,14 +311,11 @@ export function makeTools(client: ApiClient) {
         symbol: z.string().describe('moomoo-style symbol like US.NVDA'),
       }),
       execute: async ({ symbol }) => {
-        const { analyzeTickerWorkflow } = await import('../mastra')
-        const run = await analyzeTickerWorkflow.createRun()
-        const result = await run.start({
-          inputData: {
-            symbol,
-            analysts: ['fundamentals', 'valuation', 'technicals', 'sentiment'],
-            personas: ['buffett', 'munger', 'burry', 'druckenmiller', 'wood'],
-          },
+        const { runAnalyzeTickerTraced } = await import('../lib/workflow-trace')
+        const result = await runAnalyzeTickerTraced({
+          symbol,
+          analysts: ['fundamentals', 'valuation', 'technicals', 'sentiment'],
+          personas: ['buffett', 'munger', 'burry', 'druckenmiller', 'wood'],
         })
         if (result.status !== 'success') {
           throw new Error(`analyze_ticker workflow status=${result.status}`)

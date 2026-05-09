@@ -110,3 +110,20 @@ export const researchSignals = pgTable('research_signals', {
   metadata: jsonb('metadata'),
   ts: timestamp('ts').defaultNow().notNull(),
 })
+
+// Mastra workflow runs — observability for analyze-ticker (and future
+// workflows). `steps` is the per-step timing breakdown inspected from
+// `result.steps` so /research/runs can show why a slow run was slow.
+export const workflowRuns = pgTable('workflow_runs', {
+  id: serial('id').primaryKey(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  workflowId: varchar('workflow_id', { length: 64 }).notNull(),
+  inputSummary: jsonb('input_summary').notNull(),
+  status: varchar('status', { length: 16 }).notNull(),
+  totalMs: integer('total_ms').notNull(),
+  steps: jsonb('steps').notNull(),
+  errorMessage: text('error_message'),
+  startedAt: timestamp('started_at').defaultNow().notNull(),
+})
