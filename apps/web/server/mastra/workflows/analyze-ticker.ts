@@ -12,6 +12,7 @@ import {
   type InsiderTrade,
   type NewsItem,
 } from '../../lib/yahoo'
+import { getHoldingForSymbol, getPaperPortfolioSlice, type HoldingSummary } from '../../lib/holdings'
 import type { AnalystName, Decision, PersonaName, Signal } from '../../../types/research'
 
 const ANALYSTS = ['fundamentals', 'valuation', 'technicals', 'sentiment'] as const
@@ -52,6 +53,7 @@ const FetchedSchema = InputSchema.extend({
   history: z.array(z.unknown()),
   insider: z.array(z.unknown()),
   news: z.array(z.unknown()),
+  holdings: z.unknown(),
 })
 
 const fetchBundleStep = createStep({
@@ -59,13 +61,14 @@ const fetchBundleStep = createStep({
   inputSchema: InputSchema,
   outputSchema: FetchedSchema,
   execute: async ({ inputData }) => {
-    const [metrics, history, insider, news] = await Promise.all([
+    const [metrics, history, insider, news, holdings] = await Promise.all([
       getFinancialMetrics(inputData.symbol),
       getHistorical(inputData.symbol, 5),
       getInsiderTrades(inputData.symbol, 200),
       getCompanyNews(inputData.symbol, 50),
+      getHoldingForSymbol(inputData.symbol),
     ])
-    return { ...inputData, metrics, history, insider, news }
+    return { ...inputData, metrics, history, insider, news, holdings }
   },
 })
 
@@ -75,12 +78,14 @@ const collectSignalsStep = createStep({
   outputSchema: z.object({
     symbol: z.string(),
     signals: z.array(SignalSchema),
+    holdings: z.unknown(),
   }),
   execute: async ({ inputData }) => {
     const api = getResearchApi()
     const metrics = inputData.metrics as FinancialMetrics
     const insider = inputData.insider as InsiderTrade[]
     const news = inputData.news as NewsItem[]
+    const holdings = inputData.holdings as HoldingSummary
     const bundle = { metrics, history: inputData.history }
 
     const analystResults = await Promise.all(
@@ -105,7 +110,7 @@ const collectSignalsStep = createStep({
         const persona = findPersona(id)
         if (!persona) return null
         try {
-          return await runPersona(persona, inputData.symbol, bundle)
+          return await runPersona(persona, inputData.symbol, bundle, holdings)
         } catch (err) {
           console.error(`[analyze-ticker] persona ${id} failed`, err)
           return null
@@ -114,7 +119,7 @@ const collectSignalsStep = createStep({
     )
 
     const signals = [...analystResults, ...personaResults].filter((s): s is Signal => s !== null)
-    return { symbol: inputData.symbol, signals }
+    return { symbol: inputData.symbol, signals, holdings }
   },
 })
 
@@ -123,10 +128,12 @@ const persistSignalsStep = createStep({
   inputSchema: z.object({
     symbol: z.string(),
     signals: z.array(SignalSchema),
+    holdings: z.unknown(),
   }),
   outputSchema: z.object({
     symbol: z.string(),
     signals: z.array(SignalSchema),
+    holdings: z.unknown(),
   }),
   execute: async ({ inputData }) => {
     const ownerId = await getOwnerId()
@@ -151,6 +158,7 @@ const synthesizeStep = createStep({
   inputSchema: z.object({
     symbol: z.string(),
     signals: z.array(SignalSchema),
+    holdings: z.unknown(),
   }),
   outputSchema: z.object({
     symbol: z.string(),
@@ -158,20 +166,42 @@ const synthesizeStep = createStep({
     decision: DecisionSchema.nullable(),
   }),
   execute: async ({ inputData }) => {
-    if (inputData.signals.length === 0) {
-      return { ...inputData, decision: null }
+    const { signals, holdings: holdingsRaw, symbol } = inputData
+    const holdings = holdingsRaw as HoldingSummary | undefined
+    if (signals.length === 0) {
+      return { symbol, signals, decision: null }
     }
     try {
+      // Use paper cash + paper positions for synthesis sizing — these are
+      // experiment trades (the algo/scheduler path is paper-only, and chat-driven
+      // synthesis is read-only advice). Falls back to ghostfolio net worth, then
+      // to a hardcoded $100k if no broker data is available at all.
+      const paper = await getPaperPortfolioSlice()
+      const hasPaper = paper.cash_paper_usd > 0 || paper.paper_total_value > 0
+      let portfolio: { cash: number; total_value: number; positions: Record<string, number> }
+      if (hasPaper) {
+        const positions: Record<string, number> = { ...paper.paper_positions_by_symbol }
+        portfolio = {
+          cash: paper.cash_paper_usd,
+          total_value: paper.paper_total_value || (paper.cash_paper_usd + Object.values(positions).reduce((a, b) => a + b, 0)),
+          positions,
+        }
+      } else if (holdings?.net_worth_total && holdings.net_worth_total > 0) {
+        portfolio = { cash: 0, total_value: holdings.net_worth_total, positions: {} }
+      } else {
+        portfolio = { cash: 100_000, total_value: 100_000, positions: {} }
+      }
+
       const result = await getResearchApi().synthesizeDecisions({
-        symbols: [inputData.symbol],
-        signals: inputData.signals,
-        portfolio: { cash: 100_000, total_value: 100_000, positions: {} },
+        symbols: [symbol],
+        signals,
+        portfolio,
       })
       const first = (result.decisions ?? [])[0] as Decision | undefined
-      return { ...inputData, decision: first ?? null }
+      return { symbol, signals, decision: first ?? null }
     } catch (err) {
       console.error('[analyze-ticker] synthesis failed', err)
-      return { ...inputData, decision: null }
+      return { symbol, signals, decision: null }
     }
   },
 })

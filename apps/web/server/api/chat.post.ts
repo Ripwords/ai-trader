@@ -7,26 +7,36 @@ import {
   titleFromText,
 } from '../db/repo'
 import { getApiClient } from '../llm/http'
-import { getGhostfolioTools } from '../llm/mcp'
+import { getGhostfolioStatus, getGhostfolioTools, type GhostfolioStatus } from '../llm/mcp'
 import { buildModel } from '../llm/model'
 import { MOOMOO_RULES } from '../llm/moomoo-context'
 import { makeTools } from '../llm/tools'
 
-function buildSystemPrompt(hasGhostfolio: boolean): string {
+function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus): string {
+  const ghostfolioIntro =
+    ghostfolioStatus === 'ok'
+      ? 'Cross-broker portfolio truth lives in Ghostfolio (exposed via ghostfolio_* MCP tools).'
+      : ghostfolioStatus === 'failing'
+        ? 'Ghostfolio is configured but the MCP connection is currently FAILING — ghostfolio_* tools may be missing or unreliable. If the user asks about cross-broker holdings, tell them Ghostfolio is misbehaving and you are falling back to moomoo trade_* tools, and suggest they check the ghostfolio-mcp container.'
+        : 'Ghostfolio cross-broker tools are NOT enabled in this session — do not promise or reference ghostfolio_* tools. If the user asks about cross-broker holdings, say Ghostfolio integration is not currently configured (the user can enable it via `docker compose --profile ghostfolio up` once they set GHOSTFOLIO_URL and GHOSTFOLIO_TOKEN in .env).'
+
+  const holdingsGuidance =
+    ghostfolioStatus === 'ok'
+      ? 'For the user\'s overall holdings ACROSS brokers (the source of truth they care about), prefer the ghostfolio_* tools — Ghostfolio aggregates all their accounts. Use moomoo trade_* tools when they specifically ask about the moomoo account.'
+      : ghostfolioStatus === 'failing'
+        ? 'For portfolio / holdings, fall back to the moomoo trade_* tools and tell the user Ghostfolio (their cross-broker source of truth) is unavailable right now.'
+        : 'For portfolio / holdings, use the moomoo trade_* tools — that\'s the only broker data we have access to right now.'
+
   return [
     'You are a trading copilot. The user has a moomoo OpenD account.',
-    hasGhostfolio
-      ? 'Cross-broker portfolio truth lives in Ghostfolio (exposed via ghostfolio_* MCP tools).'
-      : 'Ghostfolio cross-broker tools are NOT enabled in this session — do not promise or reference ghostfolio_* tools. If the user asks about cross-broker holdings, say Ghostfolio integration is not currently configured (the user can enable it via `docker compose --profile ghostfolio up` once they set GHOSTFOLIO_URL and GHOSTFOLIO_TOKEN in .env).',
+    ghostfolioIntro,
     'When the user asks for a chart, ALWAYS call market_kline and present the result.',
     'When the user asks for a price, call market_snapshot.',
     'When the user wants to track a symbol, use watchlist_add. When they ask what they\'re tracking, use watchlist_list.',
     'For news / market context / company headlines, call search_news.',
     'For general facts or definitions, call search_web.',
     'For their broker-side moomoo account/portfolio/orders/fills: call trade_accounts first to find acc_id, then trade_portfolio / trade_orders / trade_fills.',
-    hasGhostfolio
-      ? 'For the user\'s overall holdings ACROSS brokers (the source of truth they care about), prefer the ghostfolio_* tools — Ghostfolio aggregates all their accounts. Use moomoo trade_* tools when they specifically ask about the moomoo account.'
-      : 'For portfolio / holdings, use the moomoo trade_* tools — that\'s the only broker data we have access to right now.',
+    holdingsGuidance,
     '',
     'TRADE QUERIES (portfolio / orders / fills):',
     '- Default to LIVE (trd_env=REAL) — that\'s the user\'s real money and the data they care about.',
@@ -94,7 +104,10 @@ export default defineEventHandler(async (event) => {
   }
 
   const client = getApiClient()
-  const ghostfolioTools = await getGhostfolioTools()
+  const [ghostfolioTools, ghostfolioStatus] = await Promise.all([
+    getGhostfolioTools(),
+    getGhostfolioStatus(),
+  ])
   const tools = { ...makeTools(client), ...ghostfolioTools }
   const modelMessages = await convertToModelMessages(
     body.messages as Parameters<typeof convertToModelMessages>[0],
@@ -102,7 +115,7 @@ export default defineEventHandler(async (event) => {
 
   const result = streamText({
     model: buildModel(),
-    system: buildSystemPrompt(Object.keys(ghostfolioTools).length > 0),
+    system: buildSystemPrompt(ghostfolioStatus),
     messages: modelMessages,
     tools,
     stopWhen: stepCountIs(8),

@@ -7,6 +7,7 @@ import {
   getHistorical,
   getInsiderTrades,
 } from '../../lib/yahoo'
+import { getHoldingForSymbol } from '../../lib/holdings'
 import type {
   AnalystName,
   PersonaName,
@@ -32,11 +33,12 @@ export default defineEventHandler(async (event): Promise<ResearchRunResponse> =>
   const ownerId = await getOwnerId()
   const api = getResearchApi()
 
-  const [metrics, history, insider, news] = await Promise.all([
+  const [metrics, history, insider, news, holdings] = await Promise.all([
     getFinancialMetrics(symbol),
     getHistorical(symbol, 5),
     getInsiderTrades(symbol, 200),
     getCompanyNews(symbol, 50),
+    getHoldingForSymbol(symbol),
   ])
   const bundle = { metrics, history }
 
@@ -62,7 +64,7 @@ export default defineEventHandler(async (event): Promise<ResearchRunResponse> =>
       const persona = findPersona(name)
       if (!persona) return null
       try {
-        const sig = await runPersona(persona, symbol, bundle)
+        const sig = await runPersona(persona, symbol, bundle, holdings)
         await recordResearchSignal(ownerId, sig)
         return sig
       } catch (err) {

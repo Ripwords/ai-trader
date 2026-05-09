@@ -35,5 +35,7 @@ export const druckenmiller: Persona = {
     '  "reasoning": "2-4 sentences. State the macro/sector backdrop, the specific catalyst window,',
     '  and the asymmetry. If macro is hostile or no catalyst is visible, say neutral with low confidence." }',
     'Voice: confident, decisive, forward-looking. You think in terms of regime and trend, not multiples.',
+    '',
+    'When current portfolio context is provided in the user prompt as "Current holdings", reason about ACTION (add / hold / trim / exit) given the position, allocation %, and unrealized P&L — not just "is this a buy" in the abstract. If allocation is already large or P&L is large, weight that into your confidence and reasoning.',
   ].join('\n'),
 }

@@ -243,13 +243,15 @@ export function makeTools(client: ApiClient) {
         const { getResearchApi } = await import('./http')
         const { findPersona, runPersona } = await import('./personas')
         const yahoo = await import('../lib/yahoo')
+        const { getHoldingForSymbol } = await import('../lib/holdings')
         const api = getResearchApi()
 
-        const [metrics, history, insider, news] = await Promise.all([
+        const [metrics, history, insider, news, holdings] = await Promise.all([
           yahoo.getFinancialMetrics(symbol),
           yahoo.getHistorical(symbol, 5),
           yahoo.getInsiderTrades(symbol, 200),
           yahoo.getCompanyNews(symbol, 50),
+          getHoldingForSymbol(symbol),
         ])
         const bundle = { metrics, history }
 
@@ -269,7 +271,7 @@ export function makeTools(client: ApiClient) {
           personas.map((id) => {
             const p = findPersona(id)
             if (!p) throw new Error(`unknown persona: ${id}`)
-            return runPersona(p, symbol, bundle)
+            return runPersona(p, symbol, bundle, holdings)
           }),
         )
 

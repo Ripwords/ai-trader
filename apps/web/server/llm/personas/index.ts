@@ -1,6 +1,7 @@
 import { generateObject } from 'ai'
 import { z } from 'zod'
 import { buildModel } from '../model'
+import type { HoldingSummary } from '../../lib/holdings'
 import { buffett } from './buffett'
 import { burry } from './burry'
 import { druckenmiller } from './druckenmiller'
@@ -16,12 +17,41 @@ const SignalSchema = z.object({
   reasoning: z.string(),
 })
 
-export async function runPersona(persona: Persona, symbol: string, bundle: unknown): Promise<Signal> {
+function compactHoldings(h: HoldingSummary): Record<string, unknown> {
+  return {
+    symbol: h.symbol,
+    total_quantity: h.total_quantity,
+    total_market_value: h.total_market_value,
+    allocation_pct: h.allocation_pct,
+    net_worth_total: h.net_worth_total,
+    positions: h.positions.map(p => ({
+      account: p.account_label,
+      quantity: p.quantity,
+      avg_cost: p.avg_cost,
+      current_price: p.current_price,
+      market_value: p.market_value,
+      unrealized_pnl_pct: p.unrealized_pnl_pct,
+    })),
+  }
+}
+
+export async function runPersona(
+  persona: Persona,
+  symbol: string,
+  bundle: unknown,
+  holdings?: HoldingSummary | null,
+): Promise<Signal> {
+  const holdingsBlock = holdings && holdings.positions.length > 0
+    ? `\n\nCurrent holdings:\n${JSON.stringify(compactHoldings(holdings), null, 2)}`
+    : holdings
+      ? '\n\nCurrent holdings: none (user does not currently hold this symbol).'
+      : ''
+
   const { object } = await generateObject({
     model: buildModel(),
     schema: SignalSchema,
     system: persona.prompt,
-    prompt: `Analyze ${symbol} given this fundamentals data:\n\n${JSON.stringify(bundle, null, 2)}\n\nReturn your signal.`,
+    prompt: `Analyze ${symbol} given this fundamentals data:\n\n${JSON.stringify(bundle, null, 2)}${holdingsBlock}\n\nReturn your signal.`,
   })
   return { source: `persona:${persona.id}`, symbol, ...object }
 }

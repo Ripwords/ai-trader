@@ -80,3 +80,37 @@ export function resetMcp() {
   _client = null
   _toolsCache = null
 }
+
+export type GhostfolioStatus = 'ok' | 'failing' | 'not_configured'
+
+/**
+ * Tri-state Ghostfolio probe so callers can distinguish "user never set this
+ * up" from "configured but the connection is broken right now". The chat
+ * system prompt uses this to surface MCP failures explicitly to the agent.
+ */
+export async function getGhostfolioStatus(): Promise<GhostfolioStatus> {
+  if (!process.env.GHOSTFOLIO_MCP_URL || !process.env.GHOSTFOLIO_MCP_BEARER) return 'not_configured'
+  const client = await getClient()
+  return client ? 'ok' : 'failing'
+}
+
+/**
+ * Direct MCP tool invocation that bypasses the Vercel AI SDK wrapper. Used
+ * by the holdings aggregator which needs raw tool calls (not chat-shaped
+ * `tool()` definitions). Throws if the MCP is unavailable so callers can
+ * catch and downgrade to a `failing` status.
+ */
+export async function callGhostfolioTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  const client = await getClient()
+  if (!client) throw new Error('ghostfolio MCP unavailable')
+  const result = await client.callTool({ name, arguments: args })
+  const blocks = result.content as Array<{ type: string; text?: string; data?: unknown }>
+  const text = blocks
+    .filter(b => b.type === 'text' && b.text)
+    .map(b => b.text!)
+    .join('\n')
+  if (text) {
+    try { return JSON.parse(text) } catch { return { text } }
+  }
+  return result
+}
