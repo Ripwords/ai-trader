@@ -6,11 +6,17 @@ import type { FullPortfolio, FullPortfolioPosition } from '../../../server/lib/h
 
 useHead({ title: 'portfolio' })
 
+// Backend caches /api/portfolio (SWR 60s/10min). The refresh button below
+// sets ?force=1 to bypass the cache for an explicit hard-refresh.
+const force = ref(0)
 const { data, pending, error, refresh } = useLazyFetch<FullPortfolio>('/api/portfolio', {
-  // We never want stale data here — the user just clicked into "portfolio" to
-  // see a fresh number, not yesterday's cache.
   server: true,
+  query: computed(() => (force.value ? { force: '1', _t: force.value } : {})),
 })
+function hardRefresh() {
+  force.value = Date.now()
+  refresh()
+}
 
 type SortKey = 'allocation_pct' | 'pnl_pct' | 'market_value' | 'symbol'
 type SortDir = 'asc' | 'desc'
@@ -113,7 +119,7 @@ const baseCcy = computed(() => data.value?.net_worth_currency ?? 'MYR')
         <button
           class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]"
           :disabled="pending"
-          @click="refresh()"
+          @click="hardRefresh()"
         >
           {{ pending ? 'refreshing…' : 'refresh' }}
         </button>
