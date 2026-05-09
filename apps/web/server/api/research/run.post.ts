@@ -1,6 +1,12 @@
-import { getApiClient } from '../../llm/http'
 import { getOwnerId, recordResearchSignal } from '../../db/repo'
+import { getResearchApi } from '../../llm/http'
 import { findPersona, runPersona } from '../../llm/personas'
+import {
+  getCompanyNews,
+  getFinancialMetrics,
+  getHistorical,
+  getInsiderTrades,
+} from '../../lib/yahoo'
 import type {
   AnalystName,
   PersonaName,
@@ -18,25 +24,30 @@ export default defineEventHandler(async (event): Promise<ResearchRunResponse> =>
     throw createError({ statusCode: 400, statusMessage: 'symbol required' })
   }
 
-  const analysts: AnalystName[] = body.analysts && body.analysts.length > 0 ? body.analysts : DEFAULT_ANALYSTS
+  const analysts: AnalystName[] = body.analysts && body.analysts.length > 0
+    ? body.analysts
+    : DEFAULT_ANALYSTS
   const personas: PersonaName[] = body.personas ?? []
 
   const ownerId = await getOwnerId()
-  const client = getApiClient()
+  const api = getResearchApi()
 
-  // Fundamentals bundle is fetched once and shared across all personas;
-  // analysts compute their own slice via /research/<name>.
-  const bundlePromise = personas.length > 0
-    ? client.post<unknown>('/research/bundle', { symbol }).catch((err) => {
-      console.error('[research/run] bundle fetch failed; personas will be skipped', err)
-      return null
-    })
-    : Promise.resolve(null)
+  const [metrics, history, insider, news] = await Promise.all([
+    getFinancialMetrics(symbol),
+    getHistorical(symbol, 5),
+    getInsiderTrades(symbol, 200),
+    getCompanyNews(symbol, 50),
+  ])
+  const bundle = { metrics, history }
 
   const analystSignals = await Promise.all(
     analysts.map(async (name): Promise<Signal | null> => {
       try {
-        const sig = await client.post<Signal>(`/research/${name}`, { symbol })
+        const sig = name === 'fundamentals' || name === 'valuation'
+          ? await api.runAnalyst(name, { symbol, metrics })
+          : name === 'sentiment'
+            ? await api.runAnalyst(name, { symbol, insider, news })
+            : await api.runAnalyst(name, { symbol })
         await recordResearchSignal(ownerId, sig)
         return sig
       } catch (err) {
@@ -46,23 +57,20 @@ export default defineEventHandler(async (event): Promise<ResearchRunResponse> =>
     }),
   )
 
-  const bundle = await bundlePromise
-  const personaSignals = bundle === null
-    ? []
-    : await Promise.all(
-      personas.map(async (name): Promise<Signal | null> => {
-        const persona = findPersona(name)
-        if (!persona) return null
-        try {
-          const sig = await runPersona(persona, symbol, bundle)
-          await recordResearchSignal(ownerId, sig)
-          return sig
-        } catch (err) {
-          console.error(`[research/run] persona ${name} failed`, err)
-          return null
-        }
-      }),
-    )
+  const personaSignals = await Promise.all(
+    personas.map(async (name): Promise<Signal | null> => {
+      const persona = findPersona(name)
+      if (!persona) return null
+      try {
+        const sig = await runPersona(persona, symbol, bundle)
+        await recordResearchSignal(ownerId, sig)
+        return sig
+      } catch (err) {
+        console.error(`[research/run] persona ${name} failed`, err)
+        return null
+      }
+    }),
+  )
 
   const signals = [...analystSignals, ...personaSignals].filter((s): s is Signal => s !== null)
   return { symbol, signals }

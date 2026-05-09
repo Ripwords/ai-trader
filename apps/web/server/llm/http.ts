@@ -364,9 +364,12 @@ export interface PortfolioSnapshot {
   positions: Record<string, number>
 }
 
+export type AnalystBody =
+  & { symbol: string }
+  & Record<string, unknown>
+
 export interface ResearchApi {
-  getBundle(symbol: string): Promise<unknown>
-  runAnalyst(name: AnalystName, symbol: string): Promise<ResearchSignal>
+  runAnalyst(name: AnalystName, body: AnalystBody): Promise<ResearchSignal>
   synthesizeDecisions(payload: {
     symbols: string[]
     signals?: ResearchSignal[]
@@ -381,8 +384,7 @@ export function getResearchApi(): ResearchApi {
     headers: { Authorization: `Bearer ${cfg.internalBearer as string}` },
   })
   return {
-    getBundle: (symbol) => fetch('/research/bundle', { method: 'POST', body: { symbol } }),
-    runAnalyst: (name, symbol) => fetch(`/research/${name}`, { method: 'POST', body: { symbol } }),
+    runAnalyst: (name, body) => fetch(`/research/${name}`, { method: 'POST', body }),
     synthesizeDecisions: (payload) => fetch('/synthesis/decide', { method: 'POST', body: payload }),
   }
 }

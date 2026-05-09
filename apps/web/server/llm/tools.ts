@@ -242,20 +242,37 @@ export function makeTools(client: ApiClient) {
       execute: async ({ symbol, personas, analysts }) => {
         const { getResearchApi } = await import('./http')
         const { findPersona, runPersona } = await import('./personas')
+        const yahoo = await import('../lib/yahoo')
         const api = getResearchApi()
-        const bundle = await api.getBundle(symbol).catch(() => null)
-        const personaSignals = bundle
-          ? await Promise.all(
-              personas.map((id) => {
-                const p = findPersona(id)
-                if (!p) throw new Error(`unknown persona: ${id}`)
-                return runPersona(p, symbol, bundle)
-              }),
-            )
-          : []
+
+        const [metrics, history, insider, news] = await Promise.all([
+          yahoo.getFinancialMetrics(symbol),
+          yahoo.getHistorical(symbol, 5),
+          yahoo.getInsiderTrades(symbol, 200),
+          yahoo.getCompanyNews(symbol, 50),
+        ])
+        const bundle = { metrics, history }
+
         const analystSignals = await Promise.all(
-          analysts.map(name => api.runAnalyst(name, symbol)),
+          analysts.map((name) => {
+            if (name === 'fundamentals' || name === 'valuation') {
+              return api.runAnalyst(name, { symbol, metrics })
+            }
+            if (name === 'sentiment') {
+              return api.runAnalyst(name, { symbol, insider, news })
+            }
+            return api.runAnalyst(name, { symbol })
+          }),
         )
+
+        const personaSignals = await Promise.all(
+          personas.map((id) => {
+            const p = findPersona(id)
+            if (!p) throw new Error(`unknown persona: ${id}`)
+            return runPersona(p, symbol, bundle)
+          }),
+        )
+
         return { symbol, signals: [...analystSignals, ...personaSignals] }
       },
     }),

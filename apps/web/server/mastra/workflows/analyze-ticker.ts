@@ -3,6 +3,15 @@ import { z } from 'zod'
 import { getOwnerId, recordResearchSignal } from '../../db/repo'
 import { getResearchApi } from '../../llm/http'
 import { findPersona, runPersona } from '../../llm/personas'
+import {
+  getCompanyNews,
+  getFinancialMetrics,
+  getHistorical,
+  getInsiderTrades,
+  type FinancialMetrics,
+  type InsiderTrade,
+  type NewsItem,
+} from '../../lib/yahoo'
 import type { AnalystName, Decision, PersonaName, Signal } from '../../../types/research'
 
 const ANALYSTS = ['fundamentals', 'valuation', 'technicals', 'sentiment'] as const
@@ -38,52 +47,72 @@ const OutputSchema = z.object({
   report: z.string(),
 })
 
+const FetchedSchema = InputSchema.extend({
+  metrics: z.unknown(),
+  history: z.array(z.unknown()),
+  insider: z.array(z.unknown()),
+  news: z.array(z.unknown()),
+})
+
 const fetchBundleStep = createStep({
   id: 'fetch-bundle',
   inputSchema: InputSchema,
-  outputSchema: InputSchema.extend({ bundle: z.unknown().nullable() }),
+  outputSchema: FetchedSchema,
   execute: async ({ inputData }) => {
-    const bundle = await getResearchApi().getBundle(inputData.symbol).catch((err: unknown) => {
-      console.error('[analyze-ticker] bundle fetch failed', err)
-      return null
-    })
-    return { ...inputData, bundle }
+    const [metrics, history, insider, news] = await Promise.all([
+      getFinancialMetrics(inputData.symbol),
+      getHistorical(inputData.symbol, 5),
+      getInsiderTrades(inputData.symbol, 200),
+      getCompanyNews(inputData.symbol, 50),
+    ])
+    return { ...inputData, metrics, history, insider, news }
   },
 })
 
 const collectSignalsStep = createStep({
   id: 'collect-signals',
-  inputSchema: InputSchema.extend({ bundle: z.unknown().nullable() }),
+  inputSchema: FetchedSchema,
   outputSchema: z.object({
     symbol: z.string(),
     signals: z.array(SignalSchema),
   }),
   execute: async ({ inputData }) => {
     const api = getResearchApi()
+    const metrics = inputData.metrics as FinancialMetrics
+    const insider = inputData.insider as InsiderTrade[]
+    const news = inputData.news as NewsItem[]
+    const bundle = { metrics, history: inputData.history }
+
     const analystResults = await Promise.all(
       inputData.analysts.map(async (name: AnalystName): Promise<Signal | null> => {
         try {
-          return await api.runAnalyst(name, inputData.symbol)
+          if (name === 'fundamentals' || name === 'valuation') {
+            return await api.runAnalyst(name, { symbol: inputData.symbol, metrics })
+          }
+          if (name === 'sentiment') {
+            return await api.runAnalyst(name, { symbol: inputData.symbol, insider, news })
+          }
+          return await api.runAnalyst(name, { symbol: inputData.symbol })
         } catch (err) {
           console.error(`[analyze-ticker] analyst ${name} failed`, err)
           return null
         }
       }),
     )
-    const personaResults = inputData.bundle === null
-      ? []
-      : await Promise.all(
-        inputData.personas.map(async (id: PersonaName): Promise<Signal | null> => {
-          const persona = findPersona(id)
-          if (!persona) return null
-          try {
-            return await runPersona(persona, inputData.symbol, inputData.bundle)
-          } catch (err) {
-            console.error(`[analyze-ticker] persona ${id} failed`, err)
-            return null
-          }
-        }),
-      )
+
+    const personaResults = await Promise.all(
+      inputData.personas.map(async (id: PersonaName): Promise<Signal | null> => {
+        const persona = findPersona(id)
+        if (!persona) return null
+        try {
+          return await runPersona(persona, inputData.symbol, bundle)
+        } catch (err) {
+          console.error(`[analyze-ticker] persona ${id} failed`, err)
+          return null
+        }
+      }),
+    )
+
     const signals = [...analystResults, ...personaResults].filter((s): s is Signal => s !== null)
     return { symbol: inputData.symbol, signals }
   },

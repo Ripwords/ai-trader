@@ -23,9 +23,17 @@ _NEWS_WEIGHT = 0.7
 
 
 def _insider_direction(trade: "InsiderTrade") -> str:
-    """Buy => bullish, sell => bearish, else neutral. Probes a few common
-    field names so we tolerate the upstream `transaction_shares` style as
-    well as a `transaction_type`/`shares` shape."""
+    """Buy => bullish, sell => bearish, else neutral.
+
+    Prefer the explicit `transaction_type` field (yahoo-finance2 always
+    sends positive shares regardless of direction). Fall back to a signed
+    `transaction_shares`/`shares` field for older payloads where negative
+    values denoted sells."""
+    txn = (getattr(trade, "transaction_type", "") or "").lower()
+    if "buy" in txn or "purchase" in txn:
+        return "bullish"
+    if "sell" in txn or "sale" in txn:
+        return "bearish"
     shares = getattr(trade, "transaction_shares", None)
     if shares is None:
         shares = getattr(trade, "shares", None)
@@ -38,11 +46,6 @@ def _insider_direction(trade: "InsiderTrade") -> str:
             return "bullish"
         if v < 0:
             return "bearish"
-    txn = (getattr(trade, "transaction_type", "") or "").lower()
-    if "buy" in txn or "purchase" in txn:
-        return "bullish"
-    if "sell" in txn or "sale" in txn:
-        return "bearish"
     return "neutral"
 
 
@@ -55,9 +58,15 @@ def _news_direction(item: "NewsItem") -> str:
     return "neutral"
 
 
-def _within_last_months(ts: datetime | None, months: int) -> bool:
-    if ts is None:
+def _within_last_months(ts: "datetime | str | None", months: int) -> bool:
+    if ts is None or ts == "":
         return True
+    if isinstance(ts, str):
+        try:
+            # Yahoo data sends ISO date strings (YYYY-MM-DD or full ISO).
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return True
     cutoff = datetime.now(timezone.utc) - timedelta(days=30 * months)
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
