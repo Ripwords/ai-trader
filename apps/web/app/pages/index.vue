@@ -19,10 +19,7 @@ const router = useRouter()
 const chatId = ref<string | null>(typeof route.query.c === 'string' ? route.query.c : null)
 const conversationsList = ref<{ refresh: () => Promise<void> } | null>(null)
 
-// Whether to render the rail inside the global drawer (mobile menu open)
-// vs the inline left column (desktop).
 const drawerOpen = useState('shell.drawerOpen', () => false)
-const railTarget = computed(() => (drawerOpen.value ? '#shell-drawer-extra' : '#chat-rail-inline'))
 
 const chat = new Chat({
   transport: new DefaultChatTransport({
@@ -106,13 +103,10 @@ function hasOutput(part: unknown): boolean { return (part as { state?: string })
 </script>
 
 <template>
-  <!-- Inline desktop rail target. Hidden under lg. -->
+  <!-- Desktop-only left rail. Mobile users get the chat full-width;
+       a future iteration can move watchlist + conversations into the
+       global drawer via state-shared instance. -->
   <aside class="rail-desktop hidden lg:flex">
-    <div id="chat-rail-inline" class="contents" />
-  </aside>
-
-  <!-- Single instance of the rail; teleports between desktop rail and mobile drawer. -->
-  <Teleport :to="railTarget">
     <div class="rail-body">
       <WatchlistSidebar class="!w-full !border-r-0 flex-1 min-h-0" @select="onSelect" />
       <div class="border-t hairline">
@@ -125,7 +119,7 @@ function hasOutput(part: unknown): boolean { return (part as { state?: string })
         />
       </div>
     </div>
-  </Teleport>
+  </aside>
 
   <div class="chat-pane">
     <main class="flex-1 min-h-0 flex flex-col">
