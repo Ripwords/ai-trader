@@ -308,25 +308,35 @@ class OpendAdapter:
             raise OpendError(f"position_list_query failed: {positions_df}")
         if ret_a != 0:
             raise OpendError(f"accinfo_query failed: {accinfo_df}")
+        def _to_float(value: object) -> float:
+            """moomoo returns 'N/A' as a string for unset paper-account fields;
+            coerce those (and other non-numeric junk) to 0.0 instead of raising."""
+            if value is None or value == "" or value == "N/A":
+                return 0.0
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
         positions = [
             Position(
                 code=str(r["code"]),
-                qty=int(r.get("qty", 0)),
+                qty=int(_to_float(r.get("qty", 0))),
                 # SDK uses "average_cost"; plan schema names it cost_price
-                cost_price=float(r.get("average_cost", r.get("cost_price", 0)) or 0),
+                cost_price=_to_float(r.get("average_cost", r.get("cost_price", 0))),
                 # SDK uses "nominal_price"; plan schema names it current_price
-                current_price=float(r.get("nominal_price", r.get("current_price", 0)) or 0),
-                market_val=float(r.get("market_val", 0) or 0),
-                pl_val=float(r.get("unrealized_pl", r.get("pl_val", 0)) or 0),
-                pl_ratio=float(r.get("pl_ratio_avg_cost", r.get("pl_ratio", 0)) or 0) / 100.0,
+                current_price=_to_float(r.get("nominal_price", r.get("current_price", 0))),
+                market_val=_to_float(r.get("market_val", 0)),
+                pl_val=_to_float(r.get("unrealized_pl", r.get("pl_val", 0))),
+                pl_ratio=_to_float(r.get("pl_ratio_avg_cost", r.get("pl_ratio", 0))) / 100.0,
             )
             for _, r in positions_df.iterrows()
         ]
         a = accinfo_df.iloc[0].to_dict() if not accinfo_df.empty else {}
         return Portfolio(
-            cash=float(a.get("cash", 0) or 0),
-            market_val=float(a.get("market_val", 0) or 0),
-            total_assets=float(a.get("total_assets", 0) or 0),
+            cash=_to_float(a.get("cash", 0)),
+            market_val=_to_float(a.get("market_val", 0)),
+            total_assets=_to_float(a.get("total_assets", 0)),
             positions=positions,
         )
 
