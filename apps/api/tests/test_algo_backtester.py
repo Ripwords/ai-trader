@@ -230,6 +230,91 @@ def test_default_initial_capital_constant_unchanged() -> None:
     assert DEFAULT_INITIAL_CAPITAL == 100_000.0
 
 
+def test_ctx_exposes_cash_account_value_and_allocation_pct() -> None:
+    """A multi-bar run records ctx.cash / ctx.account_value / ctx.allocation_pct
+    per bar. After a 10-share BUY at $50, equity = cash + 10*close, and
+    allocation_pct = (10*close / equity) * 100. We snapshot the values per bar
+    via a strategy that stashes them on a module dict."""
+    captured: dict[int, dict[str, float]] = {}
+
+    code = (
+        "def on_bar(c):\n"
+        "    n = len(c.bars)\n"
+        "    if n == 1:\n"
+        "        c.buy(10)\n"
+        "    capture(n, c.cash, c.account_value, c.allocation_pct)\n"
+    )
+
+    def capture(n: int, cash: float, av: float, alloc: float) -> None:
+        captured[n] = {"cash": cash, "account_value": av, "allocation_pct": alloc}
+
+    import app.services.algo.sandbox as sb_mod
+
+    saved = sb_mod._SAFE_BUILTINS.get("capture")
+    sb_mod._SAFE_BUILTINS["capture"] = capture
+    try:
+        bars = _bars(closes=[50.0, 50.0, 60.0], opens=[50.0, 50.0, 50.0])
+        res = run_backtest(
+            code, bars,
+            initial_capital=1_000.0,
+            commission_bps=0, slippage_bps=0,
+            sizing_mode="fixed_qty", sizing_value=1,
+            pyramiding_max=10,
+        )
+    finally:
+        if saved is None:
+            sb_mod._SAFE_BUILTINS.pop("capture", None)
+        else:
+            sb_mod._SAFE_BUILTINS["capture"] = saved
+
+    assert res.status == "ok"
+    # Bar 1: pre-trade. cash = 1000, position = 0, account_value = 1000, alloc = 0.
+    assert captured[1]["cash"] == 1_000.0
+    assert captured[1]["account_value"] == 1_000.0
+    assert captured[1]["allocation_pct"] == 0.0
+    # Bar 2: after BUY 10 @ 50 fills at bar1 open=50 (no slip). cash = 500,
+    # position = 10, close = 50 -> position_value = 500, account_value = 1000,
+    # alloc = 50%.
+    assert captured[2]["cash"] == 500.0
+    assert captured[2]["account_value"] == 1_000.0
+    assert captured[2]["allocation_pct"] == 50.0
+
+
+def test_can_afford_returns_false_when_qty_times_price_exceeds_cash() -> None:
+    """A strategy with 1000 cash and price 50 can afford 20 shares but not 21."""
+    decisions: list[bool] = []
+
+    code = (
+        "def on_bar(c):\n"
+        "    if len(c.bars) == 1:\n"
+        "        record(c.can_afford(20), c.can_afford(21))\n"
+    )
+
+    def record(yes: bool, no: bool) -> None:
+        decisions.append(yes)
+        decisions.append(no)
+
+    import app.services.algo.sandbox as sb_mod
+
+    saved = sb_mod._SAFE_BUILTINS.get("record")
+    sb_mod._SAFE_BUILTINS["record"] = record
+    try:
+        bars = _bars(closes=[50.0, 50.0])
+        res = run_backtest(
+            code, bars,
+            initial_capital=1_000.0,
+            commission_bps=0, slippage_bps=0,
+        )
+    finally:
+        if saved is None:
+            sb_mod._SAFE_BUILTINS.pop("record", None)
+        else:
+            sb_mod._SAFE_BUILTINS["record"] = saved
+
+    assert res.status == "ok"
+    assert decisions == [True, False]
+
+
 def test_bare_sell_flattens_position_regardless_of_sizing_mode() -> None:
     """`c.sell()` with no qty arg sells the entire position. Sizing modes
     apply to entries only, not exits."""

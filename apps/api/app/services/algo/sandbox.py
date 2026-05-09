@@ -73,15 +73,44 @@ _SAFE_BUILTINS: dict[str, Any] = {
 
 
 class StrategyCtx(Protocol):
-    """The runtime contract that strategy authors code against."""
+    """The runtime contract that strategy authors code against.
+
+    Attributes
+    ----------
+    bars: OHLCV history up to and including the current bar (pandas DataFrame).
+    position: shares of THIS strategy's symbol on the paper account.
+    qty: default sizing resolved from the strategy's sizing_mode/value.
+    cash: paper account cash in USD.
+    account_value: paper account total assets in USD (cash + all positions MTM).
+    allocation_pct: this symbol's market value as a percentage of account_value
+        (0..100). 0.0 when account_value is non-positive.
+
+    Helpers
+    -------
+    can_afford(qty): True iff `qty * latest_close <= cash`.
+
+    Example
+    -------
+        def on_bar(c):
+            if c.allocation_pct >= 15:
+                c.hold()
+                return
+            # ... technical signal ...
+            if signal_fires and c.can_afford(c.qty):
+                c.buy(c.qty)
+    """
 
     bars: pd.DataFrame
     position: int
     qty: int
+    cash: float
+    account_value: float
+    allocation_pct: float
 
     def buy(self, qty: int = ...) -> None: ...
     def sell(self, qty: int = ...) -> None: ...
     def hold(self) -> None: ...
+    def can_afford(self, qty: int) -> bool: ...
 
 
 def compile_strategy(src: str) -> Callable[[StrategyCtx], None]:

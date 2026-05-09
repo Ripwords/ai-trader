@@ -7,14 +7,18 @@ from fastapi import Depends, FastAPI
 from app.deps import _build_adapter, require_internal_bearer
 from app.routers import algo, health, quote, research, synthesis, trade, watchlist
 from app.services.algo import repo as algo_repo
-from app.services.algo.scheduler import Scheduler, install_scheduler
+from app.services.algo.scheduler import (
+    AccountSummary,
+    Scheduler,
+    install_scheduler,
+)
 from app.settings import get_settings
 
 
 def _make_opend_bridges():
-    """Return (get_klines, get_position, place_paper_order) callables that
-    wrap the sync OpendAdapter into asyncio. We resolve the adapter lazily
-    so a missing/down OpenD doesn't crash app startup."""
+    """Return (get_klines, get_position, get_account_summary, place_paper_order)
+    callables that wrap the sync OpendAdapter into asyncio. We resolve the
+    adapter lazily so a missing/down OpenD doesn't crash app startup."""
     settings = get_settings()
 
     def _adapter():
@@ -42,6 +46,24 @@ def _make_opend_bridges():
 
         return await asyncio.to_thread(_do)
 
+    async def get_account_summary() -> AccountSummary:
+        def _do() -> AccountSummary:
+            ad = _adapter()
+            for acc in ad.list_accounts():
+                if acc.trd_env != "SIMULATE":
+                    continue
+                try:
+                    pf = ad.get_portfolio(acc_id=acc.acc_id, trd_env="SIMULATE")
+                except Exception:
+                    continue
+                return AccountSummary(
+                    cash=float(pf.cash),
+                    total_assets=float(pf.total_assets),
+                )
+            return AccountSummary(cash=0.0, total_assets=0.0)
+
+        return await asyncio.to_thread(_do)
+
     async def place_paper_order(symbol: str, side: str, qty: int) -> str | None:
         def _do() -> str | None:
             ad = _adapter()
@@ -58,7 +80,7 @@ def _make_opend_bridges():
 
         return await asyncio.to_thread(_do)
 
-    return get_klines, get_position, place_paper_order
+    return get_klines, get_position, get_account_summary, place_paper_order
 
 
 @asynccontextmanager
@@ -68,10 +90,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     scheduler: Scheduler | None = None
     if settings.DATABASE_URL:
         await algo_repo.init_pool(settings.DATABASE_URL)
-        get_klines, get_position, place = _make_opend_bridges()
+        get_klines, get_position, get_account_summary, place = _make_opend_bridges()
         scheduler = Scheduler(
             get_klines=get_klines,
             get_position=get_position,
+            get_account_summary=get_account_summary,
             place_paper_order=place,
         )
         install_scheduler(scheduler)

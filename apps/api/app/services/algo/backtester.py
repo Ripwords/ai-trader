@@ -27,6 +27,9 @@ class _RunCtx:
     bars: pd.DataFrame
     position: int = 0
     qty: int = 1
+    cash: float = 0.0
+    account_value: float = 0.0
+    allocation_pct: float = 0.0
     intent: tuple[str, int | None] | None = field(default=None, repr=False)
 
     def buy(self, qty: int | None = None) -> None:
@@ -37,6 +40,12 @@ class _RunCtx:
 
     def hold(self) -> None:
         self.intent = None
+
+    def can_afford(self, qty: int) -> bool:
+        if len(self.bars) == 0:
+            return False
+        last_close = float(self.bars["close"].iloc[-1])
+        return int(qty) * last_close <= self.cash
 
 
 def resolve_qty(
@@ -126,7 +135,18 @@ def run_backtest(
                 equity=equity_now, fill_price=close_now,
             ),
         )
-        ctx = _RunCtx(bars=bars_so_far, position=position, qty=default_qty)
+        position_value = position * close_now
+        allocation_pct = (
+            (position_value / equity_now) * 100.0 if equity_now > 0 else 0.0
+        )
+        ctx = _RunCtx(
+            bars=bars_so_far,
+            position=position,
+            qty=default_qty,
+            cash=cash,
+            account_value=equity_now,
+            allocation_pct=allocation_pct,
+        )
         try:
             on_bar(ctx)
         except Exception as exc:  # noqa: BLE001

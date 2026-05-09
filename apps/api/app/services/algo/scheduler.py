@@ -24,7 +24,15 @@ import hashlib
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, TypedDict
+
+
+class AccountSummary(TypedDict):
+    """Lightweight subset of moomoo's portfolio response — only the totals
+    the scheduler needs to populate strategy ctx.cash / ctx.account_value."""
+
+    cash: float
+    total_assets: float
 
 
 def _now_naive_utc() -> datetime:
@@ -55,10 +63,22 @@ CADENCE_SECS: dict[str, int] = {
 class _Ctx:
     """Minimal runtime context handed to a strategy on a live tick."""
 
-    def __init__(self, bars: pd.DataFrame, position: int, qty: int) -> None:
+    def __init__(
+        self,
+        bars: pd.DataFrame,
+        position: int,
+        qty: int,
+        *,
+        cash: float,
+        account_value: float,
+        allocation_pct: float,
+    ) -> None:
         self.bars = bars
         self.position = position
         self.qty = qty
+        self.cash = cash
+        self.account_value = account_value
+        self.allocation_pct = allocation_pct
         self.intent: tuple[str, int | None] | None = None
 
     def buy(self, qty: int | None = None) -> None:
@@ -69,6 +89,12 @@ class _Ctx:
 
     def hold(self) -> None:
         self.intent = None
+
+    def can_afford(self, qty: int) -> bool:
+        if len(self.bars) == 0:
+            return False
+        last_close = float(self.bars["close"].iloc[-1])
+        return int(qty) * last_close <= self.cash
 
 
 def _bars_to_df(bars: list[Any]) -> pd.DataFrame:
@@ -94,6 +120,10 @@ class Scheduler:
     Inject `place_order` and `get_position` callables — that keeps the
     scheduler decoupled from the moomoo SDK, makes it testable, and
     keeps a clear seam between strategy logic and order routing.
+
+    `get_account_summary` is optional: when not injected, ctx.cash and
+    ctx.account_value fall back to (initial_capital, initial_capital)
+    so existing tests and dev setups without an OpenD bridge still work.
     """
 
     def __init__(
@@ -102,10 +132,12 @@ class Scheduler:
         get_klines: Callable[[str, int], Awaitable[list[Any]]],
         get_position: Callable[[str], Awaitable[int]],
         place_paper_order: Callable[[str, str, int], Awaitable[str | None]],
+        get_account_summary: Callable[[], Awaitable[AccountSummary]] | None = None,
         tick_sec: int = TICK_SEC,
     ) -> None:
         self._get_klines = get_klines
         self._get_position = get_position
+        self._get_account_summary = get_account_summary
         self._place = place_paper_order
         self._tick_sec = tick_sec
         # Last-fire timestamp per strategy (monotonic seconds).
@@ -201,20 +233,47 @@ class Scheduler:
         except Exception:  # noqa: BLE001
             position = 0  # best-effort; strategy can still emit
 
+        # Pull live paper-account totals so strategies can gate on
+        # cash / allocation_pct. If the OpenD bridge is missing or the
+        # call fails, fall back to the strategy's configured initial
+        # capital — the strategy still runs, it just sees a stale view.
+        last_close = float(bars[-1].close)
+        cash_now: float = float(s.initial_capital)
+        account_value_now: float = float(s.initial_capital)
+        if self._get_account_summary is not None:
+            try:
+                summary = await self._get_account_summary()
+                cash_now = float(summary["cash"])
+                account_value_now = float(summary["total_assets"])
+            except Exception:  # noqa: BLE001
+                pass
+        position_value = position * last_close
+        allocation_pct = (
+            (position_value / account_value_now) * 100.0
+            if account_value_now > 0
+            else 0.0
+        )
+
         # Resolve a default ctx.qty using the strategy's sizing mode so
         # `c.buy(c.qty)` works in any mode. Use last close as a fill-price
-        # proxy and approximate equity = initial_capital + position * close.
+        # proxy. Prefer live account_value over initial_capital + MTM since
+        # the live view already reflects realised cash + all positions.
         from app.services.algo.backtester import resolve_qty
-        last_close = float(bars[-1].close)
-        equity_estimate = s.initial_capital + position * last_close
         default_qty = max(
             1,
             resolve_qty(
                 mode=s.sizing_mode, value=s.sizing_value,
-                equity=equity_estimate, fill_price=last_close,
+                equity=account_value_now, fill_price=last_close,
             ),
         )
-        ctx = _Ctx(_bars_to_df(bars), position=position, qty=default_qty)
+        ctx = _Ctx(
+            _bars_to_df(bars),
+            position=position,
+            qty=default_qty,
+            cash=cash_now,
+            account_value=account_value_now,
+            allocation_pct=allocation_pct,
+        )
         try:
             on_bar(ctx)
         except Exception as exc:  # noqa: BLE001
