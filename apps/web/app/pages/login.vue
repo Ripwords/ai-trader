@@ -1,4 +1,6 @@
 <script setup lang="ts">
+definePageMeta({ layout: false })
+
 const password = ref('')
 const error = ref<string | null>(null)
 const loading = ref(false)
