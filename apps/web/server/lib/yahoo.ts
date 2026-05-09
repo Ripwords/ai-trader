@@ -111,9 +111,9 @@ function num(v: unknown): number | null {
   return null
 }
 
-export async function getFinancialMetrics(symbol: string): Promise<FinancialMetrics> {
-  const yfSym = toYahooSymbol(symbol)
-  try {
+const fetchFinancialMetrics = defineCachedFunction(
+  async (symbol: string): Promise<FinancialMetrics> => {
+    const yfSym = toYahooSymbol(symbol)
     const q = await yahoo.quoteSummary(yfSym, {
       modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData', 'price'],
     })
@@ -141,15 +141,28 @@ export async function getFinancialMetrics(symbol: string): Promise<FinancialMetr
       beta: num(sd?.beta) ?? num(ks?.beta),
       shares_outstanding: num(ks?.sharesOutstanding),
     }
+  },
+  {
+    name: 'yahoo',
+    group: 'metrics',
+    maxAge: 60 * 60 * 6,
+    swr: true,
+    getKey: (symbol: string) => symbol,
+  },
+)
+
+export async function getFinancialMetrics(symbol: string): Promise<FinancialMetrics> {
+  try {
+    return await fetchFinancialMetrics(symbol)
   } catch (err) {
     console.error('[yahoo] getFinancialMetrics failed', symbol, err)
     return EMPTY_METRICS(symbol)
   }
 }
 
-export async function getHistorical(symbol: string, limit = 5): Promise<HistoricalPeriod[]> {
-  const yfSym = toYahooSymbol(symbol)
-  try {
+const fetchHistorical = defineCachedFunction(
+  async (symbol: string, limit: number): Promise<HistoricalPeriod[]> => {
+    const yfSym = toYahooSymbol(symbol)
     const q = await yahoo.quoteSummary(yfSym, {
       modules: ['incomeStatementHistory', 'balanceSheetHistory', 'cashflowStatementHistory'],
     })
@@ -185,6 +198,19 @@ export async function getHistorical(symbol: string, limit = 5): Promise<Historic
       })
     }
     return out
+  },
+  {
+    name: 'yahoo',
+    group: 'historical',
+    maxAge: 60 * 60 * 24,
+    swr: true,
+    getKey: (symbol: string, limit: number) => `${symbol}:${limit}`,
+  },
+)
+
+export async function getHistorical(symbol: string, limit = 5): Promise<HistoricalPeriod[]> {
+  try {
+    return await fetchHistorical(symbol, limit)
   } catch (err) {
     console.error('[yahoo] getHistorical failed', symbol, err)
     return []
@@ -212,9 +238,9 @@ function classifyInsiderText(text: string): 'buy' | 'sell' | null {
   return null
 }
 
-export async function getInsiderTrades(symbol: string, limit = 20): Promise<InsiderTrade[]> {
-  const yfSym = toYahooSymbol(symbol)
-  try {
+const fetchInsiderTrades = defineCachedFunction(
+  async (symbol: string, limit: number): Promise<InsiderTrade[]> => {
+    const yfSym = toYahooSymbol(symbol)
     const q = await yahoo.quoteSummary(yfSym, { modules: ['insiderTransactions'] })
     const txns = q.insiderTransactions?.transactions ?? []
     const out: InsiderTrade[] = []
@@ -231,15 +257,28 @@ export async function getInsiderTrades(symbol: string, limit = 20): Promise<Insi
       })
     }
     return out
+  },
+  {
+    name: 'yahoo',
+    group: 'insider',
+    maxAge: 60 * 60 * 6,
+    swr: true,
+    getKey: (symbol: string, limit: number) => `${symbol}:${limit}`,
+  },
+)
+
+export async function getInsiderTrades(symbol: string, limit = 20): Promise<InsiderTrade[]> {
+  try {
+    return await fetchInsiderTrades(symbol, limit)
   } catch (err) {
     console.error('[yahoo] getInsiderTrades failed', symbol, err)
     return []
   }
 }
 
-export async function getCompanyNews(symbol: string, limit = 10): Promise<NewsItem[]> {
-  const yfSym = toYahooSymbol(symbol)
-  try {
+const fetchCompanyNews = defineCachedFunction(
+  async (symbol: string, limit: number): Promise<NewsItem[]> => {
+    const yfSym = toYahooSymbol(symbol)
     const r = await yahoo.search(yfSym, { newsCount: limit, quotesCount: 0 })
     return (r.news ?? []).slice(0, limit).map((n) => ({
       title: n.title ?? '',
@@ -249,6 +288,19 @@ export async function getCompanyNews(symbol: string, limit = 10): Promise<NewsIt
         : '',
       sentiment: null,
     }))
+  },
+  {
+    name: 'yahoo',
+    group: 'news',
+    maxAge: 60 * 15,
+    swr: true,
+    getKey: (symbol: string, limit: number) => `${symbol}:${limit}`,
+  },
+)
+
+export async function getCompanyNews(symbol: string, limit = 10): Promise<NewsItem[]> {
+  try {
+    return await fetchCompanyNews(symbol, limit)
   } catch (err) {
     console.error('[yahoo] getCompanyNews failed', symbol, err)
     return []
@@ -263,9 +315,17 @@ export async function getFundamentalsBundle(symbol: string): Promise<Fundamental
   return { metrics, history }
 }
 
-export async function getEarningsInfo(symbol: string): Promise<EarningsInfo> {
-  const yfSym = toYahooSymbol(symbol)
-  try {
+interface EarningsRaw {
+  next_earnings_date: string | null
+  last_earnings_date: string | null
+  last_eps_actual: number | null
+  last_eps_estimate: number | null
+  last_eps_surprise_pct: number | null
+}
+
+const fetchEarningsRaw = defineCachedFunction(
+  async (symbol: string): Promise<EarningsRaw> => {
+    const yfSym = toYahooSymbol(symbol)
     const q = await yahoo.quoteSummary(yfSym, {
       modules: ['calendarEvents', 'earningsHistory'],
     })
@@ -277,12 +337,6 @@ export async function getEarningsInfo(symbol: string): Promise<EarningsInfo> {
       ? nextDate.toISOString().slice(0, 10)
       : null
 
-    let days_until_earnings: number | null = null
-    if (nextDate && !Number.isNaN(nextDate.getTime())) {
-      const ms = nextDate.getTime() - Date.now()
-      days_until_earnings = Math.round(ms / 86_400_000)
-    }
-
     const history = q.earningsHistory?.history ?? []
     const last = history.length > 0 ? history[history.length - 1] : null
     const lastQuarter = last?.quarter ? new Date(last.quarter) : null
@@ -292,16 +346,37 @@ export async function getEarningsInfo(symbol: string): Promise<EarningsInfo> {
 
     return {
       next_earnings_date,
-      days_until_earnings,
       last_earnings_date,
       last_eps_actual: num(last?.epsActual),
       last_eps_estimate: num(last?.epsEstimate),
       last_eps_surprise_pct: num(last?.surprisePercent),
     }
+  },
+  {
+    name: 'yahoo',
+    group: 'earnings',
+    maxAge: 60 * 60 * 6,
+    swr: true,
+    getKey: (symbol: string) => symbol,
+  },
+)
+
+export async function getEarningsInfo(symbol: string): Promise<EarningsInfo> {
+  let raw: EarningsRaw
+  try {
+    raw = await fetchEarningsRaw(symbol)
   } catch (err) {
     console.error('[yahoo] getEarningsInfo failed', symbol, err)
     return { ...EMPTY_EARNINGS }
   }
+  // days_until_earnings is computed at read-time so the cached entry doesn't
+  // serve a stale countdown when the calendar date itself hasn't changed.
+  let days_until_earnings: number | null = null
+  if (raw.next_earnings_date) {
+    const t = new Date(raw.next_earnings_date).getTime()
+    if (!Number.isNaN(t)) days_until_earnings = Math.round((t - Date.now()) / 86_400_000)
+  }
+  return { ...raw, days_until_earnings }
 }
 
 export interface SymbolSearchResult {
@@ -332,11 +407,9 @@ function fromYahooSymbol(yfSym: string, exchange: string): string | null {
   return null
 }
 
-export async function searchSymbols(query: string, limit = 8): Promise<SymbolSearchResult[]> {
-  const q = query.trim()
-  if (q.length < 1) return []
-  try {
-    const r = await yahoo.search(q, { quotesCount: limit, newsCount: 0 })
+const fetchSymbolSearch = defineCachedFunction(
+  async (query: string, limit: number): Promise<SymbolSearchResult[]> => {
+    const r = await yahoo.search(query, { quotesCount: limit, newsCount: 0 })
     const out: SymbolSearchResult[] = []
     for (const item of r.quotes ?? []) {
       const q = item as { symbol?: string; shortname?: string; longname?: string; exchDisp?: string; typeDisp?: string }
@@ -351,29 +424,53 @@ export async function searchSymbols(query: string, limit = 8): Promise<SymbolSea
       })
     }
     return out
+  },
+  {
+    name: 'yahoo',
+    group: 'search',
+    maxAge: 60 * 60,
+    swr: true,
+    getKey: (query: string, limit: number) => `${query.toLowerCase()}:${limit}`,
+  },
+)
+
+export async function searchSymbols(query: string, limit = 8): Promise<SymbolSearchResult[]> {
+  const q = query.trim()
+  if (q.length < 1) return []
+  try {
+    return await fetchSymbolSearch(q, limit)
   } catch (err) {
     console.error('[yahoo] searchSymbols failed', query, err)
     return []
   }
 }
 
-const FX_CACHE = new Map<string, { rate: number; expires: number }>()
-const FX_TTL_MS = 60 * 60 * 1000
+const fetchFxRate = defineCachedFunction(
+  async (from: string, to: string): Promise<number> => {
+    const pair = `${from}${to}=X`
+    const q = await yahoo.quote(pair)
+    const rate = num((q as { regularMarketPrice?: unknown }).regularMarketPrice)
+    if (rate == null || rate <= 0) {
+      // Throw so the empty/invalid result doesn't get cached for an hour.
+      throw new Error(`fx rate unavailable for ${pair}`)
+    }
+    return rate
+  },
+  {
+    name: 'yahoo',
+    group: 'fx',
+    maxAge: 60 * 60,
+    swr: true,
+    getKey: (from: string, to: string) => `${from}_${to}`,
+  },
+)
 
 export async function getFxRate(from: string, to: string): Promise<number | null> {
   const fromU = from.toUpperCase().trim()
   const toU = to.toUpperCase().trim()
   if (fromU === toU) return 1
-  const key = `${fromU}_${toU}`
-  const cached = FX_CACHE.get(key)
-  if (cached && cached.expires > Date.now()) return cached.rate
-  const pair = `${fromU}${toU}=X`
   try {
-    const q = await yahoo.quote(pair)
-    const rate = num((q as { regularMarketPrice?: unknown }).regularMarketPrice)
-    if (rate == null || rate <= 0) return null
-    FX_CACHE.set(key, { rate, expires: Date.now() + FX_TTL_MS })
-    return rate
+    return await fetchFxRate(fromU, toU)
   } catch (err) {
     console.error('[yahoo] getFxRate failed', from, to, err)
     return null
