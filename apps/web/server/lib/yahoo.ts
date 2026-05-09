@@ -304,6 +304,59 @@ export async function getEarningsInfo(symbol: string): Promise<EarningsInfo> {
   }
 }
 
+export interface SymbolSearchResult {
+  /** moomoo-style symbol if the listing is tradable on moomoo, otherwise null. */
+  moomoo: string | null
+  /** Yahoo-style symbol (always present). */
+  yahoo: string
+  name: string
+  exchange: string
+  type: string
+}
+
+/** Inverse of toYahooSymbol — convert a Yahoo ticker back to moomoo style.
+ *  Returns null if the listing isn't on a moomoo-supported market. */
+function fromYahooSymbol(yfSym: string, exchange: string): string | null {
+  if (yfSym.endsWith('.HK')) {
+    const code = yfSym.slice(0, -3).padStart(5, '0')
+    return `HK.${code}`
+  }
+  if (yfSym.endsWith('.SS')) return `SH.${yfSym.slice(0, -3)}`
+  if (yfSym.endsWith('.SZ')) return `SZ.${yfSym.slice(0, -3)}`
+  // US listings have no suffix. Filter to known US exchanges so we don't
+  // misclassify .L / .DE / .MX / .AS / .TO / etc as US.
+  const usExchanges = ['NASDAQ', 'NYSE', 'NYSEArca', 'AMEX', 'BATS', 'BATS Trading', 'NMS', 'NYQ', 'ASE', 'PCX']
+  if (!yfSym.includes('.') && usExchanges.some(x => exchange.includes(x))) {
+    return `US.${yfSym}`
+  }
+  return null
+}
+
+export async function searchSymbols(query: string, limit = 8): Promise<SymbolSearchResult[]> {
+  const q = query.trim()
+  if (q.length < 1) return []
+  try {
+    const r = await yahoo.search(q, { quotesCount: limit, newsCount: 0 })
+    const out: SymbolSearchResult[] = []
+    for (const item of r.quotes ?? []) {
+      const q = item as { symbol?: string; shortname?: string; longname?: string; exchDisp?: string; typeDisp?: string }
+      if (!q.symbol) continue
+      const exchange = String(q.exchDisp ?? '')
+      out.push({
+        moomoo: fromYahooSymbol(q.symbol, exchange),
+        yahoo: q.symbol,
+        name: q.shortname ?? q.longname ?? '',
+        exchange,
+        type: q.typeDisp ?? '',
+      })
+    }
+    return out
+  } catch (err) {
+    console.error('[yahoo] searchSymbols failed', query, err)
+    return []
+  }
+}
+
 const FX_CACHE = new Map<string, { rate: number; expires: number }>()
 const FX_TTL_MS = 60 * 60 * 1000
 

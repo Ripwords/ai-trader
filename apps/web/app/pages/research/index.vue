@@ -127,14 +127,13 @@ async function synthesize() {
             new research pass
           </div>
 
-          <div class="grid grid-cols-[1fr_auto] gap-4 items-end">
-            <label class="block">
-              <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">symbol</span>
-              <UInput
+          <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 sm:gap-4 sm:items-end">
+            <label class="flex flex-col gap-2">
+              <span class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">symbol</span>
+              <SymbolSearchInput
                 v-model="symbol"
-                placeholder="US.NVDA"
-                class="mt-1 font-mono"
-                @keyup.enter="canRun && runResearch()"
+                placeholder="search NVDA, tencent, 600519…"
+                @submit="canRun && runResearch()"
               />
             </label>
             <button
