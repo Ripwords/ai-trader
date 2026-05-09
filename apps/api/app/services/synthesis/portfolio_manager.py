@@ -60,8 +60,25 @@ def _net_score(compacted: list[dict[str, object]]) -> float:
     return score / max(1, len(compacted))
 
 
-def _confidence_from_score(score: float) -> int:
+def _directional_confidence(score: float) -> int:
+    """For buy/sell — abs(net score) reflects how strongly the signals lean."""
     return max(0, min(100, int(round(abs(score)))))
+
+
+def _hold_confidence(compacted: list[dict[str, object]], score: float) -> int:
+    """For hold — average signal confidence, lightly discounted as the score
+    approaches the action threshold (close calls are less confident holds).
+
+    Without this distinction, four signals at 70% conf split 2 bull / 2 bear
+    would produce a hold decision with confidence ~0 even though we're highly
+    confident about the disagreement."""
+    if not compacted:
+        return 0
+    avg_conf = sum(float(e["conf"]) for e in compacted) / len(compacted)
+    threshold = _NET_BUY_THRESHOLD  # symmetric with sell threshold
+    proximity = min(1.0, abs(score) / threshold)
+    discount = 1.0 - 0.3 * proximity  # 1.0 when score=0, 0.7 when score at threshold
+    return max(0, min(100, int(round(avg_conf * discount))))
 
 
 def _fallback_decision(
@@ -80,7 +97,6 @@ def _fallback_decision(
             reasoning="no actionable signals",
         )
     score = _net_score(compacted)
-    conf = _confidence_from_score(score)
     has_position = current_position_usd > 0
     has_cash = sizing.remaining_position_usd > 0
 
@@ -91,14 +107,14 @@ def _fallback_decision(
                 symbol=symbol,
                 action="hold",
                 quantity=0,
-                confidence=conf,
+                confidence=_hold_confidence(compacted, score),
                 reasoning="bullish but remaining size < 1 share",
             )
         return Decision(
             symbol=symbol,
             action="buy",
             quantity=qty,
-            confidence=conf,
+            confidence=_directional_confidence(score),
             reasoning=f"net bullish score {score:.0f} >= {int(_NET_BUY_THRESHOLD)}",
         )
 
@@ -108,7 +124,7 @@ def _fallback_decision(
             symbol=symbol,
             action="sell",
             quantity=qty,
-            confidence=conf,
+            confidence=_directional_confidence(score),
             reasoning=f"net bearish score {score:.0f} <= {int(_NET_SELL_THRESHOLD)}",
         )
 
@@ -116,7 +132,7 @@ def _fallback_decision(
         symbol=symbol,
         action="hold",
         quantity=0,
-        confidence=conf,
+        confidence=_hold_confidence(compacted, score),
         reasoning=f"net score {score:.0f} within hold band",
     )
 
