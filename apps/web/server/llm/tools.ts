@@ -300,7 +300,9 @@ export function makeTools(client: ApiClient) {
       }),
       execute: async ({ symbols, signals }) => {
         const { getResearchApi } = await import('./http')
-        return getResearchApi().synthesizeDecisions({ symbols, signals })
+        const { resolvePortfolio } = await import('../lib/portfolio-snapshot')
+        const portfolio = await resolvePortfolio()
+        return getResearchApi().synthesizeDecisions({ symbols, signals, portfolio })
       },
     }),
 
