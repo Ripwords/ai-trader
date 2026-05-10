@@ -104,35 +104,6 @@ watch([status, startedAt], ([s]) => {
   }
 }, { immediate: true })
 
-const lastToolEvent = computed(() => {
-  for (let i = events.value.length - 1; i >= 0; i--) {
-    const ev = events.value[i]
-    if (ev.type === 'tool-call' || ev.type === 'tool-result') return ev
-  }
-  return null
-})
-
-const lastNodeStart = computed(() => {
-  for (let i = events.value.length - 1; i >= 0; i--) {
-    const ev = events.value[i]
-    if (ev.type === 'node-start') return ev
-  }
-  return null
-})
-
-const progressMessage = computed(() => {
-  const tool = lastToolEvent.value
-  const node = lastNodeStart.value
-  if (tool) {
-    const verb = tool.type === 'tool-call' ? 'calling' : 'received'
-    const nodeLabel = node ? node.node.replace(/_/g, ' ') + ' · ' : ''
-    return `${nodeLabel}${verb} ${tool.tool}`
-  }
-  if (node) return `${node.node.replace(/_/g, ' ')} · thinking`
-  if (events.value.length === 0) return 'spinning up agents…'
-  return 'thinking'
-})
-
 function onStart(opts: { max_debate_rounds: number; deep_thinking: boolean }) {
   void start(symbol.value, opts).then(() => {
     void refreshHistory()
@@ -216,88 +187,310 @@ watch(
       </div>
     </header>
 
-    <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-5xl mx-auto px-7 py-8 space-y-6">
-        <div
-          v-if="canResume"
-          class="surface-1 px-5 py-4 rounded-md flex items-center justify-between gap-4"
-          data-testid="agent-resume-banner"
-        >
-          <div class="flex flex-col gap-1">
-            <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--tape-down)]">
-              previous run failed
-            </span>
-            <span class="font-mono text-[11px] text-[var(--paper-3)]">
+    <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden research-main">
+      <RunHeader
+        :status="status"
+        :events="events"
+        :elapsed-sec="elapsedSec"
+        :symbol="symbol"
+        :run-id="runId"
+        @cancel="cancel"
+      />
+
+      <div class="research-shell">
+        <!-- ─── PRIMARY column: the run itself ─── -->
+        <div class="research-primary">
+          <!-- Resume hint for ?run=<failed-id> deep-links. -->
+          <section
+            v-if="canResume"
+            class="resume-card"
+            data-testid="agent-resume-banner"
+          >
+            <header class="resume-card__head">
+              <span class="resume-card__eyebrow">
+                <span class="resume-card__dot" />
+                run halted
+              </span>
+              <span class="resume-card__id" data-mono>
+                run · {{ targetedRun?.id?.slice(0, 8) }}
+              </span>
+            </header>
+            <p class="resume-card__error" data-mono>
               {{ targetedRun?.error ?? 'unknown error' }}
-            </span>
-          </div>
-          <button
-            type="button"
-            class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-1.5 border border-[var(--ink-line)] rounded text-[var(--paper-1)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors"
-            data-testid="agent-resume-button"
-            @click="onResume"
+            </p>
+            <button
+              type="button"
+              class="resume-card__btn"
+              data-testid="agent-resume-button"
+              @click="onResume"
+            >
+              <span data-mono>resume from checkpoint</span>
+              <span class="resume-card__btn-glyph" data-mono>↻</span>
+            </button>
+          </section>
+
+          <RunCostEstimate
+            v-if="status === 'idle' && !canResume"
+            :symbol="symbol"
+            :run-history="costSamples"
+            @start="onStart"
+          />
+
+          <!-- Empty state inside an active run before any events arrive
+               (~1s window). Reads as a transmission test pattern. -->
+          <section
+            v-if="status === 'running' && events.length === 0"
+            class="warmup"
+            aria-live="polite"
           >
-            resume run
-          </button>
-        </div>
+            <div class="warmup__bars" aria-hidden="true">
+              <span /><span /><span /><span /><span />
+            </div>
+            <p class="warmup__text" data-mono>
+              opening graph · seeding memory · binding tools
+            </p>
+          </section>
 
-        <RunCostEstimate
-          v-if="status === 'idle' && !canResume"
-          :symbol="symbol"
-          :run-history="costSamples"
-          @start="onStart"
-        />
+          <AgentTimeline
+            v-if="events.length > 0"
+            :events="events"
+            class="timeline"
+          />
 
-        <div v-if="status === 'running'" class="flex items-center justify-between gap-4 surface-1 px-5 py-3 rounded-md">
-          <div class="flex items-baseline gap-3 min-w-0">
-            <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--accent)] running-dot shrink-0">
-              ●
-            </span>
-            <span class="font-mono text-xs lowercase tracking-[0.06em] text-[var(--paper-1)] truncate">
-              {{ progressMessage }}
-            </span>
-            <span class="font-mono text-xs text-[var(--paper-3)] tabular-nums shrink-0">
-              {{ elapsedSec }}s · {{ events.length }} event{{ events.length === 1 ? '' : 's' }}
-            </span>
-          </div>
-          <button
-            type="button"
-            class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-1.5 border border-[var(--ink-line)] rounded text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)] transition-colors shrink-0"
-            @click="cancel"
+          <AgentVerdict
+            v-if="verdict"
+            :rating="verdict.rating"
+            :confidence="verdict.confidence"
+            :rationale="verdict.rationale"
+            :run-id="runId"
+          />
+
+          <section
+            v-if="error && status === 'failed'"
+            class="error-card"
+            role="alert"
           >
-            cancel run
-          </button>
+            <header class="error-card__head">
+              <span class="error-card__eyebrow">transmission failed</span>
+            </header>
+            <p class="error-card__body" data-mono>{{ error }}</p>
+          </section>
         </div>
 
-        <AgentTimeline v-if="events.length > 0" :events="events" />
-
-        <AgentVerdict
-          v-if="verdict"
-          :rating="verdict.rating"
-          :confidence="verdict.confidence"
-          :rationale="verdict.rationale"
-          :run-id="runId"
-        />
-
-        <div
-          v-if="error"
-          class="surface-1 px-5 py-4 rounded-md font-mono text-sm text-[var(--tape-down)]"
-        >
-          {{ error }}
-        </div>
-
-        <RunHistoryTable :rows="historyRows" />
+        <!-- ─── SECONDARY column: history. Quieter, smaller. ─── -->
+        <aside class="research-secondary">
+          <header class="aside-head">
+            <span class="aside-head__eyebrow">recent runs</span>
+            <span class="aside-head__count" data-mono>
+              {{ historyRows.length }}
+            </span>
+          </header>
+          <RunHistoryTable :rows="historyRows" />
+        </aside>
       </div>
     </main>
   </div>
 </template>
 
 <style scoped>
-.running-dot {
-  animation: pulse 1.4s ease-in-out infinite;
+/* ─── Layout: a generous editorial column for the active run, with a
+   smaller history aside. The run is the page; history sits beside,
+   not below, so the user always knows where to look back. ─── */
+.research-main {
+  background:
+    radial-gradient(
+      ellipse at top,
+      rgba(212, 169, 106, 0.025) 0%,
+      transparent 55%
+    ),
+    var(--ink-0);
 }
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+
+.research-shell {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 1.5rem 1.5rem 4rem;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 2.5rem;
+}
+@media (max-width: 980px) {
+  .research-shell {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+}
+
+.research-primary {
+  display: flex;
+  flex-direction: column;
+  gap: 1.4rem;
+  min-width: 0;
+}
+
+.research-secondary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  min-width: 0;
+}
+.aside-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--ink-line);
+}
+.aside-head__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--paper-3);
+}
+.aside-head__count {
+  font-size: 0.7rem;
+  color: var(--paper-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Resume card ─── */
+.resume-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.2rem;
+  background: var(--ink-1);
+  border: 1px solid var(--ink-line-strong);
+  border-left: 3px solid var(--tape-down);
+  border-radius: 3px;
+}
+.resume-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.resume-card__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--tape-down);
+}
+.resume-card__dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--tape-down);
+}
+.resume-card__id {
+  font-size: 0.66rem;
+  letter-spacing: 0.18em;
+  color: var(--paper-3);
+  text-transform: uppercase;
+}
+.resume-card__error {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--paper-2);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.resume-card__btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.95rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--paper-1);
+  background: transparent;
+  border: 1px solid var(--ink-line-strong);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+.resume-card__btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.resume-card__btn-glyph {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+/* ─── Warm-up state ─── */
+.warmup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 2rem 1rem;
+}
+.warmup__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 32px;
+}
+.warmup__bars span {
+  display: block;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: warmup-bar 1.1s ease-in-out infinite;
+}
+.warmup__bars span:nth-child(1) { animation-delay: 0.0s; height: 60%; }
+.warmup__bars span:nth-child(2) { animation-delay: 0.1s; height: 80%; }
+.warmup__bars span:nth-child(3) { animation-delay: 0.2s; height: 100%; }
+.warmup__bars span:nth-child(4) { animation-delay: 0.3s; height: 75%; }
+.warmup__bars span:nth-child(5) { animation-delay: 0.4s; height: 50%; }
+@keyframes warmup-bar {
+  0%, 100% { transform: scaleY(0.4); opacity: 0.45; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+.warmup__text {
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--paper-3);
+}
+
+/* ─── Timeline wrapper ─── */
+.timeline {
+  border: 1px solid var(--ink-line);
+  border-radius: 3px;
+  background: var(--ink-1);
+  /* The first card's top border is provided by .step__head, and the
+     timeline wrapper supplies the outer frame. Keeps the seam clean. */
+  overflow: hidden;
+}
+
+/* ─── Error card ─── */
+.error-card {
+  padding: 1rem 1.2rem;
+  background: rgba(224, 122, 95, 0.04);
+  border: 1px solid rgba(224, 122, 95, 0.25);
+  border-radius: 3px;
+}
+.error-card__head { margin-bottom: 0.4rem; }
+.error-card__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--tape-down);
+}
+.error-card__body {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--paper-1);
+  line-height: 1.55;
+  word-break: break-word;
 }
 </style>

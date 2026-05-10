@@ -93,6 +93,12 @@ export default defineEventHandler(async (event) => {
       trade_date: tradeDate,
       max_debate_rounds: body.max_debate_rounds ?? 1,
       deep_thinking: body.deep_thinking ?? true,
+      // Forward the run_id we just minted so the api emits its run-start
+      // event with the same uuid the agent_runs row uses. Without this the
+      // api would generate its own id; the browser would persist that in
+      // ?run=<id>, and a refresh would 404 on agent_runs lookup because the
+      // tee writes against our id, not the api's.
+      run_id: run.id,
     }),
   })
 

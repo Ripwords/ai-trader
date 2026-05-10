@@ -121,7 +121,11 @@ async def run_agents(
     x_user_id: str | None = Header(default=None, alias="x-user-id"),
 ) -> StreamingResponse:
     _check_bearer(authorization)
-    run_id = str(uuid.uuid4())
+    # Accept the run_id from the Nuxt proxy so both layers share one canonical
+    # uuid (the proxy minted it when INSERTing agent_runs). Falling back to a
+    # fresh uuid would orphan the agent_messages tee from the row the browser
+    # links to via ?run=<id>.
+    run_id = body.run_id or str(uuid.uuid4())
     trade_date = body.trade_date or date_t.today()
 
     async def _stream() -> AsyncIterator[bytes]:
