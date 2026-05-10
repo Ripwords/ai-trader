@@ -11,6 +11,12 @@ MODELS: dict[tuple[str, str], dict[str, float]] = {
     ("google", "gemini-2.5-flash"): {"input_per_1m": 0.075, "output_per_1m": 0.30},
     ("deepseek", "deepseek-v4-pro"): {"input_per_1m": 0.55, "output_per_1m": 2.20},
     ("deepseek", "deepseek-v4-flash"): {"input_per_1m": 0.07, "output_per_1m": 0.28},
+    # Legacy DeepSeek pricing (still active until 2026-07-24). Keeping the
+    # entries so LLM_MODEL=deepseek/deepseek-chat — the only DeepSeek model
+    # that currently works with LangGraph's tool-calling loop, since v4
+    # defaults to thinking mode — gets correct $ amounts in run-end.
+    ("deepseek", "deepseek-chat"): {"input_per_1m": 0.07, "output_per_1m": 0.28},
+    ("deepseek", "deepseek-reasoner"): {"input_per_1m": 0.55, "output_per_1m": 2.20},
 }
 
 

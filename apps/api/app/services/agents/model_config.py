@@ -8,10 +8,15 @@ from datetime import date
 logger = logging.getLogger(__name__)
 
 LEGACY_DEEPSEEK_SUNSET = date(2026, 7, 24)
-LEGACY_DEEPSEEK_ALIASES = {
-    "deepseek-chat": "deepseek-v4-flash",
-    "deepseek-reasoner": "deepseek-v4-pro",
-}
+# Names DeepSeek will retire on LEGACY_DEEPSEEK_SUNSET. We log a deprecation
+# warning when the user explicitly picks one but DO NOT auto-rewrite to the
+# v4 equivalents — DeepSeek's v4 models default to thinking mode, which
+# LangChain+LiteLLM doesn't round-trip cleanly through LangGraph's
+# tool-calling loop (the API rejects multi-turn requests that drop
+# ``reasoning_content``). Until that integration improves, the legacy
+# non-thinking ``deepseek-chat`` is the only DeepSeek model that works with
+# the agents pipeline; an auto-rewrite would silently break user runs.
+LEGACY_DEEPSEEK_NAMES = {"deepseek-chat", "deepseek-reasoner"}
 
 QUICK_FALLBACK_MAP = {
     ("anthropic", "claude-sonnet-4-6"): "claude-haiku-4-5-20251001",
@@ -19,6 +24,11 @@ QUICK_FALLBACK_MAP = {
     ("openai", "gpt-4o"): "gpt-4o-mini",
     ("google", "gemini-2.5-pro"): "gemini-2.5-flash",
     ("deepseek", "deepseek-v4-pro"): "deepseek-v4-flash",
+    # Legacy DeepSeek pair: stays self-consistent so LLM_MODEL=deepseek/deepseek-chat
+    # produces a deepseek-chat quick model too (single-model run, both deep
+    # and quick are non-thinking).
+    ("deepseek", "deepseek-chat"): "deepseek-chat",
+    ("deepseek", "deepseek-reasoner"): "deepseek-reasoner",
 }
 
 QUICK_FAMILY_FALLBACK = {
@@ -46,22 +56,18 @@ def parse_model_spec(spec: str) -> ModelSpec:
     provider = provider.strip().lower()
     model_id = model_id.strip()
 
-    if provider == "deepseek" and model_id in LEGACY_DEEPSEEK_ALIASES:
+    if provider == "deepseek" and model_id in LEGACY_DEEPSEEK_NAMES:
         if date.today() >= LEGACY_DEEPSEEK_SUNSET:
             raise ValueError(
-                f"DeepSeek alias {model_id!r} retired on {LEGACY_DEEPSEEK_SUNSET.isoformat()}; "
-                f"use {LEGACY_DEEPSEEK_ALIASES[model_id]!r}"
+                f"DeepSeek model {model_id!r} was retired on "
+                f"{LEGACY_DEEPSEEK_SUNSET.isoformat()}; pick a v4 model "
+                "(but note v4 models are thinking-mode and don't currently "
+                "round-trip through LangGraph's tool-calling loop)"
             )
-        replacement = LEGACY_DEEPSEEK_ALIASES[model_id]
         logger.warning(
-            "DeepSeek model %r is deprecated and will be removed on %s. "
-            "Use %r instead. Auto-routing to %r for now.",
-            model_id,
-            LEGACY_DEEPSEEK_SUNSET.isoformat(),
-            replacement,
-            replacement,
+            "DeepSeek model %r will be retired on %s.",
+            model_id, LEGACY_DEEPSEEK_SUNSET.isoformat(),
         )
-        model_id = replacement
 
     return ModelSpec(provider=provider, model_id=model_id)
 

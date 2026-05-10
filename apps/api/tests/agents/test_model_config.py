@@ -37,11 +37,17 @@ def test_default_quick_deepseek_v4():
     assert default_quick_for("deepseek", "deepseek-v4-pro") == "deepseek-v4-flash"
 
 
-def test_legacy_deepseek_alias_warns(caplog):
+def test_legacy_deepseek_name_warns_but_does_not_rewrite(caplog):
+    """Earlier we auto-rewrote deepseek-chat -> deepseek-v4-flash. That broke
+    LangGraph runs because v4 defaults to thinking mode (LiteLLM doesn't
+    round-trip ``reasoning_content`` cleanly). The legacy non-thinking name
+    is the only DeepSeek model that works today, so we keep it as-is and
+    just log the upcoming retirement."""
     caplog.set_level(logging.WARNING, logger="app.services.agents.model_config")
-    spec = parse_model_spec("deepseek/deepseek-reasoner")
+    spec = parse_model_spec("deepseek/deepseek-chat")
     assert spec.provider == "deepseek"
-    assert "deprecated" in caplog.text.lower()
+    assert spec.model_id == "deepseek-chat"   # NOT rewritten
+    assert "retired" in caplog.text.lower() or "will be" in caplog.text.lower()
 
 
 def test_build_config_uses_env(monkeypatch):
