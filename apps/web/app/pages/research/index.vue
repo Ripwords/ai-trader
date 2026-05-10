@@ -90,6 +90,11 @@ const canRun = computed(() =>
   && !running.value,
 )
 const canSynthesize = computed(() => signals.value.length > 0 && !synthesizing.value)
+const synthesizeBtnLabel = computed(() => {
+  if (synthesizing.value) return 'synthesizing…'
+  if (decisions.value) return 're-synthesize ↻'
+  return 'synthesize decisions →'
+})
 
 function toggleAnalyst(a: AnalystName) {
   const idx = selectedAnalysts.value.indexOf(a)
@@ -195,6 +200,7 @@ watch([event, data], ([ev, dat]) => {
   } else if (payload.kind === 'done') {
     running.value = false
     close()
+    if (signals.value.length > 0) void synthesize()
   }
 })
 
@@ -358,10 +364,10 @@ onUnmounted(() => close())
               @click="synthesize"
             >
               <span v-if="synthesizing" class="spinner" aria-hidden="true" />
-              <span>{{ synthesizing ? 'synthesizing…' : 'synthesize decisions →' }}</span>
+              <span>{{ synthesizeBtnLabel }}</span>
             </button>
             <span class="font-mono text-xs text-[var(--paper-3)]">
-              fan signals into a single decision per symbol
+              {{ decisions ? 're-fan signals into a fresh decision' : 'fan signals into a single decision per symbol' }}
             </span>
           </div>
 
