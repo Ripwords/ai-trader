@@ -110,66 +110,103 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
     ``symbol`` before this rename.
     """
 
+    # ─── Tool signatures match TradingAgents' bundled tools verbatim ───
+    # The analyst prompts are trained on the upstream signatures; any drift
+    # (param name, missing optional arg, missing date kwarg) burns multiple
+    # tool calls per run while the LLM guesses what we want. We accept every
+    # upstream param even when our HTTP-backed implementation can't honour
+    # it (e.g. ``freq=quarterly``, ``curr_date``) — silently ignore is
+    # better than schema-validation failures that the LLM has to retry past.
+    # Where upstream itself is inconsistent (some tools use ``symbol``,
+    # others ``ticker``), match upstream — don't unify; that would just
+    # re-introduce the drift.
+
     @tool
-    async def get_balance_sheet(symbol: str) -> str:
-        """Latest balance sheet for the given symbol."""
-        data = await _internal_get("/internal/yahoo/balance-sheet", {"symbol": symbol})
+    async def get_balance_sheet(
+        ticker: str,
+        freq: str = "quarterly",
+        curr_date: str | None = None,
+    ) -> str:
+        """Retrieve balance sheet data for a given ticker symbol."""
+        del freq, curr_date  # Yahoo bundle only carries the most-recent period
+        data = await _internal_get("/internal/yahoo/balance-sheet", {"symbol": ticker})
         bs = data.get("balance_sheet")
         if not bs:
-            return f"No balance sheet available for {symbol}."
-        return f"Balance Sheet for {symbol}:\n```json\n{json.dumps(bs, indent=2)}\n```"
+            return f"No balance sheet available for {ticker}."
+        return f"Balance Sheet for {ticker}:\n```json\n{json.dumps(bs, indent=2)}\n```"
 
     @tool
-    async def get_cashflow(symbol: str) -> str:
-        """Latest cash-flow statement for the given symbol."""
-        data = await _internal_get("/internal/yahoo/cashflow", {"symbol": symbol})
+    async def get_cashflow(
+        ticker: str,
+        freq: str = "quarterly",
+        curr_date: str | None = None,
+    ) -> str:
+        """Retrieve cash flow statement data for a given ticker symbol."""
+        del freq, curr_date
+        data = await _internal_get("/internal/yahoo/cashflow", {"symbol": ticker})
         cf = data.get("cashflow")
         if not cf:
-            return f"No cashflow available for {symbol}."
-        return f"Cashflow for {symbol}:\n```json\n{json.dumps(cf, indent=2)}\n```"
+            return f"No cashflow available for {ticker}."
+        return f"Cashflow for {ticker}:\n```json\n{json.dumps(cf, indent=2)}\n```"
 
     @tool
-    async def get_income_statement(symbol: str) -> str:
-        """Latest income statement for the given symbol."""
-        data = await _internal_get("/internal/yahoo/income-statement", {"symbol": symbol})
+    async def get_income_statement(
+        ticker: str,
+        freq: str = "quarterly",
+        curr_date: str | None = None,
+    ) -> str:
+        """Retrieve income statement data for a given ticker symbol."""
+        del freq, curr_date
+        data = await _internal_get("/internal/yahoo/income-statement", {"symbol": ticker})
         is_ = data.get("income_statement")
         if not is_:
-            return f"No income statement available for {symbol}."
-        return f"Income Statement for {symbol}:\n```json\n{json.dumps(is_, indent=2)}\n```"
+            return f"No income statement available for {ticker}."
+        return f"Income Statement for {ticker}:\n```json\n{json.dumps(is_, indent=2)}\n```"
 
     @tool
-    async def get_fundamentals(symbol: str) -> str:
-        """Comprehensive fundamentals bundle (PE, margins, growth, etc.)."""
-        data = await _internal_get("/internal/yahoo/fundamentals", {"symbol": symbol})
-        return f"Fundamentals for {symbol}:\n```json\n{json.dumps(data, indent=2)}\n```"
+    async def get_fundamentals(ticker: str, curr_date: str) -> str:
+        """Retrieve comprehensive fundamental data for a given ticker symbol."""
+        del curr_date
+        data = await _internal_get("/internal/yahoo/fundamentals", {"symbol": ticker})
+        return f"Fundamentals for {ticker}:\n```json\n{json.dumps(data, indent=2)}\n```"
 
     @tool
-    async def get_insider_transactions(symbol: str) -> str:
-        """Recent insider trades for the given symbol."""
+    async def get_insider_transactions(
+        ticker: str,
+        curr_date: str | None = None,
+    ) -> str:
+        """Retrieve insider transaction information about a company."""
+        del curr_date
         data = await _internal_get(
-            "/internal/yahoo/insider-transactions", {"symbol": symbol}
+            "/internal/yahoo/insider-transactions", {"symbol": ticker}
         )
         rows = data.get("transactions") or []
         if not rows:
-            return f"No insider transactions in the last 90 days for {symbol}."
-        return f"Insider Transactions for {symbol}:\n```json\n{json.dumps(rows, indent=2)}\n```"
+            return f"No insider transactions in the last 90 days for {ticker}."
+        return f"Insider Transactions for {ticker}:\n```json\n{json.dumps(rows, indent=2)}\n```"
 
     @tool
-    async def get_news(symbol: str, date_range: str = "7d") -> str:
-        """Recent news articles mentioning the symbol."""
+    async def get_news(ticker: str, start_date: str, end_date: str) -> str:
+        """Retrieve news data for a given ticker symbol over a date range."""
+        del start_date, end_date  # Tavily/Brave search returns recent news regardless
         data = await _internal_get(
-            "/internal/news/symbol", {"symbol": symbol, "max_results": 10}
+            "/internal/news/symbol", {"symbol": ticker, "max_results": 10}
         )
         if data.get("error") and not data.get("results"):
             return "News search not configured. Skipping news analysis."
-        return f"News for {symbol}:\n```json\n{json.dumps(data.get('results', []), indent=2)}\n```"
+        return f"News for {ticker}:\n```json\n{json.dumps(data.get('results', []), indent=2)}\n```"
 
     @tool
-    async def get_global_news(date_range: str = "7d", topic: str = "macro") -> str:
-        """Recent global macroeconomic news headlines."""
+    async def get_global_news(
+        curr_date: str,
+        look_back_days: int = 7,
+        limit: int = 5,
+    ) -> str:
+        """Retrieve global macroeconomic news headlines."""
+        del curr_date, look_back_days  # search provider returns recent matches
         data = await _internal_get(
             "/internal/news/global",
-            {"query": f"{topic} news", "max_results": 10},
+            {"query": "global macroeconomic news", "max_results": max(limit, 5)},
         )
         if data.get("error") and not data.get("results"):
             return "News search not configured. Skipping global news."

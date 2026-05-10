@@ -102,7 +102,7 @@ async def test_get_balance_sheet_calls_internal(monkeypatch):
 
     with patch("httpx.AsyncClient.get", new=fake_get):
         toolkit = build_toolkit(opend_client=None)
-        result = await toolkit.get_balance_sheet.ainvoke({"symbol": "NVDA"})
+        result = await toolkit.get_balance_sheet.ainvoke({"ticker": "NVDA"})
     assert "Balance Sheet for NVDA" in result
     assert "total_assets" in result
     assert "/internal/yahoo/balance-sheet" in captured["url"]
@@ -129,7 +129,7 @@ async def test_get_balance_sheet_handles_empty(monkeypatch):
 
     with patch("httpx.AsyncClient.get", new=fake_get):
         toolkit = build_toolkit(opend_client=None)
-        result = await toolkit.get_balance_sheet.ainvoke({"symbol": "NVDA"})
+        result = await toolkit.get_balance_sheet.ainvoke({"ticker": "NVDA"})
     assert "No balance sheet" in result
 
 
@@ -152,5 +152,5 @@ async def test_get_news_handles_search_failure(monkeypatch):
 
     with patch("httpx.AsyncClient.get", new=fake_get):
         toolkit = build_toolkit(opend_client=None)
-        result = await toolkit.get_news.ainvoke({"symbol": "NVDA", "date_range": "7d"})
+        result = await toolkit.get_news.ainvoke({"ticker": "NVDA", "start_date": "2026-05-01", "end_date": "2026-05-10"})
     assert "News search not configured" in result or "no key" in result.lower()
