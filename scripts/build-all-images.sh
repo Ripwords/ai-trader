@@ -7,6 +7,7 @@
 #   - api                → ai-trader-api:latest             (apps/api)
 #   - web                → ai-trader-web:latest             (apps/web, default target)
 #   - drizzle-migrate    → ai-trader-drizzle-migrate:latest (apps/web, target=migrate)
+#   - agents-cron        → ai-trader-agents-cron:latest     (apps/cron)
 #
 # Not built (pulled on the server): postgres.
 #
@@ -20,6 +21,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_CONTEXT="${REPO_ROOT}/apps/web"
 API_CONTEXT="${REPO_ROOT}/apps/api"
+CRON_CONTEXT="${REPO_ROOT}/apps/cron"
 OUT_DIR="${REPO_ROOT}/dist"
 OUT_FILE="${OUT_DIR}/ai-trader-all.tar.gz"
 PLATFORM="linux/amd64"
@@ -27,6 +29,7 @@ PLATFORM="linux/amd64"
 API_IMAGE="ai-trader-api:latest"
 WEB_IMAGE="ai-trader-web:latest"
 MIGRATE_IMAGE="ai-trader-drizzle-migrate:latest"
+CRON_IMAGE="ai-trader-agents-cron:latest"
 
 mkdir -p "${OUT_DIR}"
 
@@ -52,8 +55,15 @@ docker buildx build \
   --load \
   "${WEB_CONTEXT}"
 
-echo "→ saving 3 images to ${OUT_FILE}"
-docker save "${API_IMAGE}" "${WEB_IMAGE}" "${MIGRATE_IMAGE}" | gzip > "${OUT_FILE}"
+echo "→ building ${CRON_IMAGE} for ${PLATFORM}"
+docker buildx build \
+  --platform "${PLATFORM}" \
+  --tag "${CRON_IMAGE}" \
+  --load \
+  "${CRON_CONTEXT}"
+
+echo "→ saving 4 images to ${OUT_FILE}"
+docker save "${API_IMAGE}" "${WEB_IMAGE}" "${MIGRATE_IMAGE}" "${CRON_IMAGE}" | gzip > "${OUT_FILE}"
 
 SIZE="$(du -h "${OUT_FILE}" | cut -f1)"
 echo
@@ -91,6 +101,6 @@ cat <<'EOF'
 #    # → should print the path. If "No such file or directory", the swap didn't take.
 #
 #    sudo docker compose ps
-#    # → api + web should be Up, drizzle-migrate should be Exited (0).
+#    # → api + web + agents-cron should be Up, drizzle-migrate should be Exited (0).
 
 EOF
