@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAgentsRun } from '../../../composables/useAgentsRun'
 
 definePageMeta({ section: 'research' })
@@ -153,11 +153,22 @@ watch(runId, (id) => {
   void router.replace({ query: { ...route.query, run: id } })
 })
 
-onMounted(() => {
-  if (queryRunId.value) {
-    void loadFromHistory(queryRunId.value)
-  }
-})
+// Trigger loadFromHistory on initial mount AND on every later
+// ?run=<id> query change. Same-page navigation (clicking a row in
+// RunHistoryTable when already on this page) only updates the query
+// param — the [symbol].vue component doesn't unmount, so onMounted
+// alone wouldn't refire and the composable's state would stay frozen
+// on whatever the previous run rendered.
+watch(
+  queryRunId,
+  (id, prev) => {
+    if (!id) return
+    if (id === prev) return
+    if (id === runId.value && events.value.length > 0) return
+    void loadFromHistory(id)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
