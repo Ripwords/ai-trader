@@ -40,14 +40,15 @@ describe('useAgentsRun.start — concurrent-run guard', () => {
 })
 
 describe('useAgentsRun.loadFromHistory — refresh-survival', () => {
-  it('rehydrates events + status from /api/research/agent-messages', async () => {
+  it('rehydrates events + status + startedAt from /api/research/agent-messages', async () => {
     ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(async () => ({
       ok: true,
       status: 200,
       json: async () => ({
         runId: 'r-7',
         status: 'complete',
-        finishedAt: '2026-05-10T00:00:00Z',
+        startedAt: '2026-05-10T12:00:00Z',
+        finishedAt: '2026-05-10T12:01:30Z',
         lastSeq: 3,
         events: [
           { type: 'run-start', run_id: 'r-7', symbol: 'NVDA', config: {} },
@@ -65,6 +66,11 @@ describe('useAgentsRun.loadFromHistory — refresh-survival', () => {
     expect(run.status.value).toBe('complete')
     expect(run.events.value.length).toBe(4)
     expect(run.verdict.value).toMatchObject({ rating: 'buy', confidence: 70 })
+    // startedAt comes from agent_runs.started_at, not Date.now() — so a
+    // refreshed page sees the original wall-clock start, and the elapsed
+    // counter shows cumulative seconds.
+    expect(run.startedAt.value).toBeInstanceOf(Date)
+    expect(run.startedAt.value?.toISOString()).toBe('2026-05-10T12:00:00.000Z')
   })
 
   it('resets to idle when the run is not found (stale URL)', async () => {

@@ -35,6 +35,10 @@ export function useAgentsRun() {
   const verdict = ref<VerdictState | null>(null)
   const runId = ref<string | null>(null)
   const error = ref<string | null>(null)
+  // Real wall-clock start of the run, not the moment the local fetch began.
+  // Sourced from agent_runs.started_at when replaying from history so a
+  // refreshed page shows the cumulative elapsed time, not a re-zeroed counter.
+  const startedAt = ref<Date | null>(null)
   let controller: AbortController | null = null
 
   /**
@@ -91,6 +95,7 @@ export function useAgentsRun() {
     currentNode.value = null
     verdict.value = null
     error.value = null
+    startedAt.value = new Date()
     controller = new AbortController()
 
     const res = await fetch('/api/research/agents-run', {
@@ -137,6 +142,11 @@ export function useAgentsRun() {
     verdict.value = null
     error.value = null
     runId.value = originalRunId
+    // ``startedAt`` from the original run is more meaningful than "now" here,
+    // but we don't have it on the resume path. The page-level elapsed counter
+    // will reflect the resume window only — fine for v1; full cumulative
+    // time would need fetching the agent_runs row first.
+    startedAt.value = new Date()
     controller = new AbortController()
 
     const res = await fetch('/api/research/agents-resume', {
@@ -214,6 +224,7 @@ export function useAgentsRun() {
   interface MessagesResponse {
     runId: string
     status: 'running' | 'complete' | 'failed' | 'cancelled'
+    startedAt: string | null
     finishedAt: string | null
     lastSeq: number
     events: AgentEvent[]
@@ -260,6 +271,7 @@ export function useAgentsRun() {
       // the page renders the Run button instead of a confusing error banner.
       status.value = 'idle'
       runId.value = null
+      startedAt.value = null
       return
     }
     if (initial === null) {
@@ -270,6 +282,7 @@ export function useAgentsRun() {
     applyEvents(initial.events)
     lastSeq = initial.lastSeq
     status.value = initial.status
+    startedAt.value = initial.startedAt ? new Date(initial.startedAt) : null
 
     if (initial.status === 'running') {
       pollTimer = setInterval(() => {
@@ -290,5 +303,9 @@ export function useAgentsRun() {
     }
   }
 
-  return { events, status, currentNode, verdict, runId, error, start, resume, cancel, loadFromHistory }
+  return {
+    events, status, currentNode, verdict, runId, error,
+    startedAt,
+    start, resume, cancel, loadFromHistory,
+  }
 }

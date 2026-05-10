@@ -30,7 +30,10 @@ const queryRunId = computed(() => {
 
 useHead({ title: () => `research · ${symbol.value}` })
 
-const { events, status, verdict, runId, error, start, resume, cancel, loadFromHistory } = useAgentsRun()
+const {
+  events, status, verdict, runId, error, startedAt,
+  start, resume, cancel, loadFromHistory,
+} = useAgentsRun()
 const router = useRouter()
 
 const { data: runHistory, refresh: refreshHistory } = await useFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs', {
@@ -67,29 +70,39 @@ const costSamples = computed(() =>
 
 // ────── Running-state progress UX ──────
 // The first analyst can take 15-30s to finish its report; without surfacing
-// per-tool / per-node activity the page reads as "stuck on running…". Track
+// per-tool / per-node activity the page reads as "stuck on running…". Show
 // elapsed seconds + the latest concrete activity so the banner can show
 // "Fundamentals Analyst · get_balance_sheet · 12s" instead of just a dot.
-const startedAt = ref<number | null>(null)
+//
+// Anchor to the run's actual ``started_at`` (sourced from agent_runs by the
+// composable on history-replay) rather than ``Date.now()`` at status flip,
+// so a refreshed page shows the cumulative elapsed time, not a re-zeroed
+// counter.
 const elapsedSec = ref(0)
 let elapsedTimer: ReturnType<typeof setInterval> | null = null
 
-watch(status, (s) => {
-  if (s === 'running') {
-    startedAt.value = Date.now()
+function recomputeElapsed() {
+  if (startedAt.value === null) {
     elapsedSec.value = 0
+    return
+  }
+  elapsedSec.value = Math.max(0, Math.floor((Date.now() - startedAt.value.getTime()) / 1000))
+}
+
+watch([status, startedAt], ([s]) => {
+  if (s === 'running') {
+    recomputeElapsed()
     if (elapsedTimer) clearInterval(elapsedTimer)
-    elapsedTimer = setInterval(() => {
-      if (startedAt.value !== null) {
-        elapsedSec.value = Math.floor((Date.now() - startedAt.value) / 1000)
-      }
-    }, 1000)
+    elapsedTimer = setInterval(recomputeElapsed, 1000)
   }
-  else if (elapsedTimer) {
-    clearInterval(elapsedTimer)
-    elapsedTimer = null
+  else {
+    if (elapsedTimer) {
+      clearInterval(elapsedTimer)
+      elapsedTimer = null
+    }
+    recomputeElapsed()
   }
-})
+}, { immediate: true })
 
 const lastToolEvent = computed(() => {
   for (let i = events.value.length - 1; i >= 0; i--) {

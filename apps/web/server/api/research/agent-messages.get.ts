@@ -42,11 +42,12 @@ export default defineEventHandler(async (event) => {
 
   const db = getDb()
 
-  // Fetch the run row first to authorise + return current status/finishedAt.
+  // Fetch the run row first to authorise + return current status/timestamps.
   const runRows = await db
     .select({
       id: agentRuns.id,
       status: agentRuns.status,
+      startedAt: agentRuns.startedAt,
       finishedAt: agentRuns.finishedAt,
       userId: agentRuns.userId,
     })
@@ -76,6 +77,7 @@ export default defineEventHandler(async (event) => {
   return {
     runId: run.id,
     status: run.status,
+    startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     lastSeq,
     events,
