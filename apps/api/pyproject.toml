@@ -14,6 +14,15 @@ dependencies = [
   "pandas>=2.2",
   # Async DB access for algo persistence (strategies/runs/signals).
   "asyncpg>=0.29",
+  # TradingAgents pipeline (LangChain + LangGraph + tradingagents).
+  "langchain-anthropic>=0.3.15",
+  "langchain-core>=0.3.81",
+  "langchain-google-genai>=4.0.0",
+  "langchain-openai>=0.3.23",
+  "langgraph>=0.4.8",
+  "langgraph-checkpoint-postgres>=2.0.0",
+  "stockstats>=0.6.5",
+  "tradingagents>=0.2.4",
 ]
 
 [dependency-groups]
