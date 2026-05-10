@@ -178,6 +178,149 @@ async def test_resume_returns_503_when_db_pool_missing(
         assert r.status_code == 503
 
 
+@pytest.mark.asyncio
+async def test_run_aborts_when_daily_cap_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``assert_under_daily_cap`` raises, the run never reaches the graph.
+
+    The router pulls a connection from ``app.state.pg_pool`` and calls
+    ``assert_under_daily_cap`` *before* invoking ``run_graph``. We stub the
+    pool with a fake whose acquired connection's ``fetchval`` returns a value
+    above the cap, then assert the response stream is exactly run-start /
+    error / run-end (no node-start, no decision).
+    """
+    monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
+    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
+    monkeypatch.setenv("AGENTS_DAILY_COST_USD_CAP", "5.00")
+
+    from app.main import create_app
+    from app.services.agents import graph as graph_mod
+    from app.settings import get_settings
+
+    get_settings.cache_clear()
+
+    async def boom_run(*_a, **_kw):
+        raise AssertionError("run_graph must not be called when cap is exceeded")
+        yield  # pragma: no cover  # makes it an async generator
+
+    def fake_build_graph(opend_client, **kwargs):
+        raise AssertionError("build_graph must not be called when cap is exceeded")
+
+    monkeypatch.setattr(graph_mod, "run_graph", boom_run)
+    monkeypatch.setattr(graph_mod, "build_graph", fake_build_graph)
+
+    class FakeConn:
+        async def fetchval(self, query: str, *args) -> float:
+            return 5.50  # over the 5.00 cap
+
+    class FakeAcquireCtx:
+        async def __aenter__(self) -> FakeConn:
+            return FakeConn()
+
+        async def __aexit__(self, *a) -> None:
+            return None
+
+    class FakePool:
+        def acquire(self) -> FakeAcquireCtx:
+            return FakeAcquireCtx()
+
+    app = create_app()
+    app.state.pg_pool = FakePool()
+
+    headers = {"authorization": "Bearer test-bearer"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        async with c.stream(
+            "POST",
+            "/agents/run",
+            json={"symbol": "NVDA"},
+            headers={**headers, "x-user-id": "00000000-0000-0000-0000-0000000000aa"},
+        ) as r:
+            assert r.status_code == 200
+            lines = [
+                json.loads(line) async for line in r.aiter_lines() if line.strip()
+            ]
+
+    types = [e["type"] for e in lines]
+    assert types[0] == "run-start"
+    assert types[-1] == "run-end"
+    assert any(
+        e["type"] == "error" and "daily cap exceeded" in e["message"] for e in lines
+    )
+    # No node-start / decision should have been emitted.
+    assert not any(e["type"] in ("node-start", "decision") for e in lines)
+
+
+@pytest.mark.asyncio
+async def test_run_proceeds_when_under_daily_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sanity-check: when ``fetchval`` is under cap, the graph runs normally."""
+    monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
+    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
+    monkeypatch.setenv("AGENTS_DAILY_COST_USD_CAP", "5.00")
+
+    from app.main import create_app
+    from app.services.agents import graph as graph_mod
+    from app.settings import get_settings
+
+    get_settings.cache_clear()
+
+    async def fake_run_graph(*_a, **_kw):
+        yield {
+            "metadata": {"langgraph_node": "trader", "node_finished": True},
+            "values": {
+                "decision": {
+                    "rating": "buy",
+                    "confidence": 70,
+                    "rationale": "ok",
+                }
+            },
+        }
+
+    def fake_build_graph(opend_client, **kwargs):
+        return object()
+
+    monkeypatch.setattr(graph_mod, "run_graph", fake_run_graph)
+    monkeypatch.setattr(graph_mod, "build_graph", fake_build_graph)
+
+    class FakeConn:
+        async def fetchval(self, query: str, *args) -> float:
+            return 0.50
+
+    class FakeAcquireCtx:
+        async def __aenter__(self) -> FakeConn:
+            return FakeConn()
+
+        async def __aexit__(self, *a) -> None:
+            return None
+
+    class FakePool:
+        def acquire(self) -> FakeAcquireCtx:
+            return FakeAcquireCtx()
+
+    app = create_app()
+    app.state.pg_pool = FakePool()
+
+    headers = {"authorization": "Bearer test-bearer"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        async with c.stream(
+            "POST",
+            "/agents/run",
+            json={"symbol": "NVDA"},
+            headers={**headers, "x-user-id": "00000000-0000-0000-0000-0000000000bb"},
+        ) as r:
+            assert r.status_code == 200
+            lines = [
+                json.loads(line) async for line in r.aiter_lines() if line.strip()
+            ]
+
+    assert any(e["type"] == "decision" for e in lines)
+    assert lines[-1]["type"] == "run-end"
+
+
 @pytest.mark.smoke
 @pytest.mark.skipif(
     os.environ.get("RUN_SMOKE") != "1",

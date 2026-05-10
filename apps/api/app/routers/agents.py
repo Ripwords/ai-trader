@@ -36,7 +36,7 @@ from fastapi.responses import StreamingResponse
 from app.schemas.agents import RunRequest
 from app.services.agents import graph as graph_mod
 from app.services.agents import reflection as reflection_mod
-from app.services.agents.cost_cap import DailyCapExceeded
+from app.services.agents.cost_cap import DailyCapExceeded, assert_under_daily_cap
 from app.services.agents.memory import PostgresMemoryProvider
 from app.services.agents.streaming import translate_chunks
 from app.settings import get_settings
@@ -98,6 +98,56 @@ async def run_agents(
         task = asyncio.current_task()
         if task is not None:
             _active_runs[run_id] = task
+
+        # Cost-cap check happens *before* graph construction so we don't pay
+        # for compiling a doomed run. The asyncpg pool is wired by the FastAPI
+        # lifespan; if it's missing (unit tests, dev without DB), skip the
+        # check — degrades open rather than refusing every run. Same for
+        # missing ``x-user-id`` (we can't sum-by-user without one). On cap
+        # exceeded we still emit ``run-start`` first so the wire stream's
+        # event taxonomy is well-formed (the client expects run-start as the
+        # opener); then ``error``; then the ``finally`` block emits run-end.
+        settings = get_settings()
+        pool = getattr(request.app.state, "pg_pool", None)
+        if pool is not None and x_user_id:
+            try:
+                async with pool.acquire() as conn:
+                    await assert_under_daily_cap(
+                        conn, x_user_id, settings.AGENTS_DAILY_COST_USD_CAP
+                    )
+            except DailyCapExceeded as e:
+                yield (
+                    json.dumps(
+                        {
+                            "type": "run-start",
+                            "run_id": run_id,
+                            "symbol": body.symbol,
+                            "config": {
+                                "max_debate_rounds": body.max_debate_rounds,
+                                "deep_thinking": body.deep_thinking,
+                            },
+                        }
+                    )
+                    + "\n"
+                ).encode()
+                yield (
+                    json.dumps({"type": "error", "message": str(e)}) + "\n"
+                ).encode()
+                _active_runs.pop(run_id, None)
+                yield (
+                    json.dumps(
+                        {
+                            "type": "run-end",
+                            "run_id": run_id,
+                            "tokens_in": 0,
+                            "tokens_out": 0,
+                            "cost_usd": 0.0,
+                        }
+                    )
+                    + "\n"
+                ).encode()
+                return
+
         opend = getattr(request.app.state, "opend_client", None)
         checkpointer = getattr(request.app.state, "checkpointer", None)
         graph = graph_mod.build_graph(
