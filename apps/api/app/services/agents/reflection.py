@@ -75,17 +75,22 @@ def _classify_outcome(rating: str, alpha: float) -> Outcome:
 
 
 def _bar_date(bar: dict[str, Any]) -> date | None:
-    """Extract the ``time_key`` of a bar as a :class:`date`.
+    """Extract the bar's date as a :class:`date`.
 
-    Bars may surface ``time_key`` as a date-only ISO string (``2026-05-01``)
-    or a full ISO datetime (``2026-05-01 09:30:00``); ``date.fromisoformat``
-    rejects the latter so we parse via :class:`datetime` and discard the
-    time component. Returns ``None`` for malformed bars so the caller can
-    skip them rather than raise.
+    Test fixtures use ``time_key`` (the moomoo SDK's native field); the
+    production :class:`Bar` pydantic model uses ``time`` (a datetime). We
+    accept either — checking ``time_key`` first to keep existing tests
+    deterministic — and tolerate date-only ISO strings, full ISO datetimes,
+    and :class:`datetime` instances. Returns ``None`` for malformed bars so
+    the caller can skip them rather than raise.
     """
-    raw = bar.get("time_key")
+    raw = bar.get("time_key", bar.get("time"))
     if raw is None:
         return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
     text = str(raw).strip()
     if not text:
         return None

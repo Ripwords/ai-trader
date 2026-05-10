@@ -25,6 +25,42 @@ from app.services.algo.scheduler import (
 from app.settings import get_settings
 
 
+_AGENTS_KTYPE_MAP = {
+    "K_1M": "1m", "K_3M": "3m", "K_5M": "5m", "K_15M": "15m",
+    "K_30M": "30m", "K_60M": "60m", "K_DAY": "1d", "K_WEEK": "1w",
+    "K_MON": "1M",
+}
+
+
+class _AgentsOpenDClient:
+    """Async-compatible bridge from the agents toolkit/reflection to the sync
+    :class:`OpendAdapter`.
+
+    The toolkit and reflection were written against an async client that
+    accepts SDK-style ktype strings (``K_DAY``); the production adapter is
+    sync and accepts adapter-style ktype strings (``1d``). This bridge:
+
+    1. Resolves the adapter lazily so a missing/down OpenD doesn't crash
+       startup or break unrelated requests.
+    2. Translates ``K_DAY``-style ktypes to the adapter's ``1d``-style.
+    3. Routes the sync call through :func:`asyncio.to_thread`.
+    4. Returns the raw :class:`KLineResponse`; consumers already coerce its
+       ``.bars`` via :func:`_kline_bars` / :func:`_maybe_await_kline`.
+    """
+
+    def __init__(self, host: str, port: int) -> None:
+        self._host = host
+        self._port = port
+
+    async def get_kline(self, ticker: str, ktype: str, num: int) -> Any:
+        adapter_ktype = _AGENTS_KTYPE_MAP.get(ktype, ktype)
+        return await asyncio.to_thread(
+            lambda: _build_adapter(self._host, self._port).get_kline(
+                code=ticker, ktype=adapter_ktype, num=num
+            )
+        )
+
+
 def _make_opend_bridges():
     """Return (get_klines, get_position, get_account_summary, place_paper_order)
     callables that wrap the sync OpendAdapter into asyncio. We resolve the
@@ -144,6 +180,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pg_pool: asyncpg.Pool | None = None
     checkpointer_pool: AsyncConnectionPool | None = None
     app.state.checkpointer = None
+    app.state.opend_client = _AgentsOpenDClient(settings.OPEND_HOST, settings.OPEND_PORT)
     if settings.DATABASE_URL:
         await algo_repo.init_pool(settings.DATABASE_URL)
         try:

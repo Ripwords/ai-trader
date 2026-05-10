@@ -354,6 +354,33 @@ async def test_reflect_endpoint_returns_count(
         assert r.json() == {"reflected": 3}
 
 
+def test_bar_date_reads_time_key_string() -> None:
+    from app.services.agents.reflection import _bar_date
+
+    assert _bar_date({"time_key": "2026-05-01"}) == date(2026, 5, 1)
+    assert _bar_date({"time_key": "2026-05-01 09:30:00"}) == date(2026, 5, 1)
+
+
+def test_bar_date_falls_back_to_time_field() -> None:
+    """Production OpendAdapter's Bar pydantic model exposes ``time`` (datetime),
+    not ``time_key``; reflection must read either."""
+    from datetime import datetime
+
+    from app.services.agents.reflection import _bar_date
+
+    assert _bar_date({"time": datetime(2026, 5, 1, 16, 0)}) == date(2026, 5, 1)
+    assert _bar_date({"time": date(2026, 5, 1)}) == date(2026, 5, 1)
+    assert _bar_date({"time": "2026-05-01"}) == date(2026, 5, 1)
+
+
+def test_bar_date_returns_none_for_missing_or_malformed() -> None:
+    from app.services.agents.reflection import _bar_date
+
+    assert _bar_date({}) is None
+    assert _bar_date({"time_key": ""}) is None
+    assert _bar_date({"time_key": "not-a-date"}) is None
+
+
 @pytest.mark.asyncio
 async def test_reflect_endpoint_unauthorized() -> None:
     from httpx import ASGITransport, AsyncClient
