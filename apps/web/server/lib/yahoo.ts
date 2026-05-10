@@ -34,9 +34,36 @@ export interface HistoricalPeriod {
   shareholders_equity: number | null
 }
 
+export interface BalanceSheetSnapshot {
+  period: string
+  total_assets: number | null
+  total_liabilities: number | null
+  total_equity: number | null
+  total_debt: number | null
+}
+
+export interface CashflowSnapshot {
+  period: string
+  free_cash_flow: number | null
+}
+
+export interface IncomeStatementSnapshot {
+  period: string
+  revenue: number | null
+  net_income: number | null
+  eps: number | null
+}
+
 export interface FundamentalsBundle {
+  symbol: string
   metrics: FinancialMetrics
   history: HistoricalPeriod[]
+  /** Most-recent-period balance sheet projection. null if unavailable. */
+  balance_sheet: BalanceSheetSnapshot | null
+  /** Most-recent-period cashflow projection. null if unavailable. */
+  cashflow: CashflowSnapshot | null
+  /** Most-recent-period income statement projection. null if unavailable. */
+  income_statement: IncomeStatementSnapshot | null
 }
 
 export interface InsiderTrade {
@@ -312,7 +339,34 @@ export async function getFundamentalsBundle(symbol: string): Promise<Fundamental
     getFinancialMetrics(symbol),
     getHistorical(symbol, 5),
   ])
-  return { metrics, history }
+  const latest = history[0] ?? null
+  // Derive snake_case per-statement projections from the most recent period.
+  // Yahoo's quoteSummary already gave us the parts we care about — total
+  // assets, debt, equity, FCF, revenue, net income — flattened into
+  // HistoricalPeriod. The /internal/* routes consume these directly.
+  const balance_sheet: BalanceSheetSnapshot | null = latest
+    ? {
+        period: latest.period,
+        total_assets: latest.total_assets,
+        total_liabilities: latest.total_assets !== null && latest.shareholders_equity !== null
+          ? latest.total_assets - latest.shareholders_equity
+          : null,
+        total_equity: latest.shareholders_equity,
+        total_debt: latest.total_debt,
+      }
+    : null
+  const cashflow: CashflowSnapshot | null = latest
+    ? { period: latest.period, free_cash_flow: latest.fcf }
+    : null
+  const income_statement: IncomeStatementSnapshot | null = latest
+    ? {
+        period: latest.period,
+        revenue: latest.revenue,
+        net_income: latest.net_income,
+        eps: latest.eps,
+      }
+    : null
+  return { symbol, metrics, history, balance_sheet, cashflow, income_statement }
 }
 
 interface EarningsRaw {

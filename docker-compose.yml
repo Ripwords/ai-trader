@@ -40,6 +40,18 @@ services:
       # Same DB Drizzle migrates — algo persistence (strategies/runs/signals)
       # is read/written from this side via asyncpg.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # TradingAgents pipeline — LangChain/LangGraph multi-agent debate.
+      # WEB_INTERNAL_BASE_URL is the sibling Nuxt container's /internal/* mount
+      # (Yahoo, news search, pricing). LLM keys mirror the web service so
+      # either side can run model inference. Cost cap is a hard $/day ceiling.
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_MODEL_QUICK: ${LLM_MODEL_QUICK:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      AGENTS_DAILY_COST_USD_CAP: ${AGENTS_DAILY_COST_USD_CAP:-5.00}
+      WEB_INTERNAL_BASE_URL: http://web:3000
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
