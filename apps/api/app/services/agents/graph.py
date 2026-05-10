@@ -104,13 +104,29 @@ _TOOLKIT_ATTRS = (
 def _install_toolkit(toolkit: AgentToolkit) -> None:
     """Replace the tradingagents-bundled tools with our HTTP-backed ones.
 
-    Setup of the LangGraph DAG (``graph/setup.py`` -> ``graph/trading_graph.py``)
-    imports tools by name from ``tradingagents.agents.utils.agent_utils``; if we
-    swap those module globals before the cached ``graph`` property is touched,
-    the compiled DAG binds to our tools instead.
+    Patching only ``agent_utils`` is NOT sufficient. ``trading_graph.py`` does:
+
+        from tradingagents.agents.utils.agent_utils import (
+            get_stock_data, get_news, get_balance_sheet, ...
+        )
+
+    at module load time, which COPIES function-object references into
+    ``trading_graph``'s namespace. ``ToolNode([get_stock_data, ...])`` then
+    binds to those copies, not to the live ``agent_utils`` attribute. Patching
+    ``agent_utils`` after the import is a no-op for the compiled DAG.
+
+    To make the swap stick, we patch BOTH modules — ``agent_utils`` for any
+    code path that does ``getattr(agent_utils, ...)`` lookup at runtime, and
+    ``trading_graph`` so the eager-imported references in its namespace point
+    at our toolkit when ``ToolNode`` is constructed (at compile time, inside
+    the cached_property accessor that fires after this function returns).
     """
+    from tradingagents.graph import trading_graph as _trading_graph
+
     for attr in _TOOLKIT_ATTRS:
-        setattr(_agent_utils, attr, getattr(toolkit, attr))
+        replacement = getattr(toolkit, attr)
+        setattr(_agent_utils, attr, replacement)
+        setattr(_trading_graph, attr, replacement)
 
 
 def build_graph(

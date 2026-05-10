@@ -57,21 +57,29 @@ _active_runs: dict[str, asyncio.Task[Any]] = {}
 def _compute_run_cost(tokens_in: int, tokens_out: int) -> float:
     """Price a (tokens_in, tokens_out) pair using the configured deep model.
 
+    Pricing keys use our env-convention provider names (``deepseek``,
+    ``google``) — NOT the TradingAgents-mapped names (``litellm``,
+    ``google_genai``) returned by ``build_tradingagents_config``. We parse
+    ``LLM_MODEL`` directly to get the env-convention pair.
+
     Returns ``0.0`` and logs a warning when the model isn't in the pricing
     table — better to ship a row with zero cost than to surface a hard error
     on an unknown model. Token totals still land in the DB regardless.
     """
+    import os as _os
+
+    from app.services.agents.model_config import parse_model_spec
+
     try:
-        cfg = build_tradingagents_config()
-        provider = cfg["llm_provider"]
-        model = cfg["deep_think_llm"]
+        spec = parse_model_spec(_os.environ["LLM_MODEL"])
     except Exception as e:  # noqa: BLE001
         logger.warning("could not resolve provider/model for pricing: %s", e)
         return 0.0
-    cost = pricing_mod.price_run(provider, model, tokens_in, tokens_out)
+    cost = pricing_mod.price_run(spec.provider, spec.model_id, tokens_in, tokens_out)
     if cost is None:
         logger.warning(
-            "no pricing entry for %s/%s; reporting cost_usd=0.0", provider, model
+            "no pricing entry for %s/%s; reporting cost_usd=0.0",
+            spec.provider, spec.model_id,
         )
         return 0.0
     return float(cost)

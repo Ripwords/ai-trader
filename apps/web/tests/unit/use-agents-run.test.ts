@@ -67,7 +67,10 @@ describe('useAgentsRun.loadFromHistory — refresh-survival', () => {
     expect(run.verdict.value).toMatchObject({ rating: 'buy', confidence: 70 })
   })
 
-  it('marks status failed when the messages endpoint errors', async () => {
+  it('resets to idle when the run is not found (stale URL)', async () => {
+    // 404 = the run doesn't exist (deleted, or URL from before a DB reset).
+    // Better UX than a scary error banner: drop back to the Run button so the
+    // user can start a fresh run.
     ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(async () => ({
       ok: false,
       status: 404,
@@ -75,6 +78,19 @@ describe('useAgentsRun.loadFromHistory — refresh-survival', () => {
     }))
     const run = useAgentsRun()
     await run.loadFromHistory('missing')
+    expect(run.status.value).toBe('idle')
+    expect(run.runId.value).toBeNull()
+    expect(run.error.value).toBeNull()
+  })
+
+  it('marks status failed when the messages endpoint errors with non-404', async () => {
+    ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    }))
+    const run = useAgentsRun()
+    await run.loadFromHistory('r-9')
     expect(run.status.value).toBe('failed')
     expect(run.error.value).toContain('failed to load')
   })

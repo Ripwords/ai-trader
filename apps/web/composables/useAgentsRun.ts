@@ -219,12 +219,13 @@ export function useAgentsRun() {
     events: AgentEvent[]
   }
 
-  async function fetchMessages(targetRunId: string, since: number): Promise<MessagesResponse | null> {
+  async function fetchMessages(targetRunId: string, since: number): Promise<MessagesResponse | 'not-found' | null> {
     try {
       const res = await fetch(`/api/research/agent-messages?run_id=${encodeURIComponent(targetRunId)}&since=${since}`, {
         method: 'GET',
         headers: { 'content-type': 'application/json' },
       })
+      if (res.status === 404) return 'not-found'
       if (!res.ok) return null
       return (await res.json()) as MessagesResponse
     }
@@ -254,6 +255,13 @@ export function useAgentsRun() {
     lastSeq = -1
 
     const initial = await fetchMessages(targetRunId, -1)
+    if (initial === 'not-found') {
+      // Stale URL pointing at a deleted/never-persisted run. Reset to idle so
+      // the page renders the Run button instead of a confusing error banner.
+      status.value = 'idle'
+      runId.value = null
+      return
+    }
     if (initial === null) {
       status.value = 'failed'
       error.value = 'failed to load run history'
@@ -267,7 +275,7 @@ export function useAgentsRun() {
       pollTimer = setInterval(() => {
         void (async () => {
           const next = await fetchMessages(targetRunId, lastSeq)
-          if (next === null) return
+          if (next === null || next === 'not-found') return
           applyEvents(next.events)
           lastSeq = next.lastSeq
           // The server's truth wins — once it flips out of ``running`` we
