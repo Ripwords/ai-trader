@@ -104,5 +104,3 @@ function go() {
   cursor: not-allowed;
 }
 </style>
-</content>
-</invoke>
