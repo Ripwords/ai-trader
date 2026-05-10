@@ -13,7 +13,37 @@ import {
   getFinancialMetrics,
   getQuarterlyHistory,
 } from './yahoo'
-import type { PriceBar, QuarterlyRow, RiskReport } from '../../types/research'
+import type { PriceBar, QuarterlyRow, RiskReport, RiskReportEvent } from '../../types/research'
+
+// moomoo fetches are cached so a `?refresh=1` regenerate (or two near-
+// simultaneous opens of the same symbol) doesn't re-hit OpenD. Snapshot
+// has a short TTL since price moves intraday; daily k-line is stable for
+// the trading day.
+const fetchSnapshotCached = defineCachedFunction(
+  async (symbol: string) => {
+    return getApiClient().getSnapshot({ code: symbol })
+  },
+  {
+    name: 'risk-report',
+    group: 'snapshot',
+    maxAge: 60,
+    swr: true,
+    getKey: (symbol: string) => symbol,
+  },
+)
+
+const fetchKlineCached = defineCachedFunction(
+  async (symbol: string) => {
+    return getApiClient().getKline({ code: symbol, ktype: '1d', num: 252 })
+  },
+  {
+    name: 'risk-report',
+    group: 'kline-1d',
+    maxAge: 60 * 60 * 6,
+    swr: true,
+    getKey: (symbol: string) => symbol,
+  },
+)
 
 // 35% valuation · 35% health · 30% growth — fixed weights so the score
 // breakdown bars on the page always equal the displayed total. The LLM
@@ -33,42 +63,116 @@ interface AssembleArgs {
   refresh: boolean
 }
 
-export async function assembleRiskReport({ ownerId, symbol, refresh }: AssembleArgs): Promise<RiskReport> {
+interface StreamArgs extends AssembleArgs {
+  signal?: AbortSignal
+}
+
+/**
+ * Stream the assembly of a deep risk report. Yields events as upstream
+ * fetches resolve so the page can render sections progressively instead of
+ * blocking on a 30–60s cold call.
+ *
+ * Order:
+ *   - cache hit  → emit `cached` (full payload), terminal
+ *   - cache miss → meta → (price | chart | fundamentals as they resolve) →
+ *                  llm → done
+ *
+ * Errors per source emit as non-fatal `error` events so a moomoo outage
+ * doesn't kill the report — the LLM still runs on whatever bundle exists.
+ */
+export async function* streamRiskReport({ ownerId, symbol, refresh, signal }: StreamArgs): AsyncGenerator<RiskReportEvent> {
   if (!refresh) {
     const cached = await loadCached(ownerId, symbol)
-    if (cached) return { ...cached, cached: true }
+    if (cached) {
+      yield { kind: 'cached', report: { ...cached, cached: true } }
+      return
+    }
   }
 
-  const client = getApiClient()
+  if (signal?.aborted) return
 
-  // moomoo + Yahoo in parallel. Each leg shields its own failure so the
-  // page can still render with whatever data we got.
-  const [snapshot, klineRes, metrics, quarterly, earnings, news] = await Promise.all([
-    client.getSnapshot({ code: symbol }).catch((err) => {
-      console.error('[risk-report] snapshot failed', symbol, err)
-      return null
-    }),
-    client.getKline({ code: symbol, ktype: '1d', num: 252 }).catch((err) => {
-      console.error('[risk-report] kline failed', symbol, err)
-      return null
-    }),
-    getFinancialMetrics(symbol),
-    getQuarterlyHistory(symbol, 8),
-    getEarningsInfo(symbol),
-    getCompanyNews(symbol, 30),
+  // Kick off every upstream call up-front so they overlap. Yield events as
+  // each branch resolves; the LLM call waits for snapshot+kline+yahoo bundle.
+  const snapshotP = fetchSnapshotCached(symbol).catch((err) => {
+    console.error('[risk-report] snapshot failed', symbol, err)
+    return null
+  })
+  const klineP = fetchKlineCached(symbol).catch((err) => {
+    console.error('[risk-report] kline failed', symbol, err)
+    return null
+  })
+  const metricsP = getFinancialMetrics(symbol)
+  const quarterlyP = getQuarterlyHistory(symbol, 8)
+  const earningsP = getEarningsInfo(symbol)
+  const newsP = getCompanyNews(symbol, 30)
+
+  // meta: emit symbol immediately so the header can paint while name resolves
+  yield { kind: 'meta', symbol, name: null }
+
+  // Race the three independent groups (snapshot, kline, yahoo bundle) and
+  // emit each as it lands. The LLM call goes after all three.
+  type Branch = 'snapshot' | 'kline' | 'yahoo'
+  const branches = new Map<Branch, Promise<{ branch: Branch, value: unknown }>>([
+    ['snapshot', snapshotP.then(v => ({ branch: 'snapshot' as Branch, value: v }))],
+    ['kline', klineP.then(v => ({ branch: 'kline' as Branch, value: v }))],
+    ['yahoo', Promise.all([metricsP, quarterlyP, earningsP, newsP]).then(v => ({ branch: 'yahoo' as Branch, value: v }))],
   ])
 
-  const bars: PriceBar[] = klineRes?.bars
-    ? klineRes.bars.map(b => ({
-        time: typeof b.time === 'string' ? b.time : new Date(b.time as unknown as string).toISOString(),
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-        volume: b.volume,
-      }))
-    : []
+  let snapshot: Awaited<ReturnType<typeof fetchSnapshotCached>> | null = null
+  let bars: PriceBar[] = []
+  let metrics!: Awaited<typeof metricsP>
+  let quarterlyRaw!: Awaited<typeof quarterlyP>
+  let earnings!: Awaited<typeof earningsP>
+  let news!: Awaited<typeof newsP>
 
+  while (branches.size > 0) {
+    if (signal?.aborted) return
+    const winner = await Promise.race([...branches.values()])
+    branches.delete(winner.branch)
+
+    if (winner.branch === 'snapshot') {
+      snapshot = winner.value as typeof snapshot
+      const price = {
+        last: snapshot?.lastPrice ?? null,
+        change: snapshot && snapshot.lastPrice !== null && snapshot.prevClosePrice !== null
+          ? snapshot.lastPrice - snapshot.prevClosePrice
+          : null,
+        change_pct: snapshot?.changeRate ?? null,
+        currency: 'USD',
+      }
+      yield { kind: 'meta', symbol, name: snapshot?.name ?? null }
+      yield { kind: 'price', price }
+    } else if (winner.branch === 'kline') {
+      const klineRes = winner.value as Awaited<typeof klineP>
+      bars = klineRes?.bars
+        ? klineRes.bars.map(b => ({
+            time: typeof b.time === 'string' ? b.time : new Date(b.time as unknown as string).toISOString(),
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+            volume: b.volume,
+          }))
+        : []
+      yield { kind: 'chart', bars }
+    } else {
+      const tuple = winner.value as [typeof metrics, typeof quarterlyRaw, typeof earnings, typeof news]
+      metrics = tuple[0]
+      quarterlyRaw = tuple[1]
+      earnings = tuple[2]
+      news = tuple[3]
+      yield {
+        kind: 'fundamentals',
+        quarterly: buildQuarterlyRows(quarterlyRaw),
+        earnings_update: buildEarningsUpdate(earnings, news),
+      }
+    }
+  }
+
+  if (signal?.aborted) return
+
+  // All upstream done — fire LLM. This is the slow leg (~30-40s) but the
+  // page already has price + chart + fundamentals painted by now.
   const price = {
     last: snapshot?.lastPrice ?? null,
     change: snapshot && snapshot.lastPrice !== null && snapshot.prevClosePrice !== null
@@ -77,24 +181,47 @@ export async function assembleRiskReport({ ownerId, symbol, refresh }: AssembleA
     change_pct: snapshot?.changeRate ?? null,
     currency: 'USD',
   }
+  let llm: Awaited<ReturnType<typeof generateRiskReport>>['llm']
+  try {
+    const llmResult = await generateRiskReport({
+      symbol,
+      name: snapshot?.name ?? null,
+      price,
+      metrics,
+      earnings,
+      news,
+      chart_summary: buildChartSummary(bars, earnings),
+    })
+    llm = llmResult.llm
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    yield { kind: 'error', source: 'llm', message, fatal: true }
+    return
+  }
 
-  const llmResult = await generateRiskReport({
-    symbol,
-    name: snapshot?.name ?? null,
-    price,
-    metrics,
-    earnings,
-    news,
-    chart_summary: buildChartSummary(bars, earnings),
-  })
-  const llm = llmResult.llm
+  if (signal?.aborted) return
 
-  const quarterlyRows: QuarterlyRow[] = buildQuarterlyRows(quarterly)
+  yield {
+    kind: 'llm',
+    kpis: llm.kpis,
+    valuation: llm.valuation,
+    health: llm.health,
+    growth: llm.growth,
+    markers: llm.markers,
+    catalysts: llm.catalysts,
+    risks: llm.risks,
+    bottom_line: llm.bottom_line,
+    rating: llm.rating,
+  }
 
+  const risk_score = blendRiskScore(llm.valuation.score, llm.health.score, llm.growth.score)
+  const generated_at = new Date().toISOString()
+
+  // Persist the assembled report so future loads (today) hit the row cache.
   const report: RiskReport = {
     symbol,
     name: snapshot?.name ?? null,
-    generated_at: new Date().toISOString(),
+    generated_at,
     cached: false,
     price,
     chart: { bars, markers: llm.markers },
@@ -102,17 +229,87 @@ export async function assembleRiskReport({ ownerId, symbol, refresh }: AssembleA
     valuation: llm.valuation,
     health: llm.health,
     growth: llm.growth,
-    risk_score: blendRiskScore(llm.valuation.score, llm.health.score, llm.growth.score),
-    quarterly: quarterlyRows,
+    risk_score,
+    quarterly: buildQuarterlyRows(quarterlyRaw),
     earnings_update: buildEarningsUpdate(earnings, news),
     catalysts: llm.catalysts,
     risks: llm.risks,
     bottom_line: llm.bottom_line,
     rating: llm.rating,
   }
-
   await saveCached(ownerId, symbol, report)
-  return report
+
+  yield { kind: 'done', risk_score, generated_at }
+}
+
+/**
+ * Synchronous one-shot wrapper around `streamRiskReport`. Drains the
+ * generator and returns the assembled `RiskReport`. Used by the legacy
+ * `/api/research/deep-report` endpoint and any caller that wants a single
+ * Promise instead of an SSE stream.
+ */
+export async function assembleRiskReport({ ownerId, symbol, refresh }: AssembleArgs): Promise<RiskReport> {
+  let cached: RiskReport | null = null
+  let meta: { symbol: string, name: string | null } = { symbol, name: null }
+  let price: RiskReport['price'] = { last: null, change: null, change_pct: null, currency: 'USD' }
+  let bars: PriceBar[] = []
+  let quarterly: QuarterlyRow[] = []
+  let earnings_update: RiskReport['earnings_update'] = null
+  let llm: Extract<RiskReportEvent, { kind: 'llm' }> | null = null
+  let risk_score = 0
+  let generated_at = new Date().toISOString()
+
+  for await (const ev of streamRiskReport({ ownerId, symbol, refresh })) {
+    switch (ev.kind) {
+      case 'cached':
+        return ev.report
+      case 'meta':
+        meta = { symbol: ev.symbol, name: ev.name }
+        break
+      case 'price':
+        price = ev.price
+        break
+      case 'chart':
+        bars = ev.bars
+        break
+      case 'fundamentals':
+        quarterly = ev.quarterly
+        earnings_update = ev.earnings_update
+        break
+      case 'llm':
+        llm = ev
+        break
+      case 'done':
+        risk_score = ev.risk_score
+        generated_at = ev.generated_at
+        break
+      case 'error':
+        if (ev.fatal) throw new Error(ev.message)
+        break
+    }
+  }
+
+  if (!llm) throw new Error('risk-report stream ended without an llm event')
+  if (cached) return cached
+  return {
+    symbol: meta.symbol,
+    name: meta.name,
+    generated_at,
+    cached: false,
+    price,
+    chart: { bars, markers: llm.markers },
+    kpis: llm.kpis,
+    valuation: llm.valuation,
+    health: llm.health,
+    growth: llm.growth,
+    risk_score,
+    quarterly,
+    earnings_update,
+    catalysts: llm.catalysts,
+    risks: llm.risks,
+    bottom_line: llm.bottom_line,
+    rating: llm.rating,
+  }
 }
 
 // Convert Yahoo quarterly rows into the page's QuarterlyRow shape, computing

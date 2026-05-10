@@ -112,6 +112,22 @@ export interface PriceBar {
   volume: number
 }
 
+// SSE events emitted by /api/research/deep-report/stream. The page composes
+// the final report progressively as these land. `cached` is terminal (full
+// payload from the row cache) — when present, no other events fire.
+// Otherwise: meta first, then price + chart + fundamentals in arbitrary
+// order as upstream calls resolve, then llm once all inputs are ready, then
+// done with the deterministic blended risk_score.
+export type RiskReportEvent =
+  | { kind: 'cached', report: RiskReport }
+  | { kind: 'meta', symbol: string, name: string | null }
+  | { kind: 'price', price: { last: number | null, change: number | null, change_pct: number | null, currency: string } }
+  | { kind: 'chart', bars: PriceBar[] }
+  | { kind: 'fundamentals', quarterly: QuarterlyRow[], earnings_update: { headline: string, date: string, body: string } | null }
+  | { kind: 'llm', kpis: { label: string, value: string, tone: RiskCardTone }[], valuation: RiskPillar, health: RiskPillar, growth: RiskPillar, markers: ChartMarker[], catalysts: string[], risks: string[], bottom_line: string, rating: RiskRating }
+  | { kind: 'done', risk_score: number, generated_at: string }
+  | { kind: 'error', source: 'snapshot' | 'kline' | 'yahoo' | 'llm' | 'pipeline', message: string, fatal: boolean }
+
 export interface RiskReport {
   symbol: string
   name: string | null

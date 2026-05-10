@@ -37,8 +37,10 @@ const dash = computed(() => `${(clamped.value / 100) * CIRC} ${CIRC}`)
           :stroke-dasharray="dash"
         />
       </svg>
-      <div class="num" data-mono>{{ clamped }}</div>
-      <div class="of">/ 100</div>
+      <div class="readout">
+        <div class="num" data-mono>{{ clamped }}</div>
+        <div class="of">/ 100</div>
+      </div>
     </div>
     <div class="label">{{ label }}</div>
   </section>
@@ -63,12 +65,27 @@ const dash = computed(() => `${(clamped.value / 100) * CIRC} ${CIRC}`)
 }
 .dial {
   position: relative;
-  width: 180px;
-  height: 110px;
-  display: flex;
-  justify-content: center;
+  width: 200px;
+  height: 130px;
+  margin: 0.25rem 0 0.1rem;
 }
-svg { width: 100%; height: 100%; }
+svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.readout {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 0.5rem;
+  gap: 0.15rem;
+  pointer-events: none;
+}
 .track {
   fill: none;
   stroke: color-mix(in srgb, var(--paper-3) 22%, transparent);
@@ -86,21 +103,18 @@ svg { width: 100%; height: 100%; }
 .gauge[data-tone="caution"] .fill { stroke: var(--accent); }
 
 .num {
-  position: absolute;
-  top: 38px;
   font-family: var(--font-mono);
-  font-size: 2.2rem;
+  font-size: 2.4rem;
   letter-spacing: 0.04em;
   color: var(--paper-0);
   line-height: 1;
 }
 .of {
-  position: absolute;
-  top: 80px;
   font-family: var(--font-mono);
   font-size: 0.7rem;
   letter-spacing: 0.18em;
   color: var(--paper-3);
+  line-height: 1;
 }
 .label {
   font-family: var(--font-mono);
@@ -108,7 +122,7 @@ svg { width: 100%; height: 100%; }
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--paper-2);
-  margin-top: 0.35rem;
+  margin-top: 0.85rem;
 }
 .gauge[data-tone="up"]      .label { color: var(--tape-up); }
 .gauge[data-tone="down"]    .label { color: var(--tape-down); }
