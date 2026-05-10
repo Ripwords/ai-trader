@@ -61,6 +61,7 @@ Checkpointing (Task 8):
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -74,6 +75,15 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 from .model_config import build_tradingagents_config
 from .toolkit import AgentToolkit, OpenDClient, build_toolkit
+
+
+# ``build_graph`` mutates module globals on ``tradingagents.agents.utils.agent_utils``
+# (it monkey-patches in our HTTP-backed toolkit, which the compiled graph
+# binds to during setup). Two concurrent calls would race on those globals.
+# This module-level lock serialises every ``build_graph_locked`` call so the
+# critical section (``_install_toolkit`` -> ``TradingAgentsGraph(...)`` ->
+# accessing ``ta.graph``) is always single-threaded.
+_build_lock = asyncio.Lock()
 
 
 # Names on tradingagents.agents.utils.agent_utils we override with our toolkit.
@@ -137,9 +147,49 @@ def build_graph(
     toolkit = build_toolkit(opend_client)
     _install_toolkit(toolkit)
     ta = TradingAgentsGraph(config=cfg, debug=False)
+    # Touch ``ta.graph`` (a cached_property) inside the build path so the
+    # compile step — which reads the toolkit globals we just installed — runs
+    # before another concurrent caller can monkey-patch them with a different
+    # toolkit. ``attach_checkpointer`` already triggers the same compile, so
+    # only force it when no checkpointer is wired.
     if checkpointer is not None:
         attach_checkpointer(ta, checkpointer)
+    else:
+        _ = ta.graph
     return ta
+
+
+async def build_graph_locked(
+    opend_client: OpenDClient | None,
+    *,
+    max_debate_rounds: int = 1,
+    deep_thinking: bool = True,
+    results_dir: Path | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
+) -> TradingAgentsGraph:
+    """Async wrapper around :func:`build_graph` that holds :data:`_build_lock`.
+
+    Use this from request handlers; the lock guarantees that the toolkit
+    monkey-patch + graph compile are not racing across concurrent runs. The
+    underlying :func:`build_graph` is sync, so we run it on a worker thread
+    via :func:`asyncio.to_thread` to keep the event loop responsive while
+    LangGraph's compile step runs (it can be O(100 ms) on a cold path).
+    """
+    # We resolve ``build_graph`` lazily off the module so tests can patch it
+    # via ``monkeypatch.setattr(graph_mod, "build_graph", ...)`` without
+    # losing the lock semantics they're trying to verify.
+    import sys
+
+    async with _build_lock:
+        target = getattr(sys.modules[__name__], "build_graph")
+        return await asyncio.to_thread(
+            target,
+            opend_client,
+            max_debate_rounds=max_debate_rounds,
+            deep_thinking=deep_thinking,
+            results_dir=results_dir,
+            checkpointer=checkpointer,
+        )
 
 
 def attach_checkpointer(

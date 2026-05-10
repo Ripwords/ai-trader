@@ -176,7 +176,7 @@ async def run_agents(
 
         opend = getattr(request.app.state, "opend_client", None)
         checkpointer = getattr(request.app.state, "checkpointer", None)
-        graph = graph_mod.build_graph(
+        graph = await graph_mod.build_graph_locked(
             opend,
             max_debate_rounds=body.max_debate_rounds,
             deep_thinking=body.deep_thinking,
@@ -337,7 +337,7 @@ async def resume_run(
             _active_runs[run_id] = task
         opend = getattr(request.app.state, "opend_client", None)
         checkpointer = getattr(request.app.state, "checkpointer", None)
-        graph = graph_mod.build_graph(
+        graph = await graph_mod.build_graph_locked(
             opend,
             max_debate_rounds=int(cfg.get("max_debate_rounds", 1)),
             deep_thinking=bool(cfg.get("deep_thinking", True)),
