@@ -35,10 +35,13 @@ from fastapi.responses import StreamingResponse
 
 from app.schemas.agents import RunRequest
 from app.services.agents import graph as graph_mod
+from app.services.agents import pricing as pricing_mod
 from app.services.agents import reflection as reflection_mod
 from app.services.agents.cost_cap import DailyCapExceeded, assert_under_daily_cap
 from app.services.agents.memory import PostgresMemoryProvider
+from app.services.agents.model_config import build_tradingagents_config
 from app.services.agents.streaming import translate_chunks
+from app.services.agents.usage import UsageAccumulator
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -49,6 +52,29 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 # populated by :func:`run_agents` while a stream is live; entries are cleared
 # in the streaming finally-block.
 _active_runs: dict[str, asyncio.Task[Any]] = {}
+
+
+def _compute_run_cost(tokens_in: int, tokens_out: int) -> float:
+    """Price a (tokens_in, tokens_out) pair using the configured deep model.
+
+    Returns ``0.0`` and logs a warning when the model isn't in the pricing
+    table — better to ship a row with zero cost than to surface a hard error
+    on an unknown model. Token totals still land in the DB regardless.
+    """
+    try:
+        cfg = build_tradingagents_config()
+        provider = cfg["llm_provider"]
+        model = cfg["deep_think_llm"]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not resolve provider/model for pricing: %s", e)
+        return 0.0
+    cost = pricing_mod.price_run(provider, model, tokens_in, tokens_out)
+    if cost is None:
+        logger.warning(
+            "no pricing entry for %s/%s; reporting cost_usd=0.0", provider, model
+        )
+        return 0.0
+    return float(cost)
 
 
 def _check_bearer(authorization: str | None) -> None:
@@ -164,6 +190,7 @@ async def run_agents(
             # TradingAgentsGraph instances expose ``.config``.
             "models": getattr(getattr(graph, "config", None), "llm_provider", None),
         }
+        accumulator = UsageAccumulator()
         try:
             async for event in translate_chunks(
                 graph_mod.run_graph(
@@ -174,6 +201,7 @@ async def run_agents(
                     body.deep_thinking,
                     memory=memory,
                     run_id=run_id,
+                    usage=accumulator,
                 ),
                 run_id=run_id,
                 symbol=body.symbol,
@@ -197,14 +225,17 @@ async def run_agents(
             yield (json.dumps({"type": "error", "message": str(e)}) + "\n").encode()
         finally:
             _active_runs.pop(run_id, None)
+            tokens_in = accumulator.tokens_in
+            tokens_out = accumulator.tokens_out
+            cost_usd = _compute_run_cost(tokens_in, tokens_out)
             yield (
                 json.dumps(
                     {
                         "type": "run-end",
                         "run_id": run_id,
-                        "tokens_in": 0,
-                        "tokens_out": 0,
-                        "cost_usd": 0.0,
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                        "cost_usd": cost_usd,
                     }
                 )
                 + "\n"
@@ -312,6 +343,7 @@ async def resume_run(
             deep_thinking=bool(cfg.get("deep_thinking", True)),
             checkpointer=checkpointer,
         )
+        accumulator = UsageAccumulator()
         # ``run-start`` is emitted by translate_chunks — for resume we drop
         # it so the client can keep its existing event stream context. The
         # final ``run-end`` is appended in the finally-block as on a fresh
@@ -319,7 +351,10 @@ async def resume_run(
         try:
             async for chunk in graph.graph.astream(
                 None,
-                config={"configurable": {"thread_id": run_id}},
+                config={
+                    "configurable": {"thread_id": run_id},
+                    "callbacks": [accumulator],
+                },
                 stream_mode="values",
             ):
                 payload = {
@@ -347,14 +382,17 @@ async def resume_run(
             yield (json.dumps({"type": "error", "message": str(e)}) + "\n").encode()
         finally:
             _active_runs.pop(run_id, None)
+            tokens_in = accumulator.tokens_in
+            tokens_out = accumulator.tokens_out
+            cost_usd = _compute_run_cost(tokens_in, tokens_out)
             yield (
                 json.dumps(
                     {
                         "type": "run-end",
                         "run_id": run_id,
-                        "tokens_in": 0,
-                        "tokens_out": 0,
-                        "cost_usd": 0.0,
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                        "cost_usd": cost_usd,
                     }
                 )
                 + "\n"

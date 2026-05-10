@@ -42,11 +42,12 @@ async def test_streams_canned_events(monkeypatch: pytest.MonkeyPatch) -> None:
         deep_thinking: bool,
         memory: list[dict] | None = None,
         run_id: str | None = None,
+        usage=None,
     ):
-        # ``memory`` and ``run_id`` are accepted for signature compatibility
-        # with the real ``run_graph``; the canned-event test doesn't exercise
-        # them.
-        del memory, run_id
+        # ``memory`` / ``run_id`` / ``usage`` are accepted for signature
+        # compatibility with the real ``run_graph``; the canned-event test
+        # doesn't exercise them.
+        del memory, run_id, usage
         yield {
             "metadata": {"langgraph_node": "trader", "node_finished": True},
             "values": {
@@ -319,6 +320,102 @@ async def test_run_proceeds_when_under_daily_cap(
 
     assert any(e["type"] == "decision" for e in lines)
     assert lines[-1]["type"] == "run-end"
+
+
+@pytest.mark.asyncio
+async def test_run_end_carries_accumulated_token_totals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``run-end`` reports the tokens the UsageAccumulator collected during the run.
+
+    We intercept ``run_graph`` and feed the accumulator (passed via the
+    ``usage`` kwarg) two synthetic LLM-end events. The router should then
+    surface those totals on the trailing ``run-end`` event and price the run
+    against the configured deep model.
+    """
+    monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
+    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
+
+    from langchain_core.outputs import LLMResult
+
+    from app.main import create_app
+    from app.services.agents import graph as graph_mod
+    from app.settings import get_settings
+
+    get_settings.cache_clear()
+
+    async def fake_run_graph(
+        graph,
+        symbol: str,
+        trade_date,
+        max_debate_rounds: int,
+        deep_thinking: bool,
+        memory: list[dict] | None = None,
+        run_id: str | None = None,
+        usage=None,
+    ):
+        del memory, run_id, max_debate_rounds, deep_thinking, graph, symbol, trade_date
+        # Simulate two LLM calls' worth of usage flowing through the callback.
+        if usage is not None:
+            await usage.on_llm_end(
+                LLMResult(
+                    generations=[[]],
+                    llm_output={
+                        "token_usage": {
+                            "prompt_tokens": 1000,
+                            "completion_tokens": 250,
+                        }
+                    },
+                )
+            )
+            await usage.on_llm_end(
+                LLMResult(
+                    generations=[[]],
+                    llm_output={
+                        "token_usage": {
+                            "prompt_tokens": 500,
+                            "completion_tokens": 100,
+                        }
+                    },
+                )
+            )
+        yield {
+            "metadata": {"langgraph_node": "trader", "node_finished": True},
+            "values": {
+                "decision": {
+                    "rating": "buy",
+                    "confidence": 70,
+                    "rationale": "ok",
+                }
+            },
+        }
+
+    def fake_build_graph(opend_client, **kwargs):
+        return object()
+
+    monkeypatch.setattr(graph_mod, "run_graph", fake_run_graph)
+    monkeypatch.setattr(graph_mod, "build_graph", fake_build_graph)
+
+    headers = {"authorization": "Bearer test-bearer"}
+    app = create_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        async with c.stream(
+            "POST", "/agents/run", json={"symbol": "NVDA"}, headers=headers
+        ) as r:
+            assert r.status_code == 200
+            lines = [
+                json.loads(line) async for line in r.aiter_lines() if line.strip()
+            ]
+
+    end = lines[-1]
+    assert end["type"] == "run-end"
+    assert end["tokens_in"] == 1500
+    assert end["tokens_out"] == 350
+    # claude-sonnet-4-6 is in the pricing table; cost should be > 0.
+    # input: 1500 * 3 / 1_000_000 = 0.0045; output: 350 * 15 / 1_000_000 = 0.00525
+    # total ~= 0.00975
+    assert end["cost_usd"] == pytest.approx(0.00975, rel=1e-6)
 
 
 @pytest.mark.smoke

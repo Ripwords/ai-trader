@@ -65,6 +65,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from tradingagents.agents.utils import agent_utils as _agent_utils
@@ -331,6 +332,7 @@ async def run_graph(
     deep_thinking: bool,
     memory: list[dict] | None = None,
     run_id: str | None = None,
+    usage: AsyncCallbackHandler | None = None,
 ) -> AsyncIterator[dict]:
     """Run the compiled graph and yield normalized chunks.
 
@@ -349,6 +351,12 @@ async def run_graph(
     checkpoints written by an attached saver are scoped to this run. Resume
     from a previous checkpoint requires the *same* ``thread_id`` on the same
     saver.
+
+    ``usage`` (optional) — a LangChain :class:`AsyncCallbackHandler` (typically
+    :class:`UsageAccumulator`) wired into the graph's ``config['callbacks']``.
+    Token usage from every LLM call inside the run accumulates on the handler;
+    the router reads ``handler.tokens_in`` / ``handler.tokens_out`` after the
+    stream ends to populate the ``run-end`` event.
     """
     del max_debate_rounds, deep_thinking  # baked in at build_graph time
 
@@ -356,14 +364,20 @@ async def run_graph(
 
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
     args = graph.propagator.get_graph_args()
-    if run_id is not None:
-        # Merge our thread_id into the propagator's config (which already
-        # carries recursion_limit, etc) without losing the propagator's
-        # fields.
+    if run_id is not None or usage is not None:
+        # Merge our thread_id and/or callback into the propagator's config
+        # (which already carries recursion_limit, etc) without losing the
+        # propagator's fields.
         existing_config = args.get("config") or {}
         configurable = dict(existing_config.get("configurable") or {})
-        configurable["thread_id"] = run_id
-        args = {**args, "config": {**existing_config, "configurable": configurable}}
+        if run_id is not None:
+            configurable["thread_id"] = run_id
+        new_config = {**existing_config, "configurable": configurable}
+        if usage is not None:
+            existing_callbacks = list(new_config.get("callbacks") or [])
+            existing_callbacks.append(usage)
+            new_config["callbacks"] = existing_callbacks
+        args = {**args, "config": new_config}
 
     prev: dict = {}
     async for chunk in graph.graph.astream(init_state, **args):
