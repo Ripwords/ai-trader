@@ -133,37 +133,56 @@ def build_graph(
     opend_client: OpenDClient | None,
     *,
     max_debate_rounds: int = 1,
+    max_risk_discuss_rounds: int = 1,
     deep_thinking: bool = True,
+    reasoning_effort: str = "medium",
+    response_language: str = "en-US",
+    selected_analysts: list[str] | None = None,
     results_dir: Path | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> TradingAgentsGraph:
     """Construct a TradingAgentsGraph wired to our toolkit and config.
 
-    ``deep_thinking`` toggles which model tier the analysts use; in
-    tradingagents v0.2.4 this is captured by ``reasoning_effort`` (the
-    ``use_deep_thinking_for_analysts`` flag the plan referenced is not part of
-    the public config). ``deep_thinking=True`` -> ``"medium"``; False ->
-    ``"minimal"`` (faster, cheaper).
+    ``deep_thinking`` is layered on top of ``reasoning_effort``: when False
+    we override whatever effort was passed to ``"minimal"`` so a single
+    cheap+fast pass runs even if the caller forgot to lower the effort.
+    Otherwise ``reasoning_effort`` is honoured verbatim
+    (``low|medium|high|xhigh|max``) and mapped to the provider-native knob
+    inside TradingAgents' ``build_chat_model``.
+
+    ``selected_analysts`` chooses which of the four analyst nodes
+    (``market``/``social``/``news``/``fundamentals``) actually run. Skipping
+    ``social`` typically saves ~20% of the LLM cost on a run; skipping
+    ``news`` saves another ~15%. ``None`` defaults to all four.
 
     ``checkpointer`` (optional) — recompile the underlying StateGraph with a
     checkpoint saver attached. See :func:`attach_checkpointer`. Pass ``None``
-    to keep TradingAgents' default (no checkpointing) — that's the unit-test
-    path and the only path before Task 8 wiring lands at startup.
+    to keep TradingAgents' default (no checkpointing).
     """
-    raw = build_tradingagents_config()
+    effort = "minimal" if not deep_thinking else reasoning_effort
+    raw = build_tradingagents_config(
+        reasoning_effort=effort,
+        response_language=response_language,
+    )
     cfg = TradingAgentsConfig(
         llm_provider=raw["llm_provider"],
         deep_think_llm=raw["deep_think_llm"],
         quick_think_llm=raw["quick_think_llm"],
-        reasoning_effort="medium" if deep_thinking else "minimal",
+        reasoning_effort=effort,
+        response_language=response_language,
         max_debate_rounds=max_debate_rounds,
-        max_risk_discuss_rounds=max_debate_rounds,
+        max_risk_discuss_rounds=max_risk_discuss_rounds,
         max_recur_limit=100,
         results_dir=results_dir or Path("./results"),
     )
     toolkit = build_toolkit(opend_client)
     _install_toolkit(toolkit)
-    ta = TradingAgentsGraph(config=cfg, debug=False)
+    # ``selected_analysts`` is forwarded to ``GraphSetup`` via the kwarg of
+    # the same name; defaults are TradingAgents' four analysts.
+    ta_kwargs: dict[str, Any] = {"config": cfg, "debug": False}
+    if selected_analysts is not None:
+        ta_kwargs["selected_analysts"] = selected_analysts
+    ta = TradingAgentsGraph(**ta_kwargs)
     # Touch ``ta.graph`` (a cached_property) inside the build path so the
     # compile step — which reads the toolkit globals we just installed — runs
     # before another concurrent caller can monkey-patch them with a different
@@ -180,7 +199,11 @@ async def build_graph_locked(
     opend_client: OpenDClient | None,
     *,
     max_debate_rounds: int = 1,
+    max_risk_discuss_rounds: int = 1,
     deep_thinking: bool = True,
+    reasoning_effort: str = "medium",
+    response_language: str = "en-US",
+    selected_analysts: list[str] | None = None,
     results_dir: Path | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> TradingAgentsGraph:
@@ -203,7 +226,11 @@ async def build_graph_locked(
             target,
             opend_client,
             max_debate_rounds=max_debate_rounds,
+            max_risk_discuss_rounds=max_risk_discuss_rounds,
             deep_thinking=deep_thinking,
+            reasoning_effort=reasoning_effort,
+            response_language=response_language,
+            selected_analysts=selected_analysts,
             results_dir=results_dir,
             checkpointer=checkpointer,
         )
@@ -492,10 +519,42 @@ _DEFAULT_CONFIDENCE = 50
 
 
 def _parse_rating(text: str) -> str:
-    """Return the wire rating for ``text``. Defaults to ``hold`` when none match."""
+    """Return the wire rating for ``text``. Defaults to ``hold`` when none match.
+
+    Two-stage resolution: try TradingAgents' deterministic
+    :func:`tradingagents.graph.signal_processing.extract_trade_signal`
+    first — it understands the explicit ``FINAL TRANSACTION PROPOSAL: <X>``
+    marker the Risk Manager emits and rejects ambiguous text. When it
+    returns a clean BUY/SELL/HOLD we use that, but only as a *coarse*
+    signal: our 5-rating taxonomy still benefits from the regex pass
+    (it's the only thing that distinguishes ``strong-buy`` from ``buy``
+    or recognises ``reduce``). So:
+
+    1. Run our regex first (richer taxonomy, finds 5 buckets)
+    2. If the regex didn't find ``strong-buy``/``reduce`` (i.e. it landed
+       on the catch-all hold or a generic buy/sell), fall back to
+       TradingAgents' extractor as a tiebreaker — its FINAL-marker logic
+       can catch BUY/SELL signals our regex missed when the text uses
+       formal proposal language without the bare verb.
+
+    The exception path is silent — TA's extractor raises ValueError on
+    ambiguous text, which we treat as "no signal" and stick with our
+    regex's verdict.
+    """
+    # Stage 1: our 5-rating regex.
     for label, pattern in _RATING_PATTERNS:
         if pattern.search(text):
             return label
+
+    # Stage 2: TradingAgents' deterministic FINAL-marker extractor.
+    try:
+        from tradingagents.graph.signal_processing import extract_trade_signal
+        ta_signal = extract_trade_signal(text).lower()
+        if ta_signal in {"buy", "sell", "hold"}:
+            return ta_signal
+    except (ValueError, ImportError):
+        pass
+
     return "hold"
 
 
@@ -583,18 +642,10 @@ def _format_memory_recommendation(row: dict) -> str:
 def _seed_trader_memory(
     graph: TradingAgentsGraph, symbol: str, memory: list[dict]
 ) -> None:
-    """Seed the trader's BM25 memory with prior reflections.
+    """Seed the trader's BM25 memory with prior reflections (legacy path).
 
-    Tradingagents v0.2.4 already exposes a per-agent
-    :class:`FinancialSituationMemory` (BM25 over situation/recommendation
-    pairs) that the trader node consults in its prompt construction. We
-    reuse that surface — ``graph.trader_memory`` is a ``cached_property``,
-    so seeding it here mutates the same instance the trader node reads
-    later, with no monkey-patching required. ``graph.graph`` (cached
-    property that compiles the DAG) must not have been accessed yet for
-    other reasons, but it isn't a precondition for this seeding step:
-    seeding before *or* after compile is fine because the trader resolves
-    its memory by reference at call time.
+    Kept for callers that pass a flat list. New callers should use
+    :func:`_seed_all_memories` so each role gets its own slice.
     """
     if not memory:
         return
@@ -605,6 +656,86 @@ def _seed_trader_memory(
     graph.trader_memory.add_situations(pairs)
 
 
+# Map our reflection ``role`` strings to the matching ``cached_property`` on
+# ``TradingAgentsGraph``. Each property exposes a ``FinancialSituationMemory``
+# we mutate in place so the corresponding agent node picks the lesson up at
+# prompt-construction time. ``overall`` is fanned out to the trader since
+# legacy single-row reflections were trader-flavoured.
+_ROLE_MEMORY_ATTR: dict[str, str] = {
+    "trader":          "trader_memory",
+    "bull_researcher": "bull_memory",
+    "bear_researcher": "bear_memory",
+    "invest_judge":    "invest_judge_memory",
+    "risk_manager":    "risk_manager_memory",
+    "overall":         "trader_memory",
+}
+
+
+def _seed_all_memories(
+    graph: TradingAgentsGraph,
+    symbol: str,
+    memory_by_role: dict[str, list[dict]],
+) -> None:
+    """Seed each per-role :class:`FinancialSituationMemory` from its slice.
+
+    TradingAgents instantiates five separate memory pools — one each for
+    bull/bear researchers, the trader, the investment judge (Research
+    Manager), and the risk manager. The Reflector writes lessons into each
+    pool keyed to that role's specific slip-ups; seeding them all here means
+    the bull researcher can learn that "I overweighted insider buys last
+    quarter" without that lesson contaminating the bear's prompt context.
+    Each pool is a BM25 over (situation, recommendation) pairs the agent
+    node consults at prompt time.
+    """
+    for role, rows in memory_by_role.items():
+        if not rows:
+            continue
+        attr = _ROLE_MEMORY_ATTR.get(role)
+        if attr is None:
+            continue
+        target = getattr(graph, attr, None)
+        if target is None:
+            continue
+        pairs: list[tuple[str, str]] = [
+            (_format_memory_situation(symbol, row), _format_memory_recommendation(row))
+            for row in rows
+        ]
+        target.add_situations(pairs)
+
+
+def _serialize_final_state(state: dict) -> dict:
+    """Flatten the terminal AgentState into a JSON-serializable summary.
+
+    Reflection runs hours after the run completed and needs the same inputs
+    TradingAgents' Reflector reads — the four analyst reports, both debate
+    histories, the synthesised plans, the final decision — to write
+    role-specific lessons. We capture them at run-end so the reflection job
+    doesn't have to re-walk the agent_messages stream.
+    """
+    out: dict[str, Any] = {}
+    for f in (
+        "market_report", "sentiment_report", "news_report", "fundamentals_report",
+        "investment_plan", "trader_investment_plan", "final_trade_decision",
+    ):
+        v = state.get(f)
+        if v:
+            out[f] = v
+    inv = state.get("investment_debate_state") or {}
+    if isinstance(inv, dict):
+        out["investment_debate_state"] = {
+            k: inv.get(k, "") for k in ("bull_history", "bear_history", "judge_decision")
+        }
+    risk = state.get("risk_debate_state") or {}
+    if isinstance(risk, dict):
+        out["risk_debate_state"] = {
+            k: risk.get(k, "") for k in (
+                "aggressive_history", "conservative_history", "neutral_history",
+                "judge_decision",
+            )
+        }
+    return out
+
+
 async def run_graph(
     graph: TradingAgentsGraph,
     symbol: str,
@@ -612,6 +743,7 @@ async def run_graph(
     max_debate_rounds: int,
     deep_thinking: bool,
     memory: list[dict] | None = None,
+    memory_by_role: dict[str, list[dict]] | None = None,
     run_id: str | None = None,
     usage: AsyncCallbackHandler | None = None,
 ) -> AsyncIterator[dict]:
@@ -621,12 +753,10 @@ async def run_graph(
     with the router but are baked into ``graph`` at construction time (see the
     module docstring) — to change them mid-process you must rebuild the graph.
 
-    ``memory`` is the list of prior reflections returned by
-    :class:`app.services.agents.memory.PostgresMemoryProvider.recall`. When
-    non-empty, those rows are seeded into the trader's
-    :class:`FinancialSituationMemory` so the trader's existing prompt-time
-    BM25 lookup picks them up. ``None`` / ``[]`` is a no-op — runs without
-    memory are unchanged.
+    ``memory`` is the legacy flat-list of trader reflections; deprecated in
+    favour of ``memory_by_role`` which carries one slice per role
+    (``trader``, ``bull_researcher``, ``bear_researcher``, ``invest_judge``,
+    ``risk_manager``). When both are provided, ``memory_by_role`` wins.
 
     ``run_id`` (optional) — when set, becomes the LangGraph ``thread_id`` so
     checkpoints written by an attached saver are scoped to this run. Resume
@@ -638,10 +768,18 @@ async def run_graph(
     Token usage from every LLM call inside the run accumulates on the handler;
     the router reads ``handler.tokens_in`` / ``handler.tokens_out`` after the
     stream ends to populate the ``run-end`` event.
+
+    After the upstream stream finishes, yields one final chunk with a
+    ``final_state`` payload — the captured terminal AgentState the proxy tee
+    persists into ``agent_runs.final_state`` for the per-role reflection job
+    to read later.
     """
     del max_debate_rounds, deep_thinking  # baked in at build_graph time
 
-    _seed_trader_memory(graph, symbol, memory or [])
+    if memory_by_role:
+        _seed_all_memories(graph, symbol, memory_by_role)
+    else:
+        _seed_trader_memory(graph, symbol, memory or [])
 
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
     args = graph.propagator.get_graph_args()
@@ -705,3 +843,11 @@ async def run_graph(
             yield _normalize_chunk(node, values, finished=finished)
 
         prev = curr
+
+    # End of stream — yield the captured terminal AgentState so the proxy
+    # tee can persist it on agent_runs.final_state. The reflection job reads
+    # it later to drive role-specific lessons.
+    if prev:
+        snapshot = _serialize_final_state(prev)
+        if snapshot:
+            yield _normalize_chunk(None, {"final_state": snapshot}, finished=False)

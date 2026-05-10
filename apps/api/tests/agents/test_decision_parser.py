@@ -165,3 +165,26 @@ async def test_agent_decisions_insert_succeeds_with_default_confidence(
     assert row is not None
     assert row["rating"] == "reduce"
     assert row["confidence"] == 50
+
+
+def test_signal_processor_picks_up_final_marker_when_regex_misses() -> None:
+    """Risk Manager sometimes emits the formal ``FINAL TRANSACTION PROPOSAL:
+    BUY`` marker without using the bare verb anywhere else; our regex
+    misses that, but TradingAgents' deterministic extractor catches it."""
+    text = (
+        "Based on the analysis, I am positioning the portfolio long the name. "
+        "Risks are manageable.\n\n**FINAL TRANSACTION PROPOSAL: BUY**"
+    )
+    out = _decision_for(text)
+    assert out["rating"] == "buy"
+
+
+def test_strong_buy_still_wins_over_signal_processor_buy() -> None:
+    """When our regex finds ``strong-buy``, that's MORE specific than the
+    SignalProcessor's BUY/SELL/HOLD-only output — keep our finer signal."""
+    text = (
+        "After weighing all evidence I land on a STRONG BUY.\n"
+        "FINAL TRANSACTION PROPOSAL: BUY"
+    )
+    out = _decision_for(text)
+    assert out["rating"] == "strong-buy"

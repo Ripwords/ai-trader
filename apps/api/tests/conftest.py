@@ -114,22 +114,17 @@ def pg_container():
         conn = await asyncpg.connect(url)
         try:
             await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
-            await conn.execute(
-                "CREATE TABLE IF NOT EXISTS users("
-                "  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),"
-                "  name text NOT NULL UNIQUE"
-                ")"
+            # Apply Drizzle's full migration sequence in order. The first
+            # migration (``0000_init.sql``) creates ``users`` along with all
+            # other tables, so we don't pre-create anything by hand —
+            # would conflict on a duplicate ``CREATE TABLE``.
+            migrations_dir = (
+                Path(__file__).resolve().parents[2] / "web" / "db" / "migrations"
             )
-            # The api container does not bind-mount apps/web, but in the test
-            # environment we can read the migration file straight from the repo.
-            migration = (
-                Path(__file__).resolve().parents[2]
-                / "web"
-                / "db"
-                / "migrations"
-                / "0007_agents.sql"
-            )
-            await conn.execute(migration.read_text())
+            for sql_file in sorted(migrations_dir.glob("*.sql")):
+                # Drizzle's ``--> statement-breakpoint`` markers are comments
+                # asyncpg ignores; we can execute the whole file at once.
+                await conn.execute(sql_file.read_text())
         finally:
             await conn.close()
 

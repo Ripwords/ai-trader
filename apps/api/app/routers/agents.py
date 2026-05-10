@@ -91,15 +91,32 @@ def _check_bearer(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+async def _recall_memory_by_role(
+    request: Request, user_id: str | None, symbol: str
+) -> dict[str, list[dict]]:
+    """Fetch prior reflections grouped by role for (user, symbol).
+
+    Returns ``{}`` if the asyncpg pool isn't ready or the caller didn't
+    forward an ``x-user-id``. The trust model is the same as ``_recall_memory``
+    — INTERNAL_BEARER on the upstream endpoint guarantees the caller is our
+    own web container.
+    """
+    pool = getattr(request.app.state, "pg_pool", None)
+    if pool is None or not user_id:
+        return {}
+    try:
+        provider = PostgresMemoryProvider(pool)
+        return await provider.recall_by_role(user_id=user_id, symbol=symbol, k=5)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("memory recall_by_role failed for %s/%s: %s", user_id, symbol, e)
+        return {}
+
+
 async def _recall_memory(
     request: Request, user_id: str | None, symbol: str
 ) -> list[dict]:
-    """Fetch prior reflections for (user, symbol). Returns ``[]`` if unavailable.
-
-    ``x-user-id`` is forwarded by the Nuxt server proxy
-    (``apps/web/server/api/research/agents-run.post.ts``) and trusted because
-    the upstream endpoint sits behind ``INTERNAL_BEARER`` — only our own web
-    container can reach it.
+    """Flat-list legacy recall. Kept for callers that don't care about role
+    attribution. New ``run_agents`` path uses ``_recall_memory_by_role``.
     """
     pool = getattr(request.app.state, "pg_pool", None)
     if pool is None or not user_id:
@@ -191,13 +208,21 @@ async def run_agents(
         graph = await graph_mod.build_graph_locked(
             opend,
             max_debate_rounds=body.max_debate_rounds,
+            max_risk_discuss_rounds=body.max_risk_discuss_rounds,
             deep_thinking=body.deep_thinking,
+            reasoning_effort=body.reasoning_effort,
+            response_language=body.response_language,
+            selected_analysts=body.selected_analysts,
             checkpointer=checkpointer,
         )
-        memory = await _recall_memory(request, x_user_id, body.symbol)
+        memory_by_role = await _recall_memory_by_role(request, x_user_id, body.symbol)
         config = {
             "max_debate_rounds": body.max_debate_rounds,
+            "max_risk_discuss_rounds": body.max_risk_discuss_rounds,
             "deep_thinking": body.deep_thinking,
+            "reasoning_effort": body.reasoning_effort,
+            "response_language": body.response_language,
+            "selected_analysts": body.selected_analysts,
             # ``graph`` may be an opaque test double; only real
             # TradingAgentsGraph instances expose ``.config``.
             "models": getattr(getattr(graph, "config", None), "llm_provider", None),
@@ -211,7 +236,7 @@ async def run_agents(
                     trade_date,
                     body.max_debate_rounds,
                     body.deep_thinking,
-                    memory=memory,
+                    memory_by_role=memory_by_role,
                     run_id=run_id,
                     usage=accumulator,
                 ),

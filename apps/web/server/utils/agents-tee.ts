@@ -78,6 +78,15 @@ export class AgentRunTee {
               })
               .where(eq(agentRuns.id, this.runId))
           }
+          if (ev.type === 'final-state') {
+            // Persist the captured terminal AgentState so the per-role
+            // reflection job can read the four analyst reports + debate
+            // histories + plans without re-walking agent_messages.
+            await db
+              .update(agentRuns)
+              .set({ finalState: ev.state })
+              .where(eq(agentRuns.id, this.runId))
+          }
         } catch (e: unknown) {
           console.error('[agents-tee] write failed', (e as Error)?.message)
         }

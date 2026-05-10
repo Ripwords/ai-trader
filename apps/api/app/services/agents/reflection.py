@@ -286,27 +286,108 @@ async def write_reflection_text(
     return content.strip()
 
 
-# Pending = decisions older than ``horizon_days`` with no paired reflection.
-# ``$1`` is the horizon string-coerced for the interval cast (asyncpg can't
-# pass an int as an interval). LIMIT 50 keeps a single reflect pass bounded.
+# Pending = decisions for which not every role has a reflection yet AND the
+# decision is at least horizon_days old. We expect 5 reflections per
+# decision (one per role); ``EXISTS`` short-circuits so a fully reflected
+# decision is excluded once any single role has all 5 rows. The DISTINCT
+# guard is in case multiple roles trail behind — we want the decision once
+# regardless. LIMIT 50 keeps a single reflect pass bounded.
 _PENDING_SQL = """
-SELECT d.id, d.run_id, d.user_id, d.symbol, d.trade_date, d.rating, d.confidence, d.rationale
+SELECT d.id, d.run_id, d.user_id, d.symbol, d.trade_date,
+       d.rating, d.confidence, d.rationale,
+       r_count.count AS reflection_count,
+       run.final_state AS final_state
 FROM agent_decisions d
-LEFT JOIN agent_reflections r ON r.decision_id = d.id
-WHERE r.id IS NULL
+JOIN agent_runs run ON run.id = d.run_id
+LEFT JOIN LATERAL (
+  SELECT COUNT(*) AS count FROM agent_reflections WHERE decision_id = d.id
+) r_count ON TRUE
+WHERE r_count.count < 5
   AND d.created_at <= now() - ($1 || ' days')::interval
 LIMIT 50
 """
 
 
+# The five roles TradingAgents' Reflector writes lessons for. The router
+# seeds each role's FinancialSituationMemory at run start from the matching
+# slice of these reflections, so per-role lessons stay in their own pool
+# and don't contaminate sibling agents' prompts.
+_REFLECTION_ROLES: tuple[tuple[str, str, str], ...] = (
+    # role-key                  AgentState source field           role-prefix in prompt
+    ("trader",          "trader_investment_plan",                 "TRADER"),
+    ("bull_researcher", "bull_history",                            "BULL RESEARCHER"),
+    ("bear_researcher", "bear_history",                            "BEAR RESEARCHER"),
+    ("invest_judge",    "investment_judge_decision",               "RESEARCH JUDGE"),
+    ("risk_manager",    "risk_judge_decision",                     "RISK MANAGER"),
+)
+
+
+def _role_input(final_state: dict[str, Any] | None, source_field: str) -> str:
+    """Pull the per-role input text out of ``agent_runs.final_state``.
+
+    The keys we care about live one level deeper for the debate-state ones
+    (e.g. ``investment_debate_state.bull_history``); the rest are top-level.
+    """
+    if not final_state:
+        return ""
+    if source_field == "bull_history":
+        return (final_state.get("investment_debate_state") or {}).get("bull_history", "")
+    if source_field == "bear_history":
+        return (final_state.get("investment_debate_state") or {}).get("bear_history", "")
+    if source_field == "investment_judge_decision":
+        return (final_state.get("investment_debate_state") or {}).get("judge_decision", "")
+    if source_field == "risk_judge_decision":
+        return (final_state.get("risk_debate_state") or {}).get("judge_decision", "")
+    return final_state.get(source_field, "")
+
+
+async def _write_role_reflection(
+    role_prefix: str, role_input: str, realized: RealizedReturn
+) -> str:
+    """Ask the quick LLM for a role-specific 2-3 sentence lesson.
+
+    Mirrors :func:`write_reflection_text` but with role context baked in so
+    the lesson reads as advice to *that* role specifically. Lessons land
+    keyed by role in agent_reflections; at next run, each role's
+    FinancialSituationMemory gets seeded from its own slice.
+    """
+    if not role_input.strip():
+        # The role didn't run (e.g. ``social`` was skipped via
+        # selected_analysts) — record an empty placeholder so the
+        # decision counts as fully reflected.
+        return f"[{role_prefix} did not run for this decision; no input to reflect on]"
+
+    chat = _build_chat_for_quick_model()
+    prompt = (
+        f"You are reflecting on the {role_prefix}'s past contribution to a trading "
+        f"decision so future {role_prefix.lower()}s on similar setups make better "
+        f"calls.\n\n"
+        f"{role_prefix} analysis/decision:\n{role_input[:4000]}\n\n"
+        f"Realized return: {realized.realized_return:+.2f}%\n"
+        f"Benchmark (SPY): {realized.benchmark_return:+.2f}%\n"
+        f"Alpha: {realized.alpha:+.2f}%\n"
+        f"Outcome: {realized.outcome}\n\n"
+        f"In 2-3 sentences, write a concrete lesson SPECIFICALLY for the "
+        f"{role_prefix}. Reference what they argued or recommended; don't "
+        f"speak about the overall trade. Output the lesson only — no preamble."
+    )
+    msg = await chat.ainvoke(prompt)
+    content = msg.content if isinstance(msg.content, str) else str(msg.content)
+    return content.strip()
+
+
 async def reflect_pending(
     pool: Any, opend: _OpenDLike | None, *, horizon_days: int = 7
 ) -> int:
-    """Process all pending decisions; insert one reflection row per decision.
+    """Write one reflection PER ROLE per pending decision.
 
-    Returns the count of reflections written. Failures inside the per-row
-    block (price fetch, LLM call) collapse into a placeholder reflection so
-    a single broken decision doesn't block the rest of the batch.
+    Returns the number of reflection ROWS written (5 × number of decisions
+    when everything goes through). A decision counts as fully reflected
+    once all five role rows exist; the next pass skips it.
+
+    Failures inside the per-decision block (price fetch, LLM call)
+    collapse into a placeholder reflection per role so a single broken
+    decision doesn't block the rest of the batch.
     """
     n = 0
     async with pool.acquire() as conn:
@@ -322,26 +403,61 @@ async def reflect_pending(
                     rating=row["rating"],
                     horizon_days=horizon_days,
                 )
-                summary = (
-                    f"{row['rating']} {row['symbol']} on {row['trade_date']}: "
-                    f"{row['rationale'][:200]}"
-                )
-                text = await write_reflection_text(summary, realized)
             except Exception as e:  # noqa: BLE001
-                text = f"[reflection failed: {e}]"
                 realized = RealizedReturn(0.0, 0.0, 0.0, "neutral")
-            await conn.execute(
-                "INSERT INTO agent_reflections"
-                "(id, decision_id, horizon_days, realized_return, "
-                " benchmark_return, alpha, outcome, text) "
-                "VALUES(gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)",
-                row["id"],
-                horizon_days,
-                realized.realized_return,
-                realized.benchmark_return,
-                realized.alpha,
-                realized.outcome,
-                text,
-            )
-            n += 1
+                fallback = f"[reflection failed: {e}]"
+                # On any pre-LLM error, write a placeholder for every role
+                # so the decision exits the pending set.
+                for role, _src, _prefix in _REFLECTION_ROLES:
+                    await _insert_reflection(
+                        conn, row["id"], role, horizon_days, realized, fallback
+                    )
+                    n += 1
+                continue
+
+            final_state = row["final_state"] or {}
+            # ``final_state`` is jsonb; asyncpg may surface it as dict OR
+            # str depending on codec registration. Coerce to dict.
+            if isinstance(final_state, str):
+                import json as _json
+                try:
+                    final_state = _json.loads(final_state)
+                except _json.JSONDecodeError:
+                    final_state = {}
+            for role, source_field, role_prefix in _REFLECTION_ROLES:
+                role_input = _role_input(final_state, source_field)
+                try:
+                    text = await _write_role_reflection(role_prefix, role_input, realized)
+                except Exception as e:  # noqa: BLE001
+                    text = f"[{role_prefix} reflection failed: {e}]"
+                await _insert_reflection(
+                    conn, row["id"], role, horizon_days, realized, text
+                )
+                n += 1
     return n
+
+
+async def _insert_reflection(
+    conn: Any,
+    decision_id: Any,
+    role: str,
+    horizon_days: int,
+    realized: RealizedReturn,
+    text: str,
+) -> None:
+    """Single insert into agent_reflections (decision_id, role) UNIQUE."""
+    await conn.execute(
+        "INSERT INTO agent_reflections"
+        "(id, decision_id, role, horizon_days, realized_return, "
+        " benchmark_return, alpha, outcome, text) "
+        "VALUES(gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8) "
+        "ON CONFLICT (decision_id, role) DO NOTHING",
+        decision_id,
+        role,
+        horizon_days,
+        realized.realized_return,
+        realized.benchmark_return,
+        realized.alpha,
+        realized.outcome,
+        text,
+    )

@@ -26,5 +26,6 @@ export type AgentEvent =
   | { type: 'report'; kind: ReportKind; node: string; content: string }
   | { type: 'synthesis'; stage: SynthesisStage; node: string; content: string }
   | { type: 'decision'; rating: Rating; confidence: number; rationale: string }
+  | { type: 'final-state'; state: Record<string, unknown> }
   | { type: 'run-end'; run_id: string; tokens_in: number; tokens_out: number; cost_usd: number }
   | { type: 'error'; node?: string; message: string }

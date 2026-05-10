@@ -97,7 +97,18 @@ _TA_PROVIDER_MAP = {
 }
 
 
-def build_tradingagents_config() -> dict:
+def build_tradingagents_config(
+    *,
+    reasoning_effort: str = "medium",
+    response_language: str = "en-US",
+) -> dict:
+    """Translate our env-convention model spec + per-run knobs into the dict
+    TradingAgents' ``TradingAgentsConfig`` accepts.
+
+    ``reasoning_effort`` and ``response_language`` come from the per-request
+    body (defaults match :class:`app.schemas.agents.RunRequest`); the rest is
+    sourced from process env (``LLM_MODEL``, ``LLM_MODEL_QUICK``).
+    """
     deep = parse_model_spec(os.environ["LLM_MODEL"])
     quick_env = os.environ.get("LLM_MODEL_QUICK")
     if quick_env:
@@ -131,6 +142,13 @@ def build_tradingagents_config() -> dict:
         "llm_provider": ta_provider,
         "deep_think_llm": deep_model,
         "quick_think_llm": quick_model,
-        "anthropic_effort": "medium",
-        "openai_reasoning_effort": "medium",
+        # TradingAgents reads ``reasoning_effort`` directly and maps to the
+        # provider-native knob inside its ``build_chat_model`` (Anthropic →
+        # ``effort``, OpenAI → ``reasoning_effort``, Google → ``thinking_level``).
+        "reasoning_effort": reasoning_effort,
+        "response_language": response_language,
+        # Legacy fields some of TradingAgents' agent prompts still read; kept
+        # for compatibility with older versions of the upstream.
+        "anthropic_effort": reasoning_effort,
+        "openai_reasoning_effort": reasoning_effort,
     }

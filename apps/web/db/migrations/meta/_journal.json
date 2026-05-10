@@ -5,57 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1778170954501,
+      "when": 1778424849337,
       "tag": "0000_init",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1778222677694,
-      "tag": "0001_add_algo",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1778758800000,
-      "tag": "0002_algo_backtest_config",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1778850000000,
-      "tag": "0003_research_signals",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1778298773281,
-      "tag": "0004_observability",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1778979000000,
-      "tag": "0006_risk_reports",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1778992000000,
-      "tag": "0007_agents",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1778992100000,
-      "tag": "0008_drop_persona_tables",
       "breakpoints": true
     }
   ]

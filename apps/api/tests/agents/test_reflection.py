@@ -199,15 +199,25 @@ async def test_compute_realized_return_handles_missing_bars() -> None:
 async def test_reflect_pending_writes_rows(
     pg_pool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Orchestrator persists one ``agent_reflections`` row per pending decision.
+    """Orchestrator persists FIVE ``agent_reflections`` rows per pending
+    decision — one per role (trader, bull_researcher, bear_researcher,
+    invest_judge, risk_manager). Mirrors TradingAgents' Reflector which
+    writes a role-specific lesson into each role's FinancialSituationMemory.
 
-    ``write_reflection_text`` is stubbed (the real one calls a remote LLM).
-    The decision row is back-dated past ``horizon_days`` so it qualifies as
-    pending.
+    ``_write_role_reflection`` is stubbed (the real one calls a remote LLM).
+    The decision row is back-dated past ``horizon_days`` so it qualifies
+    as pending; ``agent_runs.final_state`` is populated with role inputs
+    so each role gets a non-empty string to reflect on.
     """
     from app.services.agents import reflection as reflection_mod
 
     user_id = "00000000-0000-0000-0000-000000000010"
+    final_state_json = (
+        '{"trader_investment_plan":"buy 100 shares",'
+        '"investment_debate_state":'
+          '{"bull_history":"bull case","bear_history":"bear case","judge_decision":"buy"},'
+        '"risk_debate_state":{"judge_decision":"approve"}}'
+    )
     async with pg_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO users(id, name) VALUES($1, 'reflectee') "
@@ -215,10 +225,10 @@ async def test_reflect_pending_writes_rows(
             user_id,
         )
         run_id = await conn.fetchval(
-            "INSERT INTO agent_runs(user_id, symbol, trade_date, config, status) "
-            "VALUES($1, 'NVDA', current_date - 10, '{}'::jsonb, 'complete') "
+            "INSERT INTO agent_runs(user_id, symbol, trade_date, config, status, final_state) "
+            "VALUES($1, 'NVDA', current_date - 10, '{}'::jsonb, 'complete', $2::jsonb) "
             "RETURNING id",
-            user_id,
+            user_id, final_state_json,
         )
         decision_id = await conn.fetchval(
             "INSERT INTO agent_decisions"
@@ -233,8 +243,6 @@ async def test_reflect_pending_writes_rows(
     opend = AsyncMock()
 
     async def kline(ticker: str, ktype: str, num: int) -> list[dict]:
-        # The decision was inserted 10 days ago with horizon=7; we need bars
-        # that cover trade_date (today - 10 days) through trade_date + 7d.
         from datetime import date as _d
         from datetime import timedelta
 
@@ -250,31 +258,38 @@ async def test_reflect_pending_writes_rows(
 
     opend.get_kline.side_effect = kline
 
-    async def fake_write(summary: str, realized: RealizedReturn) -> str:
-        return f"lesson: {realized.outcome} {realized.alpha:+.2f}%"
+    async def fake_role_write(role_prefix: str, role_input: str, realized) -> str:
+        return f"lesson({role_prefix}): {realized.outcome} {realized.alpha:+.2f}%"
 
-    monkeypatch.setattr(reflection_mod, "write_reflection_text", fake_write)
+    monkeypatch.setattr(reflection_mod, "_write_role_reflection", fake_role_write)
 
     n = await reflection_mod.reflect_pending(pg_pool, opend, horizon_days=7)
-    assert n == 1
+    # Five rows per decision, one per role.
+    assert n == 5
 
     async with pg_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT outcome, alpha::float AS alpha, text FROM agent_reflections "
-            "WHERE decision_id = $1",
+        rows = await conn.fetch(
+            "SELECT role, outcome, alpha::float AS alpha, text "
+            "FROM agent_reflections WHERE decision_id = $1 ORDER BY role",
             decision_id,
         )
-    assert row is not None
-    assert row["outcome"] == "correct"
-    assert row["alpha"] == pytest.approx(8.0, rel=0.01)
-    assert row["text"].startswith("lesson:")
+    roles = {r["role"] for r in rows}
+    assert roles == {
+        "trader", "bull_researcher", "bear_researcher",
+        "invest_judge", "risk_manager",
+    }
+    for r in rows:
+        assert r["outcome"] == "correct"
+        assert r["alpha"] == pytest.approx(8.0, rel=0.01)
+        assert r["text"].startswith("lesson(")
 
 
 @pytest.mark.asyncio
 async def test_reflect_pending_skips_already_reflected(
     pg_pool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A decision with an existing reflection row is left alone."""
+    """A decision that already has all five role reflections is excluded
+    from the pending sweep — _PENDING_SQL filters by reflection count < 5."""
     from app.services.agents import reflection as reflection_mod
 
     user_id = "00000000-0000-0000-0000-000000000011"
@@ -299,21 +314,23 @@ async def test_reflect_pending_skips_already_reflected(
             run_id,
             user_id,
         )
-        await conn.execute(
-            "INSERT INTO agent_reflections"
-            "(id, decision_id, horizon_days, realized_return, benchmark_return, "
-            " alpha, outcome, text) "
-            "VALUES(gen_random_uuid(), $1, 7, 0, 0, 0, 'neutral', 'old')",
-            decision_id,
-        )
+        # Pre-fill all five role reflections so the decision is "fully reflected".
+        for role in ("trader", "bull_researcher", "bear_researcher", "invest_judge", "risk_manager"):
+            await conn.execute(
+                "INSERT INTO agent_reflections"
+                "(id, decision_id, role, horizon_days, realized_return, "
+                " benchmark_return, alpha, outcome, text) "
+                "VALUES(gen_random_uuid(), $1, $2, 7, 0, 0, 0, 'neutral', 'old')",
+                decision_id, role,
+            )
 
     opend = AsyncMock()
     opend.get_kline.side_effect = AssertionError("must not be called")
 
-    async def fake_write(summary: str, realized: RealizedReturn) -> str:
+    async def fake_role_write(role_prefix: str, role_input: str, realized) -> str:
         raise AssertionError("must not be called")
 
-    monkeypatch.setattr(reflection_mod, "write_reflection_text", fake_write)
+    monkeypatch.setattr(reflection_mod, "_write_role_reflection", fake_role_write)
 
     n = await reflection_mod.reflect_pending(pg_pool, opend, horizon_days=7)
     assert n == 0

@@ -118,6 +118,12 @@ async def translate_chunks(
                 "confidence": decision.get("confidence"),
                 "rationale": decision.get("rationale", ""),
             }
+        final_state = values.get("final_state")
+        if final_state:
+            # Forwarded to the proxy tee which persists it on
+            # ``agent_runs.final_state``. Per-role reflection reads it later
+            # to drive Reflector lessons without re-walking agent_messages.
+            yield {"type": "final-state", "state": final_state}
         if meta.get("node_finished") and node:
             messages = values.get("messages") or []
             summary = ""

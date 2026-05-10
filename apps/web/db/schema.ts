@@ -131,6 +131,11 @@ export const agentRuns = pgTable('agent_runs', {
   error: text('error'),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
+  // Captured terminal AgentState (the four analyst reports + debate
+  // histories + plans + final_trade_decision). Populated by the tee on
+  // ``run-end`` so per-role reflection has the inputs it needs without
+  // re-walking the agent_messages stream.
+  finalState: jsonb('final_state'),
 }, t => ({
   userSymbolDate: index('agent_runs_user_symbol_date_idx').on(t.userId, t.symbol, t.tradeDate),
   runningOnly: index('agent_runs_running_idx').on(t.status).where(sql`status = 'running'`),
@@ -174,11 +179,19 @@ export const agentDecisions = pgTable('agent_decisions', {
 }))
 
 // Post-hoc reflection on a decision after `horizonDays`. `outcome` ∈
-// {'win','loss','neutral'}. One reflection per decision (UNIQUE on
-// decisionId).
+// {'correct','wrong','neutral'}.
+//
+// Schema is now ROLE-keyed (one reflection per role per decision —
+// ``trader``, ``bull_researcher``, ``bear_researcher``, ``invest_judge``,
+// ``risk_manager``, plus an aggregate ``overall``). TradingAgents writes
+// per-role lessons via its Reflector class; each role's lesson is fed
+// back into its own FinancialSituationMemory at the start of the next
+// run, so the bull researcher learns from past bull-side mistakes
+// without contaminating the bear's prompt context.
 export const agentReflections = pgTable('agent_reflections', {
   id: uuid('id').defaultRandom().primaryKey(),
-  decisionId: uuid('decision_id').notNull().unique().references(() => agentDecisions.id, { onDelete: 'cascade' }),
+  decisionId: uuid('decision_id').notNull().references(() => agentDecisions.id, { onDelete: 'cascade' }),
+  role: text('role').notNull().default('overall'),
   reflectedAt: timestamp('reflected_at', { withTimezone: true }).notNull().defaultNow(),
   horizonDays: integer('horizon_days').notNull(),
   realizedReturn: numeric('realized_return', { precision: 8, scale: 4 }),
@@ -186,4 +199,9 @@ export const agentReflections = pgTable('agent_reflections', {
   alpha: numeric('alpha', { precision: 8, scale: 4 }),
   outcome: text('outcome').notNull(),
   text: text('text').notNull(),
-})
+}, t => ({
+  // ``UNIQUE(decision_id, role)`` replaces the old ``UNIQUE(decision_id)``
+  // so the reflection job can write five rows per decision (one per
+  // role) without conflict.
+  uniqueDecisionRole: uniqueIndex('agent_reflections_decision_role_uq').on(t.decisionId, t.role),
+}))

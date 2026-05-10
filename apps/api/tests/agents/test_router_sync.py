@@ -41,13 +41,14 @@ async def test_streams_canned_events(monkeypatch: pytest.MonkeyPatch) -> None:
         max_debate_rounds: int,
         deep_thinking: bool,
         memory: list[dict] | None = None,
+        memory_by_role: dict[str, list[dict]] | None = None,
         run_id: str | None = None,
         usage=None,
     ):
-        # ``memory`` / ``run_id`` / ``usage`` are accepted for signature
-        # compatibility with the real ``run_graph``; the canned-event test
-        # doesn't exercise them.
-        del memory, run_id, usage
+        # ``memory`` / ``memory_by_role`` / ``run_id`` / ``usage`` are accepted
+        # for signature compatibility with the real ``run_graph``; the
+        # canned-event test doesn't exercise them.
+        del memory, memory_by_role, run_id, usage
         yield {
             "metadata": {"langgraph_node": "trader", "node_finished": True},
             "values": {
@@ -351,10 +352,12 @@ async def test_run_end_carries_accumulated_token_totals(
         max_debate_rounds: int,
         deep_thinking: bool,
         memory: list[dict] | None = None,
+        memory_by_role: dict[str, list[dict]] | None = None,
         run_id: str | None = None,
         usage=None,
     ):
-        del memory, run_id, max_debate_rounds, deep_thinking, graph, symbol, trade_date
+        del memory, memory_by_role, run_id, max_debate_rounds, deep_thinking
+        del graph, symbol, trade_date
         # Simulate two LLM calls' worth of usage flowing through the callback.
         if usage is not None:
             await usage.on_llm_end(
