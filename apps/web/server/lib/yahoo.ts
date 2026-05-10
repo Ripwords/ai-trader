@@ -361,6 +361,70 @@ const fetchEarningsRaw = defineCachedFunction(
   },
 )
 
+export interface QuarterlyPeriod {
+  period: string         // "FY25 Q3" or fallback "2025-10-31"
+  end_date: string       // ISO date string
+  revenue: number | null
+  net_income: number | null
+  eps: number | null
+  operating_income: number | null
+}
+
+const fetchQuarterlyHistorical = defineCachedFunction(
+  async (symbol: string, limit: number): Promise<QuarterlyPeriod[]> => {
+    const yfSym = toYahooSymbol(symbol)
+    const q = await yahoo.quoteSummary(yfSym, {
+      modules: ['incomeStatementHistoryQuarterly', 'earningsHistory'],
+    })
+    const income = q.incomeStatementHistoryQuarterly?.incomeStatementHistory ?? []
+    const earningsRows = q.earningsHistory?.history ?? []
+    const out: QuarterlyPeriod[] = []
+    const len = Math.min(income.length, limit)
+    for (let i = 0; i < len; i++) {
+      const inc = income[i]
+      if (!inc) continue
+      const endDate = (inc as { endDate?: Date | string | null }).endDate
+      const isoDate = endDate ? new Date(endDate).toISOString().slice(0, 10) : ''
+      // Match an earningsHistory row by date for actual EPS.
+      const matched = earningsRows.find((r) => {
+        const rd = (r as { quarter?: Date | string | null }).quarter
+        if (!rd || !endDate) return false
+        return new Date(rd).toISOString().slice(0, 10) === isoDate
+      })
+      const eps = matched ? num((matched as { epsActual?: unknown }).epsActual) : null
+      const dt = endDate ? new Date(endDate) : null
+      const period = dt
+        ? `${dt.getUTCFullYear()} Q${Math.floor(dt.getUTCMonth() / 3) + 1}`
+        : `period_${i}`
+      out.push({
+        period,
+        end_date: isoDate,
+        revenue: f(inc, 'totalRevenue'),
+        net_income: f(inc, 'netIncome'),
+        operating_income: f(inc, 'operatingIncome'),
+        eps,
+      })
+    }
+    return out
+  },
+  {
+    name: 'yahoo',
+    group: 'historical-q',
+    maxAge: 60 * 60 * 12,
+    swr: true,
+    getKey: (symbol: string, limit: number) => `${symbol}:${limit}`,
+  },
+)
+
+export async function getQuarterlyHistory(symbol: string, limit = 8): Promise<QuarterlyPeriod[]> {
+  try {
+    return await fetchQuarterlyHistorical(symbol, limit)
+  } catch (err) {
+    console.error('[yahoo] getQuarterlyHistory failed', symbol, err)
+    return []
+  }
+}
+
 export async function getEarningsInfo(symbol: string): Promise<EarningsInfo> {
   let raw: EarningsRaw
   try {

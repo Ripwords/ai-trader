@@ -286,7 +286,7 @@ function extractErrorMessage(err: unknown): string {
       </div>
     </div>
 
-    <!-- Footer: synthesize / re-synthesize CTA -->
+    <!-- Footer: synthesize / re-synthesize CTA + deep-report link -->
     <footer class="verdict__foot">
       <button
         type="button"
@@ -300,6 +300,13 @@ function extractErrorMessage(err: unknown): string {
       <p v-if="!synthesizing" class="cta__hint">
         {{ state === 'ready' ? 're-fan signals into a fresh decision' : 'fan signals into a single decision' }}
       </p>
+      <NuxtLink
+        v-if="symbol"
+        :to="`/research/report/${encodeURIComponent(symbol)}`"
+        class="deep"
+      >
+        deep risk report →
+      </NuxtLink>
     </footer>
   </aside>
 </template>
@@ -668,6 +675,21 @@ function extractErrorMessage(err: unknown): string {
   color: var(--paper-3);
   text-align: center;
 }
+.deep {
+  display: block;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--paper-2);
+  padding: 0.55rem 0.5rem 0.1rem;
+  border-top: 1px dashed var(--ink-line-strong);
+  margin-top: 0.55rem;
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+.deep:hover { color: var(--accent); }
 
 /* ── Spinners ────────────────────────────────────────────────── */
 .spinner {

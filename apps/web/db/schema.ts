@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, numeric, pgTable, serial, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core'
+import { boolean, date, integer, jsonb, numeric, pgTable, primaryKey, serial, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core'
 
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -127,6 +127,19 @@ export const workflowRuns = pgTable('workflow_runs', {
   errorMessage: text('error_message'),
   startedAt: timestamp('started_at').defaultNow().notNull(),
 })
+
+// Cached deep risk-score reports (one per user per symbol per day). The
+// payload is the full RiskReport JSON returned to the page; refresh=1 on the
+// route upserts a fresh row for today.
+export const riskReports = pgTable('risk_reports', {
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  symbol: varchar('symbol', { length: 32 }).notNull(),
+  day: date('day').notNull(),
+  payload: jsonb('payload').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, t => [primaryKey({ columns: [t.userId, t.symbol, t.day] })])
 
 // Per-call LLM token usage + estimated USD cost. One row per chat turn or
 // persona generateObject call. `source` distinguishes 'chat' from
