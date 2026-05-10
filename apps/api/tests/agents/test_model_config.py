@@ -58,3 +58,26 @@ def test_same_provider_constraint(monkeypatch):
     monkeypatch.setenv("LLM_MODEL_QUICK", "openai/gpt-4o-mini")
     with pytest.raises(SameProviderViolation):
         build_tradingagents_config()
+
+
+def test_build_config_maps_google_to_google_genai(monkeypatch):
+    """TradingAgents' init_chat_model registry uses ``google_genai``; we accept
+    the friendlier ``google`` in our env convention and translate."""
+    monkeypatch.setenv("LLM_MODEL", "google/gemini-2.5-pro")
+    monkeypatch.delenv("LLM_MODEL_QUICK", raising=False)
+    cfg = build_tradingagents_config()
+    assert cfg["llm_provider"] == "google_genai"
+    assert cfg["deep_think_llm"] == "gemini-2.5-pro"
+    assert cfg["quick_think_llm"] == "gemini-2.5-flash"
+
+
+def test_build_config_routes_deepseek_via_litellm(monkeypatch):
+    """DeepSeek isn't a native init_chat_model provider; route through litellm
+    using its ``deepseek/<model>`` namespace so DEEPSEEK_API_KEY is read
+    automatically."""
+    monkeypatch.setenv("LLM_MODEL", "deepseek/deepseek-v4-pro")
+    monkeypatch.delenv("LLM_MODEL_QUICK", raising=False)
+    cfg = build_tradingagents_config()
+    assert cfg["llm_provider"] == "litellm"
+    assert cfg["deep_think_llm"] == "deepseek/deepseek-v4-pro"
+    assert cfg["quick_think_llm"] == "deepseek/deepseek-v4-flash"

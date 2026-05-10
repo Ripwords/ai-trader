@@ -76,6 +76,21 @@ def default_quick_for(provider: str, deep_model: str) -> str:
     raise ValueError(f"No quick fallback for provider {provider!r}")
 
 
+# Map our env-var convention names to TradingAgents' LangChain
+# init_chat_model registry keys. We use friendlier short names (``google``,
+# ``deepseek``) in ``LLM_MODEL`` so the env stays consistent with web's
+# Vercel-AI-SDK conventions; TradingAgents requires its own enum values.
+_TA_PROVIDER_MAP = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "google": "google_genai",
+    # DeepSeek's API is OpenAI-compatible; LangChain's ``init_chat_model``
+    # exposes it through the litellm provider, which natively understands the
+    # ``deepseek/<model>`` namespace and reads ``DEEPSEEK_API_KEY`` from env.
+    "deepseek": "litellm",
+}
+
+
 def build_tradingagents_config() -> dict:
     deep = parse_model_spec(os.environ["LLM_MODEL"])
     quick_env = os.environ.get("LLM_MODEL_QUICK")
@@ -86,13 +101,29 @@ def build_tradingagents_config() -> dict:
                 f"LLM_MODEL_QUICK provider {quick.provider!r} must equal "
                 f"LLM_MODEL provider {deep.provider!r} (mixed-provider not supported in v1)"
             )
-        quick_model = quick.model_id
+        quick_model_id = quick.model_id
     else:
-        quick_model = default_quick_for(deep.provider, deep.model_id)
+        quick_model_id = default_quick_for(deep.provider, deep.model_id)
+
+    ta_provider = _TA_PROVIDER_MAP.get(deep.provider)
+    if ta_provider is None:
+        raise ValueError(
+            f"Provider {deep.provider!r} is not supported by TradingAgents. "
+            f"Supported: {sorted(_TA_PROVIDER_MAP)}"
+        )
+
+    # LiteLLM expects ``<provider>/<model>``; native providers expect just
+    # the model id. Restore the namespace prefix only for litellm-routed ones.
+    if ta_provider == "litellm":
+        deep_model = f"{deep.provider}/{deep.model_id}"
+        quick_model = f"{deep.provider}/{quick_model_id}"
+    else:
+        deep_model = deep.model_id
+        quick_model = quick_model_id
 
     return {
-        "llm_provider": deep.provider,
-        "deep_think_llm": deep.model_id,
+        "llm_provider": ta_provider,
+        "deep_think_llm": deep_model,
         "quick_think_llm": quick_model,
         "anthropic_effort": "medium",
         "openai_reasoning_effort": "medium",
