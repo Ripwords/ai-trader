@@ -8,7 +8,7 @@
 //
 // Data comes from /api/research/symbols (owner-scoped per-symbol aggregate).
 
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 
 definePageMeta({ section: 'research' })
 useHead({ title: 'research' })
@@ -46,37 +46,14 @@ function ratingTone(r: string | null): 'up' | 'down' | 'neutral' {
   return 'neutral'
 }
 
-// ─── Hydration-safe clock ──────────────────────────────────────────
-// fmtRelative reads ``Date.now()``, which differs between SSR and client
-// hydration by a few hundred ms — that's enough to render "12m ago" on
-// the server and "13m ago" on the client and trip a hydration mismatch.
-// Gate the clock behind a ref that starts at ``null`` (server) and
-// gets populated in ``onMounted`` (client only). The template renders
-// a stable placeholder until then.
-const now = ref<number | null>(null)
-onMounted(() => {
-  now.value = Date.now()
-  // Refresh every minute so "12m ago" eventually becomes "13m ago"
-  // without needing a full re-fetch.
-  setInterval(() => { now.value = Date.now() }, 60_000)
-})
-
-function fmtRelative(iso: string | null): string {
-  if (!iso) return '—'
-  // Pre-mount: stable absolute-date fallback so SSR and hydration match.
-  if (now.value === null) return iso.slice(0, 10)
-  const then = new Date(iso).getTime()
-  if (!Number.isFinite(then)) return '—'
-  const ms = now.value - then
-  const s = Math.floor(ms / 1000)
-  if (s < 60) return `${s}s ago`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  if (d < 30) return `${d}d ago`
-  return iso.slice(0, 10)
+// Postgres serialises timestamps as ``2026-05-10 15:35:40.874689+00``
+// which ``new Date(...)`` accepts but ``<NuxtTime>`` is happier with a
+// proper ISO 8601 string. Coerce once here.
+function toIso(s: string | null): string | null {
+  if (!s) return null
+  // Already ISO-ish (has ``T``)? Pass through.
+  if (s.includes('T')) return s
+  return s.replace(' ', 'T').replace(/\+00$/, 'Z')
 }
 </script>
 
@@ -154,7 +131,7 @@ function fmtRelative(iso: string | null): string {
                   <span
                     v-if="t.hasInflight"
                     class="tile__beacon"
-                    :title="`run started ${fmtRelative(t.latestStartedAt)}`"
+                    :title="`run started ${toIso(t.latestStartedAt) ?? ''}`"
                     aria-label="run in progress"
                   />
                 </header>
@@ -178,7 +155,15 @@ function fmtRelative(iso: string | null): string {
                     {{ t.runCount }} run{{ t.runCount === 1 ? '' : 's' }}
                   </span>
                   <span class="tile__sep" aria-hidden="true">·</span>
-                  <span class="tile__time" data-mono>{{ fmtRelative(t.latestStartedAt) }}</span>
+                  <NuxtTime
+                    v-if="toIso(t.latestStartedAt)"
+                    :datetime="toIso(t.latestStartedAt) as string"
+                    relative
+                    numeric="auto"
+                    class="tile__time"
+                    data-mono
+                  />
+                  <span v-else class="tile__time" data-mono>—</span>
                 </footer>
               </NuxtLink>
             </li>
