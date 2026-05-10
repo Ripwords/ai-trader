@@ -8,7 +8,7 @@ export interface Section {
 
 export const SECTIONS: readonly Section[] = [
   { key: 'chat',      to: '/',          label: 'chat',      blurb: 'copilot — charts, news, paper writes' },
-  { key: 'research',  to: '/research',  label: 'research',  blurb: 'analyst signals + investor personas' },
+  { key: 'research',  to: '/research',  label: 'research',  blurb: 'multi-agent debate · per-symbol verdict' },
   { key: 'portfolio', to: '/portfolio', label: 'portfolio', blurb: 'cross-broker net worth' },
   { key: 'algo',      to: '/algo',      label: 'algo',      blurb: 'strategies, backtests, scheduler' },
   { key: 'usage',     to: '/usage',     label: 'usage',     blurb: 'LLM tokens & cost' },
