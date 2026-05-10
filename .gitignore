@@ -22,3 +22,4 @@ nvda_kline.png
 
 # build artifacts from scripts/build-web-image.sh
 dist/
+.claude/scheduled_tasks.lock
