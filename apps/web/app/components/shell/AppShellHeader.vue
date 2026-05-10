@@ -10,17 +10,31 @@ const emit = defineEmits<{ 'toggle-drawer': []; 'sign-out': [] }>()
 
 const route = useRoute()
 const llmModel = useRuntimeConfig().public.llmModel || 'unset'
-const clock = useState('shell.clock', () => new Date())
+// Live clock: ``new Date()`` at SSR time always lags the browser's clock
+// by hundreds of ms by the time hydration runs, which produces a Vue
+// hydration mismatch on every page load. The mismatch warning isn't just
+// noise — Vue gives up on the surrounding subtree and re-renders it
+// client-side, which is what was breaking the global layout.
+//
+// Fix: render an empty clock during SSR / pre-mount (server emits the
+// same empty string as the client's first paint), then start ticking
+// after onMounted. The clock visibly "appears" within one frame, which
+// is fine — the alternative is a global layout re-hydration.
+const clock = ref<Date | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
+  clock.value = new Date()
   timer = setInterval(() => { clock.value = new Date() }, 1000)
 })
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer)
 })
-const clockText = computed(() =>
-  clock.value.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-)
+const clockText = computed(() => {
+  if (clock.value === null) return '--:--:--'
+  return clock.value.toLocaleTimeString('en-US', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
+})
 
 const activeKey = computed(() => activeSectionKey(route.path))
 
