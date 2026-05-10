@@ -12,6 +12,54 @@ _SUPPORTED_ANALYSTS = {"market", "social", "news", "fundamentals"}
 _SUPPORTED_LANGUAGES = {"en-US", "zh-TW", "zh-CN", "ja-JP", "ko-KR", "de-DE"}
 
 
+class BacktestPair(BaseModel):
+    """One historical (symbol, trade_date) input for the backtest harness."""
+
+    symbol: str = Field(..., min_length=1, max_length=20)
+    trade_date: date
+
+
+class BacktestRequest(BaseModel):
+    """POST /agents/backtest body.
+
+    Knobs match :class:`RunRequest` so a backtest replicates the exact
+    settings a forward run would use. ``horizon_days`` is the realised-
+    return window applied uniformly to every pair; the default mirrors
+    the reflection job's default.
+    """
+
+    pairs: list[BacktestPair] = Field(..., min_length=1, max_length=50)
+    horizon_days: int = Field(7, ge=1, le=90)
+    max_debate_rounds: int = Field(1, ge=1, le=3)
+    max_risk_discuss_rounds: int = Field(1, ge=1, le=3)
+    deep_thinking: bool = True
+    reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    response_language: Literal[
+        "en-US", "zh-TW", "zh-CN", "ja-JP", "ko-KR", "de-DE"
+    ] = "en-US"
+    selected_analysts: list[str] = Field(
+        default_factory=lambda: ["market", "social", "news", "fundamentals"]
+    )
+
+    @field_validator("selected_analysts")
+    @classmethod
+    def _normalize_analysts(cls, v: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in v:
+            name = raw.strip().lower()
+            if name not in _SUPPORTED_ANALYSTS:
+                raise ValueError(
+                    f"unknown analyst {raw!r}; supported: {sorted(_SUPPORTED_ANALYSTS)}"
+                )
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
+        if not out:
+            raise ValueError("selected_analysts must contain at least one analyst")
+        return out
+
+
 class RunRequest(BaseModel):
     """POST /agents/run request body.
 

@@ -33,7 +33,8 @@ from typing import Any, AsyncIterator
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.schemas.agents import RunRequest
+from app.schemas.agents import BacktestRequest, RunRequest
+from app.services.agents import backtest as backtest_mod
 from app.services.agents import graph as graph_mod
 from app.services.agents import pricing as pricing_mod
 from app.services.agents import reflection as reflection_mod
@@ -302,6 +303,67 @@ async def trigger_reflect(
     opend = getattr(request.app.state, "opend_client", None)
     n = await reflection_mod.reflect_pending(pool, opend, horizon_days=horizon_days)
     return {"reflected": n}
+
+
+@router.post("/backtest")
+async def trigger_backtest(
+    body: BacktestRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Run the agents pipeline over a list of historical (symbol, date) pairs.
+
+    Synchronous (no streaming) — the caller waits up to several minutes
+    for all pairs to complete. Returns aggregate stats + per-pair results.
+
+    Honest scope: this is a methodology validator, not a portfolio
+    simulator. Each pair is independent, no slippage / fills modeled.
+    Sequential by design (toolkit module-globals + cost cap).
+    """
+    _check_bearer(authorization)
+    opend = getattr(request.app.state, "opend_client", None)
+    pairs = [
+        backtest_mod.BacktestPair(symbol=p.symbol, trade_date=p.trade_date)
+        for p in body.pairs
+    ]
+    agg = await backtest_mod.run_backtest(
+        pairs,
+        opend=opend,
+        horizon_days=body.horizon_days,
+        max_debate_rounds=body.max_debate_rounds,
+        max_risk_discuss_rounds=body.max_risk_discuss_rounds,
+        deep_thinking=body.deep_thinking,
+        reasoning_effort=body.reasoning_effort,
+        response_language=body.response_language,
+        selected_analysts=body.selected_analysts,
+    )
+    return {
+        "n_runs":         agg.n_runs,
+        "n_correct":      agg.n_correct,
+        "n_wrong":        agg.n_wrong,
+        "n_neutral":      agg.n_neutral,
+        "total_alpha":    agg.total_alpha,
+        "avg_alpha":      agg.avg_alpha,
+        "win_rate":       agg.win_rate,
+        "total_tokens_in":  agg.total_tokens_in,
+        "total_tokens_out": agg.total_tokens_out,
+        "runs": [
+            {
+                "symbol":            r.symbol,
+                "trade_date":        r.trade_date.isoformat(),
+                "rating":            r.rating,
+                "confidence":        r.confidence,
+                "realized_return":   r.realized_return,
+                "benchmark_return":  r.benchmark_return,
+                "alpha":             r.alpha,
+                "outcome":           r.outcome,
+                "tokens_in":         r.tokens_in,
+                "tokens_out":        r.tokens_out,
+                "error":             r.error,
+            }
+            for r in agg.runs
+        ],
+    }
 
 
 @router.delete("/run/{run_id}")

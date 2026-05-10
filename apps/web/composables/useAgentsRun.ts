@@ -25,7 +25,11 @@ interface VerdictState {
 
 interface StartOpts {
   max_debate_rounds?: number
+  max_risk_discuss_rounds?: number
   deep_thinking?: boolean
+  reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  response_language?: 'en-US' | 'zh-TW' | 'zh-CN' | 'ja-JP' | 'ko-KR' | 'de-DE'
+  selected_analysts?: string[]
 }
 
 export function useAgentsRun() {

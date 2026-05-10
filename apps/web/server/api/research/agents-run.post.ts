@@ -9,7 +9,11 @@ import type { AgentEvent } from '../../../types/agents'
 interface AgentsRunBody {
   symbol: string
   max_debate_rounds?: number
+  max_risk_discuss_rounds?: number
   deep_thinking?: boolean
+  reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  response_language?: 'en-US' | 'zh-TW' | 'zh-CN' | 'ja-JP' | 'ko-KR' | 'de-DE'
+  selected_analysts?: string[]
   trade_date?: string
 }
 
@@ -73,7 +77,13 @@ export default defineEventHandler(async (event) => {
       status: 'running',
       config: {
         max_debate_rounds: body.max_debate_rounds ?? 1,
+        max_risk_discuss_rounds: body.max_risk_discuss_rounds ?? 1,
         deep_thinking: body.deep_thinking ?? true,
+        reasoning_effort: body.reasoning_effort ?? 'medium',
+        response_language: body.response_language ?? 'en-US',
+        selected_analysts: body.selected_analysts ?? [
+          'market', 'social', 'news', 'fundamentals',
+        ],
       },
     })
     .returning()
@@ -92,7 +102,13 @@ export default defineEventHandler(async (event) => {
       symbol: body.symbol,
       trade_date: tradeDate,
       max_debate_rounds: body.max_debate_rounds ?? 1,
+      max_risk_discuss_rounds: body.max_risk_discuss_rounds ?? 1,
       deep_thinking: body.deep_thinking ?? true,
+      reasoning_effort: body.reasoning_effort ?? 'medium',
+      response_language: body.response_language ?? 'en-US',
+      selected_analysts: body.selected_analysts ?? [
+        'market', 'social', 'news', 'fundamentals',
+      ],
       // Forward the run_id we just minted so the api emits its run-start
       // event with the same uuid the agent_runs row uses. Without this the
       // api would generate its own id; the browser would persist that in
