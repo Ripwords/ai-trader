@@ -8,7 +8,11 @@ import { createError, getRequestHeader } from 'h3'
  * configured (fail closed).
  */
 export function requireInternalBearer(event: H3Event): void {
-  const expected = process.env.INTERNAL_BEARER
+  // Web container's compose env injects this as ``NUXT_INTERNAL_BEARER``
+  // (the Nuxt runtimeConfig convention); the bare name only exists when
+  // explicitly forwarded. Accept either so the guard works in both setups
+  // and matches the proxy route's lookup order.
+  const expected = process.env.INTERNAL_BEARER ?? process.env.NUXT_INTERNAL_BEARER
   if (!expected) {
     throw createError({ statusCode: 500, statusMessage: 'INTERNAL_BEARER not configured' })
   }
