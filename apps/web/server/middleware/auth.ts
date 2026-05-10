@@ -6,6 +6,12 @@ export default defineEventHandler((event) => {
   const url = event.node.req.url ?? ''
   const path = url.split('?')[0] ?? ''
   if (PUBLIC_PATHS.has(path)) return
+  // ``/internal/*`` is the api-side service surface (TradingAgents toolkit
+  // calls back here for Yahoo/news data over docker DNS). It's gated by
+  // INTERNAL_BEARER inside each route, NOT by session — the api container
+  // has no session cookie. Skip the session check so the bearer guard
+  // gets a chance to run.
+  if (path.startsWith('/internal/')) return
   if (!path.startsWith('/api') && !['/'].includes(path) && !path.startsWith('/_')) {
     // static assets, devtools, etc — allow
     return
