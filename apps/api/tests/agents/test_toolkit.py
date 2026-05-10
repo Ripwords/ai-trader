@@ -105,7 +105,7 @@ async def test_get_balance_sheet_calls_internal(monkeypatch):
         result = await toolkit.get_balance_sheet.ainvoke({"ticker": "NVDA"})
     assert "Balance Sheet for NVDA" in result
     assert "total_assets" in result
-    assert "/internal/yahoo/balance-sheet" in captured["url"]
+    assert "/api/internal/yahoo/balance-sheet" in captured["url"]
     assert captured["headers"]["authorization"] == "Bearer secret"
     assert captured["params"]["symbol"] == "NVDA"
 

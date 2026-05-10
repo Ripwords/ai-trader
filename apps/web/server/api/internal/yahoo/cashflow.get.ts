@@ -1,5 +1,5 @@
 import { createError, defineEventHandler, getQuery } from 'h3'
-import { getFundamentalsBundle } from '../../lib/yahoo'
+import { getFundamentalsBundle } from '../../../lib/yahoo'
 import { requireInternalBearer } from '../_guard'
 
 export default defineEventHandler(async (event) => {

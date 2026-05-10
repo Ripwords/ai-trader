@@ -17,7 +17,7 @@ let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
   process.env.INTERNAL_BEARER = 'test-bearer'
-  const mod = await import('../../server/internal/yahoo/fundamentals.get')
+  const mod = await import('../../server/api/internal/yahoo/fundamentals.get')
   handler = mod.default as Handler
 })
 

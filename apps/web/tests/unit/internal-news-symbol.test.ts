@@ -12,7 +12,7 @@ beforeEach(async () => {
   vi.resetModules()
   searchMock.mockReset()
   process.env.INTERNAL_BEARER = 'test-bearer'
-  const mod = await import('../../server/internal/news/symbol.get')
+  const mod = await import('../../server/api/internal/news/symbol.get')
   handler = mod.default as Handler
 })
 

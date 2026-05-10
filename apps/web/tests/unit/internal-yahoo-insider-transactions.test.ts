@@ -12,7 +12,7 @@ let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
   process.env.INTERNAL_BEARER = 'test-bearer'
-  const mod = await import('../../server/internal/yahoo/insider-transactions.get')
+  const mod = await import('../../server/api/internal/yahoo/insider-transactions.get')
   handler = mod.default as Handler
 })
 

@@ -1,5 +1,5 @@
 import { createError, defineEventHandler, getQuery } from 'h3'
-import { searchWithFallback } from '../../lib/search'
+import { searchWithFallback } from '../../../lib/search'
 import { requireInternalBearer } from '../_guard'
 
 export default defineEventHandler(async (event) => {

@@ -129,7 +129,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
     ) -> str:
         """Retrieve balance sheet data for a given ticker symbol."""
         del freq, curr_date  # Yahoo bundle only carries the most-recent period
-        data = await _internal_get("/internal/yahoo/balance-sheet", {"symbol": ticker})
+        data = await _internal_get("/api/internal/yahoo/balance-sheet", {"symbol": ticker})
         bs = data.get("balance_sheet")
         if not bs:
             return f"No balance sheet available for {ticker}."
@@ -143,7 +143,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
     ) -> str:
         """Retrieve cash flow statement data for a given ticker symbol."""
         del freq, curr_date
-        data = await _internal_get("/internal/yahoo/cashflow", {"symbol": ticker})
+        data = await _internal_get("/api/internal/yahoo/cashflow", {"symbol": ticker})
         cf = data.get("cashflow")
         if not cf:
             return f"No cashflow available for {ticker}."
@@ -157,7 +157,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
     ) -> str:
         """Retrieve income statement data for a given ticker symbol."""
         del freq, curr_date
-        data = await _internal_get("/internal/yahoo/income-statement", {"symbol": ticker})
+        data = await _internal_get("/api/internal/yahoo/income-statement", {"symbol": ticker})
         is_ = data.get("income_statement")
         if not is_:
             return f"No income statement available for {ticker}."
@@ -167,7 +167,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
     async def get_fundamentals(ticker: str, curr_date: str) -> str:
         """Retrieve comprehensive fundamental data for a given ticker symbol."""
         del curr_date
-        data = await _internal_get("/internal/yahoo/fundamentals", {"symbol": ticker})
+        data = await _internal_get("/api/internal/yahoo/fundamentals", {"symbol": ticker})
         return f"Fundamentals for {ticker}:\n```json\n{json.dumps(data, indent=2)}\n```"
 
     @tool
@@ -178,7 +178,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         """Retrieve insider transaction information about a company."""
         del curr_date
         data = await _internal_get(
-            "/internal/yahoo/insider-transactions", {"symbol": ticker}
+            "/api/internal/yahoo/insider-transactions", {"symbol": ticker}
         )
         rows = data.get("transactions") or []
         if not rows:
@@ -190,7 +190,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         """Retrieve news data for a given ticker symbol over a date range."""
         del start_date, end_date  # Tavily/Brave search returns recent news regardless
         data = await _internal_get(
-            "/internal/news/symbol", {"symbol": ticker, "max_results": 10}
+            "/api/internal/news/symbol", {"symbol": ticker, "max_results": 10}
         )
         if data.get("error") and not data.get("results"):
             return "News search not configured. Skipping news analysis."
@@ -205,7 +205,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         """Retrieve global macroeconomic news headlines."""
         del curr_date, look_back_days  # search provider returns recent matches
         data = await _internal_get(
-            "/internal/news/global",
+            "/api/internal/news/global",
             {"query": "global macroeconomic news", "max_results": max(limit, 5)},
         )
         if data.get("error") and not data.get("results"):
