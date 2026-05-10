@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import MarkdownText from './MarkdownText.vue'
 
 interface ToolCall {
@@ -18,22 +18,14 @@ interface Props {
 
 const props = defineProps<Props>()
 
-// Auto-expand while the node is mid-run (so the user can see tool activity
-// as it lands), collapse to summary once done. Honours user override too:
-// once they manually toggle, we stop auto-managing.
-const userToggled = ref(false)
-const expanded = ref(props.state === 'running')
-
-watch(
-  () => props.state,
-  (s) => {
-    if (userToggled.value) return
-    expanded.value = s === 'running'
-  },
-)
+// Always start collapsed. Earlier I auto-expanded the running card so the
+// user could see tool activity as it landed; that turned out to be too
+// noisy when multiple analysts run in sequence — the page kept exploding
+// open. The RunHeader already surfaces "current node + last tool" live, so
+// the per-card toggle can stay quiet until the user opts in.
+const expanded = ref(false)
 
 function toggle() {
-  userToggled.value = true
   expanded.value = !expanded.value
 }
 

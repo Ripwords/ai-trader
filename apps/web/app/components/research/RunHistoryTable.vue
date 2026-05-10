@@ -34,11 +34,11 @@ function alphaTone(a?: number | string | null): 'up' | 'down' | 'neutral' {
   return n > 0 ? 'up' : n < 0 ? 'down' : 'neutral'
 }
 
-function outcomeTone(o?: string | null): 'up' | 'down' | 'neutral' {
-  if (!o) return 'neutral'
-  const v = String(o).toLowerCase()
-  if (v === 'correct') return 'up'
-  if (v === 'wrong') return 'down'
+function statusTone(s: string): 'up' | 'down' | 'neutral' | 'pending' {
+  if (s === 'complete') return 'neutral'
+  if (s === 'failed') return 'down'
+  if (s === 'running') return 'pending'
+  if (s === 'cancelled') return 'neutral'
   return 'neutral'
 }
 
@@ -54,6 +54,7 @@ function fmtCost(c?: number | string | null): string {
   if (c === null || c === undefined) return '—'
   const n = typeof c === 'number' ? c : Number(c)
   if (!Number.isFinite(n)) return '—'
+  if (n < 0.01) return `$${n.toFixed(4)}`
   return `$${n.toFixed(2)}`
 }
 
@@ -74,8 +75,21 @@ function fmtDuration(row: Row): string {
 }
 
 function fmtConfidence(c?: number | null): string {
-  if (c === null || c === undefined) return '—'
+  if (c === null || c === undefined) return ''
   return `${c}%`
+}
+
+function shortDate(s: string): string {
+  // Compact form for the aside: "May 10" / "May 10, 2026" only when not
+  // current year. Trade dates are stored as ISO yyyy-mm-dd so we can
+  // synthesise without a Date round-trip.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return s
+  const [, year, month, day] = m
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const monthName = months[Number(month) - 1] ?? month
+  const thisYear = String(new Date().getFullYear())
+  return year === thisYear ? `${monthName} ${Number(day)}` : `${monthName} ${Number(day)}, ${year}`
 }
 
 function rowClick(row: Row) {
@@ -84,140 +98,193 @@ function rowClick(row: Row) {
 </script>
 
 <template>
-  <section class="history surface-1">
-    <header class="head">
-      <span class="eyebrow">run history</span>
-      <span class="count" data-mono>{{ props.rows.length }} runs</span>
-    </header>
-    <div v-if="props.rows.length === 0" class="empty">no agent runs yet</div>
-    <table v-else>
-      <thead>
-        <tr>
-          <th>date</th>
-          <th>symbol</th>
-          <th>rating</th>
-          <th class="th-num">conf.</th>
-          <th class="th-num">alpha</th>
-          <th>outcome</th>
-          <th class="th-num">cost</th>
-          <th class="th-num">dur.</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr
-          v-for="r in props.rows"
-          :key="r.id"
-          @click="rowClick(r)"
+  <ol v-if="props.rows.length > 0" class="history">
+    <li
+      v-for="r in props.rows"
+      :key="r.id"
+      class="row"
+      :data-status="r.status"
+      tabindex="0"
+      role="button"
+      @click="rowClick(r)"
+      @keydown.enter="rowClick(r)"
+      @keydown.space.prevent="rowClick(r)"
+    >
+      <!-- Top line: date + rating chip with confidence inside it. -->
+      <div class="row__lead">
+        <span class="row__date" data-mono>{{ shortDate(r.tradeDate) }}</span>
+        <span
+          class="row__rating"
+          :data-tone="ratingTone(r.rating)"
+          data-mono
         >
-          <td class="date">{{ r.tradeDate }}</td>
-          <td class="symbol" data-mono>{{ r.symbol }}</td>
-          <td>
-            <span class="rating-chip" :data-tone="ratingTone(r.rating)" data-mono>
-              {{ r.rating ?? '—' }}
-            </span>
-          </td>
-          <td class="num" data-mono>{{ fmtConfidence(r.confidence ?? null) }}</td>
-          <td class="num" data-mono :data-tone="alphaTone(r.alpha)">{{ fmtAlpha(r.alpha) }}</td>
-          <td>
-            <span
-              v-if="r.outcome"
-              class="outcome-chip"
-              :data-tone="outcomeTone(r.outcome)"
-              data-mono
-            >{{ r.outcome }}</span>
-            <span v-else class="empty-cell" data-mono>—</span>
-          </td>
-          <td class="num" data-mono>{{ fmtCost(r.costUsd) }}</td>
-          <td class="num" data-mono>{{ fmtDuration(r) }}</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
+          <span v-if="r.rating">{{ r.rating }}</span>
+          <span v-else class="row__rating-pending">{{ r.status === 'running' ? '…' : '—' }}</span>
+          <span
+            v-if="r.confidence !== null && r.confidence !== undefined"
+            class="row__conf"
+            data-mono
+          >{{ fmtConfidence(r.confidence) }}</span>
+        </span>
+      </div>
+
+      <!-- Bottom line: symbol on left, status meta on right. -->
+      <div class="row__meta">
+        <span class="row__symbol" data-mono>{{ r.symbol }}</span>
+        <span class="row__sep" aria-hidden="true">·</span>
+
+        <!-- Reflected runs surface alpha/outcome; otherwise dur+cost. -->
+        <template v-if="r.alpha !== null && r.alpha !== undefined">
+          <span class="row__alpha" :data-tone="alphaTone(r.alpha)" data-mono>
+            {{ fmtAlpha(r.alpha) }}
+          </span>
+          <span v-if="r.outcome" class="row__outcome" data-mono>
+            {{ r.outcome }}
+          </span>
+        </template>
+        <template v-else>
+          <span class="row__cost" data-mono>{{ fmtCost(r.costUsd) }}</span>
+          <span class="row__dur" data-mono>{{ fmtDuration(r) }}</span>
+        </template>
+
+        <span
+          class="row__status"
+          :data-tone="statusTone(r.status)"
+          data-mono
+        >{{ r.status }}</span>
+      </div>
+    </li>
+  </ol>
+
+  <p v-else class="empty" data-mono>no agent runs yet</p>
 </template>
 
 <style scoped>
+/* The aside column is narrow (~330px); a wide tabular layout always
+   truncated half its columns. Each run is rendered as a two-line stacked
+   card instead — readable in the aside, still scannable as a list, and
+   click-anywhere navigates. */
+
 .history {
-  border-radius: 6px;
-  overflow: hidden;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
 }
-.head {
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.7rem 0.2rem;
+  border-bottom: 1px solid var(--ink-line);
+  cursor: pointer;
+  outline: none;
+  transition: background-color 140ms ease, padding-left 140ms ease;
+  position: relative;
+}
+.row::before {
+  content: "";
+  position: absolute;
+  left: -2px; top: 50%;
+  width: 2px; height: 0;
+  background: var(--accent);
+  transition: height 140ms ease, top 140ms ease;
+}
+.row:hover {
+  background: rgba(255, 245, 230, 0.018);
+  padding-left: 0.6rem;
+}
+.row:hover::before { height: 60%; top: 20%; }
+.row:focus-visible {
+  background: rgba(255, 245, 230, 0.018);
+  padding-left: 0.6rem;
+  outline: 1px solid var(--ink-line-strong);
+  outline-offset: -1px;
+}
+.row[data-status="running"] {
+  background: linear-gradient(90deg, rgba(212, 169, 106, 0.04) 0%, transparent 70%);
+}
+
+.row__lead {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  padding: 1rem 1.2rem;
-  border-bottom: 1px solid var(--ink-line);
+  gap: 0.6rem;
 }
-.eyebrow {
-  font-family: var(--font-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--paper-3);
-}
-.count {
-  font-family: var(--font-mono);
+.row__date {
   font-size: 0.7rem;
   color: var(--paper-3);
-  letter-spacing: 0.18em;
+  letter-spacing: 0.04em;
 }
-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); }
-th {
-  font-size: 0.66rem;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  font-weight: 500;
-  color: var(--paper-3);
-  text-align: left;
-  padding: 0.65rem 1.2rem;
-  border-bottom: 1px solid var(--ink-line);
-}
-.th-num { text-align: right; }
-td {
-  padding: 0.7rem 1.2rem;
-  border-bottom: 1px solid var(--ink-line);
-  font-size: 0.85rem;
-}
-tbody tr { cursor: pointer; }
-tbody tr:last-child td { border-bottom: none; }
-tbody tr:hover { background: var(--ink-2); }
-.date { color: var(--paper-2); letter-spacing: 0.04em; }
-.symbol { color: var(--paper-0); letter-spacing: 0.06em; }
-.num { text-align: right; color: var(--paper-1); }
-.num[data-tone="up"]   { color: var(--tape-up); }
-.num[data-tone="down"] { color: var(--tape-down); }
-
-.rating-chip {
-  display: inline-block;
+.row__rating {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
   padding: 0.18rem 0.5rem;
   border-radius: 3px;
   border: 1px solid var(--ink-line);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   letter-spacing: 0.06em;
   text-transform: lowercase;
   color: var(--paper-2);
 }
-.rating-chip[data-tone="up"]      { color: var(--tape-up); border-color: color-mix(in srgb, var(--tape-up) 35%, transparent); }
-.rating-chip[data-tone="down"]    { color: var(--tape-down); border-color: color-mix(in srgb, var(--tape-down) 35%, transparent); }
-.rating-chip[data-tone="neutral"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.row__rating[data-tone="up"]      { color: var(--tape-up); border-color: color-mix(in srgb, var(--tape-up) 35%, transparent); }
+.row__rating[data-tone="down"]    { color: var(--tape-down); border-color: color-mix(in srgb, var(--tape-down) 35%, transparent); }
+.row__rating[data-tone="neutral"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.row__rating-pending { color: var(--paper-3); }
+.row__conf {
+  font-size: 0.66rem;
+  color: currentColor;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
 
-.outcome-chip {
-  display: inline-block;
-  padding: 0.18rem 0.5rem;
-  border-radius: 3px;
-  border: 1px solid var(--ink-line);
+.row__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
   font-size: 0.7rem;
+  color: var(--paper-3);
+  flex-wrap: wrap;
+}
+.row__symbol {
+  color: var(--paper-1);
   letter-spacing: 0.06em;
-  text-transform: lowercase;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.row__sep { color: var(--ink-line-strong); }
+.row__alpha { font-variant-numeric: tabular-nums; }
+.row__alpha[data-tone="up"]      { color: var(--tape-up); }
+.row__alpha[data-tone="down"]    { color: var(--tape-down); }
+.row__alpha[data-tone="neutral"] { color: var(--paper-2); }
+.row__outcome {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.6rem;
   color: var(--paper-3);
 }
-.outcome-chip[data-tone="up"]      { color: var(--tape-up); border-color: color-mix(in srgb, var(--tape-up) 35%, transparent); }
-.outcome-chip[data-tone="down"]    { color: var(--tape-down); border-color: color-mix(in srgb, var(--tape-down) 35%, transparent); }
-.outcome-chip[data-tone="neutral"] { color: var(--paper-3); border-color: var(--ink-line); }
-.empty-cell { color: var(--paper-3); font-size: 0.78rem; }
+.row__cost,
+.row__dur {
+  color: var(--paper-2);
+  font-variant-numeric: tabular-nums;
+}
+.row__status {
+  margin-left: auto;
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--paper-3);
+}
+.row__status[data-tone="up"]      { color: var(--tape-up); }
+.row__status[data-tone="down"]    { color: var(--tape-down); }
+.row__status[data-tone="pending"] { color: var(--accent); }
 
 .empty {
-  padding: 2rem 1.2rem;
-  font-family: var(--font-mono);
+  margin: 0;
+  padding: 2rem 0.4rem;
   font-size: 0.78rem;
   color: var(--paper-3);
   text-align: center;
