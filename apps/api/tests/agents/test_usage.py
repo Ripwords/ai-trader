@@ -122,3 +122,22 @@ async def test_no_message_attr_is_skipped() -> None:
     await acc.on_llm_end(result)
     assert acc.tokens_in == 0
     assert acc.tokens_out == 0
+
+
+@pytest.mark.asyncio
+async def test_chat_model_start_is_a_noop() -> None:
+    """``AsyncCallbackHandler.on_chat_model_start`` raises NotImplementedError
+    by default. Without an override, every chat-model invocation
+    (Anthropic, OpenAI, DeepSeek-via-LiteLLM) logs the error and stalls
+    the analyst loop. Make sure our override doesn't itself raise."""
+    import uuid
+
+    acc = UsageAccumulator()
+    await acc.on_chat_model_start(
+        serialized={"name": "ChatLiteLLM"},
+        messages=[[]],
+        run_id=uuid.uuid4(),
+    )
+    # Must not have moved any counters from the no-op call.
+    assert acc.tokens_in == 0
+    assert acc.tokens_out == 0

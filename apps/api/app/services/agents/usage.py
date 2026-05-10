@@ -22,6 +22,7 @@ LangChain does internally when a provider doesn't surface usage).
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.outputs import LLMResult
@@ -49,6 +50,30 @@ class UsageAccumulator(AsyncCallbackHandler):
     def __init__(self) -> None:
         self.tokens_in: int = 0
         self.tokens_out: int = 0
+
+    async def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[Any]],
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """No-op chat-model-start hook.
+
+        :class:`AsyncCallbackHandler.on_chat_model_start` raises
+        ``NotImplementedError`` by default — LangChain treats it as
+        "subclass must opt-in to chat models". Without this override, every
+        chat-model invocation (Anthropic, OpenAI, DeepSeek-via-LiteLLM)
+        would log ``Error in callback coroutine: NotImplementedError``,
+        stalling the analyst loop. We don't actually care about start
+        events; ``on_llm_end`` fires for both completion- and chat-style
+        models and is where we accumulate usage.
+        """
+        return None
 
     async def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         # Try llm_output["token_usage"] (OpenAI-style) or llm_output["usage"]
