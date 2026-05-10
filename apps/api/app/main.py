@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import asyncpg
 from fastapi import Depends, FastAPI
@@ -107,6 +107,18 @@ def _to_psycopg_dsn(url: str) -> str:
     return f"{scheme.split('+', 1)[0]}://{rest}"
 
 
+# LangGraph's AsyncPostgresSaver doesn't expose a schema kwarg, so we isolate
+# its tables (``checkpoints`` / ``checkpoint_blobs`` / ``checkpoint_writes``)
+# from the rest of ``public`` by routing every connection's ``search_path``
+# through ``langgraph`` first. The ``configure`` callback runs once per new
+# connection acquired by the pool — both the initial ``saver.setup()`` (which
+# CREATEs the tables) and every later ``saver.aput`` / ``saver.aget`` end up
+# resolving unqualified names against ``langgraph`` first, so the tables
+# land — and stay — in that schema.
+async def _configure_checkpointer_connection(conn: Any) -> None:
+    await conn.execute("SET search_path TO langgraph, public")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Open the algo DB pool, the agents memory pool, and start the scheduler.
@@ -143,15 +155,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             print(f"[agents] Failed to create asyncpg pool: {e}")
         try:
             psycopg_dsn = _to_psycopg_dsn(settings.DATABASE_URL)
+            # CREATE the schema on a one-shot connection before the pool
+            # opens so the search_path the pool's ``configure`` callback
+            # sets has somewhere to land.
+            import psycopg
+
+            async with await psycopg.AsyncConnection.connect(
+                psycopg_dsn, autocommit=True
+            ) as bootstrap_conn:
+                await bootstrap_conn.execute("CREATE SCHEMA IF NOT EXISTS langgraph")
+
             checkpointer_pool = AsyncConnectionPool(
                 psycopg_dsn,
                 min_size=1,
                 max_size=4,
                 kwargs={"autocommit": True, "prepare_threshold": 0},
                 open=False,
+                configure=_configure_checkpointer_connection,
             )
             await checkpointer_pool.open(wait=True, timeout=10.0)
             saver = AsyncPostgresSaver(conn=checkpointer_pool)
+            # ``saver.setup()`` is idempotent and creates the checkpoints /
+            # checkpoint_blobs / checkpoint_writes tables. With search_path
+            # pinned to ``langgraph, public``, those CREATEs land in the
+            # ``langgraph`` schema. To verify after startup:
+            # ``\dt langgraph.*`` should list all three tables; ``\dt
+            # public.checkpoint*`` should be empty.
             await saver.setup()
             app.state.checkpointer = saver
         except Exception as e:  # noqa: BLE001
