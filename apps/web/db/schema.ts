@@ -95,56 +95,9 @@ export const algoSignals = pgTable('algo_signals', {
   error: text('error'),
 })
 
-// Research signals emitted by analyst agents and LLM personas (Buffett,
-// Lynch, etc.). Keyed by user + symbol + source so the /research page can
-// show a per-symbol breakdown and synthesize_decisions can aggregate.
-export const researchSignals = pgTable('research_signals', {
-  id: serial('id').primaryKey(),
-  userId: uuid('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  symbol: varchar('symbol', { length: 32 }).notNull(),
-  source: varchar('source', { length: 64 }).notNull(),
-  signal: varchar('signal', { length: 16 }).notNull(),
-  confidence: integer('confidence').notNull(),
-  reasoning: text('reasoning').notNull(),
-  metadata: jsonb('metadata'),
-  ts: timestamp('ts').defaultNow().notNull(),
-})
-
-// Mastra workflow runs — observability for analyze-ticker (and future
-// workflows). `steps` is the per-step timing breakdown inspected from
-// `result.steps` so /research/runs can show why a slow run was slow.
-export const workflowRuns = pgTable('workflow_runs', {
-  id: serial('id').primaryKey(),
-  userId: uuid('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  workflowId: varchar('workflow_id', { length: 64 }).notNull(),
-  inputSummary: jsonb('input_summary').notNull(),
-  status: varchar('status', { length: 16 }).notNull(),
-  totalMs: integer('total_ms').notNull(),
-  steps: jsonb('steps').notNull(),
-  errorMessage: text('error_message'),
-  startedAt: timestamp('started_at').defaultNow().notNull(),
-})
-
-// Cached deep risk-score reports (one per user per symbol per day). The
-// payload is the full RiskReport JSON returned to the page; refresh=1 on the
-// route upserts a fresh row for today.
-export const riskReports = pgTable('risk_reports', {
-  userId: uuid('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  symbol: varchar('symbol', { length: 32 }).notNull(),
-  day: date('day').notNull(),
-  payload: jsonb('payload').notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-}, t => [primaryKey({ columns: [t.userId, t.symbol, t.day] })])
-
 // Per-call LLM token usage + estimated USD cost. One row per chat turn or
-// persona generateObject call. `source` distinguishes 'chat' from
-// 'persona:<id>'. `modelSpec` is the LLM_MODEL spec string at call time.
+// agents pipeline LLM call. `source` distinguishes 'chat' from agents-side
+// labels. `modelSpec` is the LLM_MODEL spec string at call time.
 export const llmUsage = pgTable('llm_usage', {
   id: serial('id').primaryKey(),
   userId: uuid('user_id')

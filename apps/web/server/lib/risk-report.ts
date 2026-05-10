@@ -1,10 +1,10 @@
 // Bundle assembler + deterministic 35/35/30 blend for the deep risk-score
 // report. The route fetches all upstream data here, hands the bundle to the
-// LLM module, blends the final risk_score, and persists the result.
+// LLM module, and blends the final risk_score. There is no row cache —
+// nuxt's `defineCachedFunction` already memoizes the slow moomoo legs;
+// adding a per-day DB row gave little extra and the persona-era table is
+// being dropped.
 
-import { sql } from 'drizzle-orm'
-import { getDb } from '../../db/client'
-import { riskReports } from '../../db/schema'
 import { getApiClient } from '../llm/http'
 import { buildChartSummary, generateRiskReport } from '../llm/risk-report'
 import {
@@ -58,9 +58,7 @@ export function blendRiskScore(valuation: number, health: number, growth: number
 }
 
 interface AssembleArgs {
-  ownerId: string
   symbol: string
-  refresh: boolean
 }
 
 interface StreamArgs extends AssembleArgs {
@@ -72,23 +70,12 @@ interface StreamArgs extends AssembleArgs {
  * fetches resolve so the page can render sections progressively instead of
  * blocking on a 30–60s cold call.
  *
- * Order:
- *   - cache hit  → emit `cached` (full payload), terminal
- *   - cache miss → meta → (price | chart | fundamentals as they resolve) →
- *                  llm → done
+ * Order: meta → (price | chart | fundamentals as they resolve) → llm → done
  *
  * Errors per source emit as non-fatal `error` events so a moomoo outage
  * doesn't kill the report — the LLM still runs on whatever bundle exists.
  */
-export async function* streamRiskReport({ ownerId, symbol, refresh, signal }: StreamArgs): AsyncGenerator<RiskReportEvent> {
-  if (!refresh) {
-    const cached = await loadCached(ownerId, symbol)
-    if (cached) {
-      yield { kind: 'cached', report: { ...cached, cached: true } }
-      return
-    }
-  }
-
+export async function* streamRiskReport({ symbol, signal }: StreamArgs): AsyncGenerator<RiskReportEvent> {
   if (signal?.aborted) return
 
   // Kick off every upstream call up-front so they overlap. Yield events as
@@ -217,39 +204,15 @@ export async function* streamRiskReport({ ownerId, symbol, refresh, signal }: St
   const risk_score = blendRiskScore(llm.valuation.score, llm.health.score, llm.growth.score)
   const generated_at = new Date().toISOString()
 
-  // Persist the assembled report so future loads (today) hit the row cache.
-  const report: RiskReport = {
-    symbol,
-    name: snapshot?.name ?? null,
-    generated_at,
-    cached: false,
-    price,
-    chart: { bars, markers: llm.markers },
-    kpis: llm.kpis,
-    valuation: llm.valuation,
-    health: llm.health,
-    growth: llm.growth,
-    risk_score,
-    quarterly: buildQuarterlyRows(quarterlyRaw),
-    earnings_update: buildEarningsUpdate(earnings, news),
-    catalysts: llm.catalysts,
-    risks: llm.risks,
-    bottom_line: llm.bottom_line,
-    rating: llm.rating,
-  }
-  await saveCached(ownerId, symbol, report)
-
   yield { kind: 'done', risk_score, generated_at }
 }
 
 /**
  * Synchronous one-shot wrapper around `streamRiskReport`. Drains the
- * generator and returns the assembled `RiskReport`. Used by the legacy
- * `/api/research/deep-report` endpoint and any caller that wants a single
- * Promise instead of an SSE stream.
+ * generator and returns the assembled `RiskReport`. Useful for any caller
+ * that wants a single Promise instead of an SSE stream.
  */
-export async function assembleRiskReport({ ownerId, symbol, refresh }: AssembleArgs): Promise<RiskReport> {
-  let cached: RiskReport | null = null
+export async function assembleRiskReport({ symbol }: AssembleArgs): Promise<RiskReport> {
   let meta: { symbol: string, name: string | null } = { symbol, name: null }
   let price: RiskReport['price'] = { last: null, change: null, change_pct: null, currency: 'USD' }
   let bars: PriceBar[] = []
@@ -259,7 +222,7 @@ export async function assembleRiskReport({ ownerId, symbol, refresh }: AssembleA
   let risk_score = 0
   let generated_at = new Date().toISOString()
 
-  for await (const ev of streamRiskReport({ ownerId, symbol, refresh })) {
+  for await (const ev of streamRiskReport({ symbol })) {
     switch (ev.kind) {
       case 'cached':
         return ev.report
@@ -290,7 +253,6 @@ export async function assembleRiskReport({ ownerId, symbol, refresh }: AssembleA
   }
 
   if (!llm) throw new Error('risk-report stream ended without an llm event')
-  if (cached) return cached
   return {
     symbol: meta.symbol,
     name: meta.name,
@@ -356,27 +318,3 @@ function buildEarningsUpdate(
   return { headline, date: earnings.last_earnings_date, body }
 }
 
-async function loadCached(ownerId: string, symbol: string): Promise<RiskReport | null> {
-  const db = getDb()
-  const today = new Date().toISOString().slice(0, 10)
-  const rows = await db
-    .select({ payload: riskReports.payload })
-    .from(riskReports)
-    .where(sql`${riskReports.userId} = ${ownerId} and ${riskReports.symbol} = ${symbol} and ${riskReports.day} = ${today}`)
-    .limit(1)
-  const row = rows[0]
-  if (!row) return null
-  return row.payload as unknown as RiskReport
-}
-
-async function saveCached(ownerId: string, symbol: string, report: RiskReport): Promise<void> {
-  const db = getDb()
-  const today = new Date().toISOString().slice(0, 10)
-  await db
-    .insert(riskReports)
-    .values({ userId: ownerId, symbol, day: today, payload: report })
-    .onConflictDoUpdate({
-      target: [riskReports.userId, riskReports.symbol, riskReports.day],
-      set: { payload: report, createdAt: new Date() },
-    })
-}

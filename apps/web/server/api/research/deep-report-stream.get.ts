@@ -1,8 +1,7 @@
-// SSE stream for the deep risk report. Mirrors /api/research/run — the page
-// connects via useEventSource and renders sections progressively as price,
-// chart, fundamentals and llm events land.
+// SSE stream for the deep risk report. The page connects via useEventSource
+// and renders sections progressively as price, chart, fundamentals and llm
+// events land.
 
-import { getOwnerId } from '../../db/repo'
 import { streamRiskReport } from '../../lib/risk-report'
 
 export default defineEventHandler(async (event) => {
@@ -11,8 +10,6 @@ export default defineEventHandler(async (event) => {
   if (!symbol) {
     throw createError({ statusCode: 400, statusMessage: 'symbol required' })
   }
-  const refresh = q.refresh === '1' || q.refresh === 'true'
-  const ownerId = await getOwnerId()
 
   const stream = createEventStream(event)
   const ac = new AbortController()
@@ -30,7 +27,7 @@ export default defineEventHandler(async (event) => {
 
   ;(async () => {
     try {
-      for await (const ev of streamRiskReport({ ownerId, symbol, refresh, signal: ac.signal })) {
+      for await (const ev of streamRiskReport({ symbol, signal: ac.signal })) {
         if (ac.signal.aborted) break
         await stream.push({ event: ev.kind, data: JSON.stringify(ev) })
       }
