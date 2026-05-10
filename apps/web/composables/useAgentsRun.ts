@@ -23,6 +23,11 @@ interface VerdictState {
   rationale: string
 }
 
+interface StartOpts {
+  max_debate_rounds?: number
+  deep_thinking?: boolean
+}
+
 export function useAgentsRun() {
   const events = shallowRef<AgentEvent[]>([])
   const status = ref<'idle' | 'running' | 'complete' | 'failed' | 'cancelled'>('idle')
@@ -32,21 +37,14 @@ export function useAgentsRun() {
   const error = ref<string | null>(null)
   let controller: AbortController | null = null
 
-  async function start(symbol: string, opts: { max_debate_rounds?: number; deep_thinking?: boolean } = {}) {
-    if (status.value === 'running') return
-    events.value = []
-    status.value = 'running'
-    currentNode.value = null
-    verdict.value = null
-    error.value = null
-    controller = new AbortController()
-
-    const res = await fetch('/api/research/agents-run', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ symbol, ...opts }),
-    })
+  /**
+   * Drain an NDJSON stream into the reactive state. Shared by ``start`` and
+   * ``resume``: the only difference between them is the request shape, so
+   * the streaming loop is factored out here to keep the two entry points
+   * thin and behaviorally identical (run-start handling, error/run-end
+   * status transitions, etc).
+   */
+  async function consumeStream(res: Response, abortCtrl: AbortController) {
     if (!res.body) {
       status.value = 'failed'
       error.value = 'no body'
@@ -78,7 +76,7 @@ export function useAgentsRun() {
         }
       }
     } catch (e: unknown) {
-      if (controller.signal.aborted) status.value = 'cancelled'
+      if (abortCtrl.signal.aborted) status.value = 'cancelled'
       else {
         status.value = 'failed'
         error.value = (e as Error)?.message ?? 'stream error'
@@ -86,9 +84,53 @@ export function useAgentsRun() {
     }
   }
 
+  async function start(symbol: string, opts: StartOpts = {}) {
+    if (status.value === 'running') return
+    events.value = []
+    status.value = 'running'
+    currentNode.value = null
+    verdict.value = null
+    error.value = null
+    controller = new AbortController()
+
+    const res = await fetch('/api/research/agents-run', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ symbol, ...opts }),
+    })
+    await consumeStream(res, controller)
+  }
+
+  /**
+   * Resume a previously-failed run. Reuses the same ``run_id`` upstream so
+   * all replayed events tee back into the original ``agent_runs`` row. Note
+   * we don't reset ``runId`` here — Resume keeps the existing id; we just
+   * clear the visible event list so the timeline starts fresh from the
+   * checkpoint.
+   */
+  async function resume(originalRunId: string) {
+    if (status.value === 'running') return
+    events.value = []
+    status.value = 'running'
+    currentNode.value = null
+    verdict.value = null
+    error.value = null
+    runId.value = originalRunId
+    controller = new AbortController()
+
+    const res = await fetch('/api/research/agents-resume', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run_id: originalRunId }),
+    })
+    await consumeStream(res, controller)
+  }
+
   function cancel() {
     controller?.abort()
   }
 
-  return { events, status, currentNode, verdict, runId, error, start, cancel }
+  return { events, status, currentNode, verdict, runId, error, start, resume, cancel }
 }

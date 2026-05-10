@@ -4,6 +4,8 @@ from typing import AsyncIterator
 
 import asyncpg
 from fastapi import Depends, FastAPI
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg_pool import AsyncConnectionPool
 
 from app.deps import _build_adapter, require_internal_bearer
 from app.routers import (
@@ -93,6 +95,20 @@ def _make_opend_bridges():
     return get_klines, get_position, get_account_summary, place_paper_order
 
 
+def _to_psycopg_dsn(url: str) -> str:
+    """Translate a SQLAlchemy/asyncpg DSN to a libpq-compatible one for psycopg.
+
+    Drizzle and asyncpg accept ``postgresql+asyncpg://`` and similar driver
+    suffixes; libpq (used by psycopg, which AsyncPostgresSaver wraps) only
+    speaks ``postgresql://``. This is a one-line normalizer rather than a full
+    URL parser because the only suffix we ever produce is ``+<driver>``.
+    """
+    if "://" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    return f"{scheme.split('+', 1)[0]}://{rest}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Open the algo DB pool, the agents memory pool, and start the scheduler.
@@ -101,10 +117,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     recall can fail independently of algo persistence; both share
     ``settings.DATABASE_URL``. ``app.state.pg_pool`` is what
     :func:`app.routers.agents._recall_memory` looks up.
+
+    Additionally, when ``DATABASE_URL`` is set, we open a small psycopg pool
+    for :class:`AsyncPostgresSaver` (LangGraph's Postgres checkpointer) and
+    expose it on ``app.state.checkpointer``. ``saver.setup()`` is idempotent
+    — it creates the ``checkpoints`` / ``checkpoint_blobs`` / ``checkpoint_writes``
+    tables on first run and is a no-op afterwards. The saver currently writes
+    to the ``public`` schema (AsyncPostgresSaver doesn't expose a
+    ``schema`` kwarg in 2.0.x); a follow-up can isolate via ``search_path``.
+    Failures here are logged and ``app.state.checkpointer`` stays ``None`` —
+    the router degrades to "no checkpoint, resume always restarts" rather
+    than blocking startup.
     """
     settings = get_settings()
     scheduler: Scheduler | None = None
     pg_pool: asyncpg.Pool | None = None
+    checkpointer_pool: AsyncConnectionPool | None = None
+    app.state.checkpointer = None
     if settings.DATABASE_URL:
         await algo_repo.init_pool(settings.DATABASE_URL)
         try:
@@ -114,6 +143,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.pg_pool = pg_pool
         except Exception as e:  # noqa: BLE001
             print(f"[agents] Failed to create asyncpg pool: {e}")
+        try:
+            psycopg_dsn = _to_psycopg_dsn(settings.DATABASE_URL)
+            checkpointer_pool = AsyncConnectionPool(
+                psycopg_dsn,
+                min_size=1,
+                max_size=4,
+                kwargs={"autocommit": True, "prepare_threshold": 0},
+                open=False,
+            )
+            await checkpointer_pool.open(wait=True, timeout=10.0)
+            saver = AsyncPostgresSaver(conn=checkpointer_pool)
+            await saver.setup()
+            app.state.checkpointer = saver
+        except Exception as e:  # noqa: BLE001
+            print(f"[agents] Failed to init checkpointer: {e}")
+            if checkpointer_pool is not None:
+                await checkpointer_pool.close()
+                checkpointer_pool = None
         get_klines, get_position, get_account_summary, place = _make_opend_bridges()
         scheduler = Scheduler(
             get_klines=get_klines,
@@ -128,6 +175,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if scheduler is not None:
             await scheduler.stop()
+        if checkpointer_pool is not None:
+            await checkpointer_pool.close()
         if pg_pool is not None:
             await pg_pool.close()
         await algo_repo.close_pool()

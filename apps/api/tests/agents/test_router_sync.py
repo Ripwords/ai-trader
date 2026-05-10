@@ -41,10 +41,12 @@ async def test_streams_canned_events(monkeypatch: pytest.MonkeyPatch) -> None:
         max_debate_rounds: int,
         deep_thinking: bool,
         memory: list[dict] | None = None,
+        run_id: str | None = None,
     ):
-        # ``memory`` is accepted for signature compatibility with the real
-        # ``run_graph``; the canned-event test doesn't exercise it.
-        del memory
+        # ``memory`` and ``run_id`` are accepted for signature compatibility
+        # with the real ``run_graph``; the canned-event test doesn't exercise
+        # them.
+        del memory, run_id
         yield {
             "metadata": {"langgraph_node": "trader", "node_finished": True},
             "values": {
@@ -114,6 +116,66 @@ async def test_emits_error_event_on_run_failure(monkeypatch: pytest.MonkeyPatch)
 
     assert any(e["type"] == "error" and "graph blew up" in e["message"] for e in lines)
     assert lines[-1]["type"] == "run-end"
+
+
+@pytest.mark.asyncio
+async def test_cancel_unknown_run_returns_ok_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DELETE /agents/run/{id} returns ``cancelled=False`` for unknown ids.
+
+    The cancellation registry is process-local (an in-memory dict on the
+    router), so an unknown run id is the *normal* state for a fresh ASGI
+    instance — no error, just a falsy ``cancelled`` flag.
+    """
+    monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
+    from app.main import create_app
+    from app.settings import get_settings
+
+    get_settings.cache_clear()
+
+    headers = {"authorization": "Bearer test-bearer"}
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        r = await c.delete(
+            "/agents/run/00000000-0000-0000-0000-000000000999", headers=headers
+        )
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "cancelled": False}
+
+
+@pytest.mark.asyncio
+async def test_resume_unauthorized() -> None:
+    """POST /agents/run/{id}/resume requires the internal bearer."""
+    from app.main import create_app
+
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        r = await c.post("/agents/run/00000000-0000-0000-0000-000000000001/resume")
+        assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_resume_returns_503_when_db_pool_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without an asyncpg pool, resume can't load the original row -> 503.
+
+    Lifespan only attaches ``app.state.pg_pool`` when ``DATABASE_URL`` is set;
+    in unit tests it isn't, so the resume handler short-circuits.
+    """
+    monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
+    from app.main import create_app
+    from app.settings import get_settings
+
+    get_settings.cache_clear()
+
+    headers = {"authorization": "Bearer test-bearer"}
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        r = await c.post(
+            "/agents/run/00000000-0000-0000-0000-000000000001/resume",
+            headers=headers,
+        )
+        assert r.status_code == 503
 
 
 @pytest.mark.smoke

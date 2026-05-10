@@ -1,0 +1,3 @@
+{"type":"node-start","node":"trader"}
+{"type":"decision","rating":"buy","confidence":68,"rationale":"resumed from checkpoint; balance sheet healthy, bull thesis intact"}
+{"type":"run-end","run_id":"aapl-resume-1","tokens_in":3000,"tokens_out":700,"cost_usd":0.08}

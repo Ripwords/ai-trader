@@ -39,6 +39,24 @@ Adaptations made here:
   expects. Stream-tool-call/-result pairs come from inspecting message deltas;
   debate rounds and decisions come from observing changes to
   ``investment_debate_state`` and ``final_trade_decision``.
+
+Checkpointing (Task 8):
+
+- :class:`TradingAgentsGraph.graph` compiles the workflow with **no**
+  checkpointer (``setup_graph`` calls ``workflow.compile()`` with no args).
+  We can't pass one through the constructor.
+- The ``CompiledStateGraph`` returned exposes a ``builder`` attribute holding
+  the original :class:`StateGraph`. To wire a checkpointer we therefore
+  *recompile*: read ``ta.graph.builder``, call
+  ``builder.compile(checkpointer=saver)``, and reassign the result onto
+  ``ta.graph`` (overriding the ``cached_property``).
+- The saver itself is shared across runs — it is owned by the FastAPI
+  lifespan and lives on ``app.state.checkpointer``. ``run_graph`` only needs
+  to thread the per-run ``thread_id`` (== our ``run_id``) into the LangGraph
+  config so checkpoints associate with the right conversation.
+- ``app.state.checkpointer`` is ``None`` when ``DATABASE_URL`` isn't set
+  (unit tests, dev without DB) — :func:`attach_checkpointer` is a no-op in
+  that case so existing tests stay green.
 """
 
 from __future__ import annotations
@@ -48,6 +66,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from tradingagents.agents.utils import agent_utils as _agent_utils
 from tradingagents.config import TradingAgentsConfig
 from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -88,6 +107,7 @@ def build_graph(
     max_debate_rounds: int = 1,
     deep_thinking: bool = True,
     results_dir: Path | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> TradingAgentsGraph:
     """Construct a TradingAgentsGraph wired to our toolkit and config.
 
@@ -96,6 +116,11 @@ def build_graph(
     ``use_deep_thinking_for_analysts`` flag the plan referenced is not part of
     the public config). ``deep_thinking=True`` -> ``"medium"``; False ->
     ``"minimal"`` (faster, cheaper).
+
+    ``checkpointer`` (optional) — recompile the underlying StateGraph with a
+    checkpoint saver attached. See :func:`attach_checkpointer`. Pass ``None``
+    to keep TradingAgents' default (no checkpointing) — that's the unit-test
+    path and the only path before Task 8 wiring lands at startup.
     """
     raw = build_tradingagents_config()
     cfg = TradingAgentsConfig(
@@ -110,7 +135,32 @@ def build_graph(
     )
     toolkit = build_toolkit(opend_client)
     _install_toolkit(toolkit)
-    return TradingAgentsGraph(config=cfg, debug=False)
+    ta = TradingAgentsGraph(config=cfg, debug=False)
+    if checkpointer is not None:
+        attach_checkpointer(ta, checkpointer)
+    return ta
+
+
+def attach_checkpointer(
+    ta: TradingAgentsGraph, saver: BaseCheckpointSaver
+) -> None:
+    """Recompile ``ta.graph`` with ``saver`` wired in.
+
+    ``TradingAgentsGraph.graph`` is a :class:`functools.cached_property` that
+    computes a :class:`langgraph.graph.state.CompiledStateGraph`. The compiled
+    object exposes its source :class:`langgraph.graph.state.StateGraph` via
+    the ``builder`` attribute. We re-call ``builder.compile(checkpointer=...)``
+    to get a fresh compiled graph bound to our saver, then assign it to
+    ``ta.graph`` (overriding the cached_property descriptor by writing the
+    instance dict, which Python prefers over the descriptor on read).
+
+    The result: every ``ta.graph.astream(state, config=...)`` call now writes
+    checkpoints to the saver, and ``astream(None, config=...)`` resumes from
+    the latest checkpoint for the matching ``thread_id``.
+    """
+    compiled = ta.graph  # triggers initial compile via cached_property
+    builder = compiled.builder
+    ta.graph = builder.compile(checkpointer=saver)  # type: ignore[misc]
 
 
 def _normalize_chunk(node: str | None, values: dict[str, Any], finished: bool) -> dict:
@@ -280,6 +330,7 @@ async def run_graph(
     max_debate_rounds: int,
     deep_thinking: bool,
     memory: list[dict] | None = None,
+    run_id: str | None = None,
 ) -> AsyncIterator[dict]:
     """Run the compiled graph and yield normalized chunks.
 
@@ -293,6 +344,11 @@ async def run_graph(
     :class:`FinancialSituationMemory` so the trader's existing prompt-time
     BM25 lookup picks them up. ``None`` / ``[]`` is a no-op — runs without
     memory are unchanged.
+
+    ``run_id`` (optional) — when set, becomes the LangGraph ``thread_id`` so
+    checkpoints written by an attached saver are scoped to this run. Resume
+    from a previous checkpoint requires the *same* ``thread_id`` on the same
+    saver.
     """
     del max_debate_rounds, deep_thinking  # baked in at build_graph time
 
@@ -300,6 +356,14 @@ async def run_graph(
 
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
     args = graph.propagator.get_graph_args()
+    if run_id is not None:
+        # Merge our thread_id into the propagator's config (which already
+        # carries recursion_limit, etc) without losing the propagator's
+        # fields.
+        existing_config = args.get("config") or {}
+        configurable = dict(existing_config.get("configurable") or {})
+        configurable["thread_id"] = run_id
+        args = {**args, "config": {**existing_config, "configurable": configurable}}
 
     prev: dict = {}
     async for chunk in graph.graph.astream(init_state, **args):

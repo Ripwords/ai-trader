@@ -16,18 +16,41 @@ interface AgentRunRow {
   costUsd: string | null
   startedAt: string
   finishedAt: string | null
+  error?: string | null
 }
 
 const route = useRoute()
 const symbol = computed(() => decodeURIComponent(String(route.params.symbol)).toUpperCase())
+// ``?run=<id>`` deep-links the page to a specific previous run so we can
+// surface a Resume button when that run failed mid-flight (Task 8).
+const queryRunId = computed(() => {
+  const raw = route.query.run
+  return typeof raw === 'string' && raw.length > 0 ? raw : null
+})
 
 useHead({ title: () => `research · ${symbol.value}` })
 
-const { events, status, verdict, runId, error, start, cancel } = useAgentsRun()
+const { events, status, verdict, runId, error, start, resume, cancel } = useAgentsRun()
 
 const { data: runHistory, refresh: refreshHistory } = await useFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs', {
   query: { symbol },
   default: () => ({ rows: [] }),
+})
+
+// Separate fetch for the deep-linked run; ``useFetch`` keys cache by URL so
+// scoping with ``?run_id=`` keeps it independent of the symbol-level history.
+const { data: deepRun } = await useFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs', {
+  query: { run_id: queryRunId },
+  default: () => ({ rows: [] }),
+  // Don't fire when the query param is absent — the empty-string id would
+  // round-trip back as a no-op but adds a wasted request.
+  immediate: queryRunId.value !== null,
+})
+
+const targetedRun = computed(() => deepRun.value?.rows?.[0] ?? null)
+const canResume = computed(() => {
+  const r = targetedRun.value
+  return r !== null && r.status === 'failed' && status.value !== 'running'
 })
 
 const historyRows = computed(() =>
@@ -43,6 +66,14 @@ const costSamples = computed(() =>
 
 function onStart(opts: { max_debate_rounds: number; deep_thinking: boolean }) {
   void start(symbol.value, opts).then(() => {
+    void refreshHistory()
+  })
+}
+
+function onResume() {
+  const id = targetedRun.value?.id
+  if (!id) return
+  void resume(id).then(() => {
     void refreshHistory()
   })
 }
@@ -74,8 +105,31 @@ function onStart(opts: { max_debate_rounds: number; deep_thinking: boolean }) {
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
       <div class="max-w-5xl mx-auto px-7 py-8 space-y-6">
+        <div
+          v-if="canResume"
+          class="surface-1 px-5 py-4 rounded-md flex items-center justify-between gap-4"
+          data-testid="agent-resume-banner"
+        >
+          <div class="flex flex-col gap-1">
+            <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--tape-down)]">
+              previous run failed
+            </span>
+            <span class="font-mono text-[11px] text-[var(--paper-3)]">
+              {{ targetedRun?.error ?? 'unknown error' }}
+            </span>
+          </div>
+          <button
+            type="button"
+            class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-1.5 border border-[var(--ink-line)] rounded text-[var(--paper-1)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors"
+            data-testid="agent-resume-button"
+            @click="onResume"
+          >
+            resume run
+          </button>
+        </div>
+
         <RunCostEstimate
-          v-if="status === 'idle'"
+          v-if="status === 'idle' && !canResume"
           :symbol="symbol"
           :run-history="costSamples"
           @start="onStart"

@@ -1,0 +1,5 @@
+{"type":"run-start","run_id":"aapl-resume-1","symbol":"AAPL","config":{"max_debate_rounds":1,"deep_thinking":true}}
+{"type":"node-start","node":"fundamentals_analyst"}
+{"type":"tool-call","node":"fundamentals_analyst","tool":"get_balance_sheet","args":{"ticker":"AAPL"}}
+{"type":"error","message":"upstream LLM timed out"}
+{"type":"run-end","run_id":"aapl-resume-1","tokens_in":2000,"tokens_out":400,"cost_usd":0.04}
