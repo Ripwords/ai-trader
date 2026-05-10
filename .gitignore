@@ -19,3 +19,6 @@ nvda_kline.png
 
 # playwright MCP session artifacts
 .playwright-mcp/
+
+# build artifacts from scripts/build-web-image.sh
+dist/
