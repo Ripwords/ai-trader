@@ -161,11 +161,19 @@ watch(runId, (id) => {
 // on whatever the previous run rendered.
 watch(
   queryRunId,
-  (id, prev) => {
+  async (id, prev) => {
     if (!id) return
     if (id === prev) return
     if (id === runId.value && events.value.length > 0) return
-    void loadFromHistory(id)
+    await loadFromHistory(id)
+    // loadFromHistory resets to ``idle`` (composable-side) when the run
+    // doesn't exist anymore — typically a stale URL from a prior DB
+    // state. Strip the ``?run=`` so subsequent refreshes don't keep
+    // hitting the same dead lookup and surfacing 404s in the console.
+    if (status.value === 'idle' && runId.value === null) {
+      const { run: _drop, ...rest } = route.query
+      void router.replace({ query: rest })
+    }
   },
   { immediate: true },
 )
