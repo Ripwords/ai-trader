@@ -85,63 +85,84 @@ class AgentToolkit:
     get_global_news: Any
 
 
+def _normalize_moomoo_symbol(symbol: str) -> str:
+    """Coerce a bare ticker (``SOFI``) into moomoo's ``US.SOFI`` format.
+
+    moomoo's quote API rejects bare tickers with::
+
+        ERROR. format of code SOFI is wrong. (US.AAPL, HK.00700, SZ.000001)
+
+    Analysts often emit the bare form because the prompt context (a US
+    stock symbol) gives them no reason to add a market prefix. If a prefix
+    is already present (any ``.`` in the string), pass through untouched
+    so non-US tickers reach moomoo intact.
+    """
+    return symbol if "." in symbol else f"US.{symbol}"
+
+
 def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
     """Build the 9-tool toolkit. ``opend_client`` may be None in tests; the
-    market-data tools then short-circuit with a friendly placeholder."""
+    market-data tools then short-circuit with a friendly placeholder.
+
+    All tool parameters use ``symbol`` (matching TradingAgents' bundled tool
+    signatures) so the analyst prompts can call our shim without param-name
+    drift; the LLM was burning ~3 tool calls per run guessing ``ticker`` vs
+    ``symbol`` before this rename.
+    """
 
     @tool
-    async def get_balance_sheet(ticker: str) -> str:
-        """Latest balance sheet for the given ticker."""
-        data = await _internal_get("/internal/yahoo/balance-sheet", {"symbol": ticker})
+    async def get_balance_sheet(symbol: str) -> str:
+        """Latest balance sheet for the given symbol."""
+        data = await _internal_get("/internal/yahoo/balance-sheet", {"symbol": symbol})
         bs = data.get("balance_sheet")
         if not bs:
-            return f"No balance sheet available for {ticker}."
-        return f"Balance Sheet for {ticker}:\n```json\n{json.dumps(bs, indent=2)}\n```"
+            return f"No balance sheet available for {symbol}."
+        return f"Balance Sheet for {symbol}:\n```json\n{json.dumps(bs, indent=2)}\n```"
 
     @tool
-    async def get_cashflow(ticker: str) -> str:
-        """Latest cash-flow statement for the given ticker."""
-        data = await _internal_get("/internal/yahoo/cashflow", {"symbol": ticker})
+    async def get_cashflow(symbol: str) -> str:
+        """Latest cash-flow statement for the given symbol."""
+        data = await _internal_get("/internal/yahoo/cashflow", {"symbol": symbol})
         cf = data.get("cashflow")
         if not cf:
-            return f"No cashflow available for {ticker}."
-        return f"Cashflow for {ticker}:\n```json\n{json.dumps(cf, indent=2)}\n```"
+            return f"No cashflow available for {symbol}."
+        return f"Cashflow for {symbol}:\n```json\n{json.dumps(cf, indent=2)}\n```"
 
     @tool
-    async def get_income_statement(ticker: str) -> str:
-        """Latest income statement for the given ticker."""
-        data = await _internal_get("/internal/yahoo/income-statement", {"symbol": ticker})
+    async def get_income_statement(symbol: str) -> str:
+        """Latest income statement for the given symbol."""
+        data = await _internal_get("/internal/yahoo/income-statement", {"symbol": symbol})
         is_ = data.get("income_statement")
         if not is_:
-            return f"No income statement available for {ticker}."
-        return f"Income Statement for {ticker}:\n```json\n{json.dumps(is_, indent=2)}\n```"
+            return f"No income statement available for {symbol}."
+        return f"Income Statement for {symbol}:\n```json\n{json.dumps(is_, indent=2)}\n```"
 
     @tool
-    async def get_fundamentals(ticker: str) -> str:
+    async def get_fundamentals(symbol: str) -> str:
         """Comprehensive fundamentals bundle (PE, margins, growth, etc.)."""
-        data = await _internal_get("/internal/yahoo/fundamentals", {"symbol": ticker})
-        return f"Fundamentals for {ticker}:\n```json\n{json.dumps(data, indent=2)}\n```"
+        data = await _internal_get("/internal/yahoo/fundamentals", {"symbol": symbol})
+        return f"Fundamentals for {symbol}:\n```json\n{json.dumps(data, indent=2)}\n```"
 
     @tool
-    async def get_insider_transactions(ticker: str) -> str:
-        """Recent insider trades for the given ticker."""
+    async def get_insider_transactions(symbol: str) -> str:
+        """Recent insider trades for the given symbol."""
         data = await _internal_get(
-            "/internal/yahoo/insider-transactions", {"symbol": ticker}
+            "/internal/yahoo/insider-transactions", {"symbol": symbol}
         )
         rows = data.get("transactions") or []
         if not rows:
-            return f"No insider transactions in the last 90 days for {ticker}."
-        return f"Insider Transactions for {ticker}:\n```json\n{json.dumps(rows, indent=2)}\n```"
+            return f"No insider transactions in the last 90 days for {symbol}."
+        return f"Insider Transactions for {symbol}:\n```json\n{json.dumps(rows, indent=2)}\n```"
 
     @tool
-    async def get_news(ticker: str, date_range: str = "7d") -> str:
-        """Recent news articles mentioning the ticker."""
+    async def get_news(symbol: str, date_range: str = "7d") -> str:
+        """Recent news articles mentioning the symbol."""
         data = await _internal_get(
-            "/internal/news/symbol", {"symbol": ticker, "max_results": 10}
+            "/internal/news/symbol", {"symbol": symbol, "max_results": 10}
         )
         if data.get("error") and not data.get("results"):
             return "News search not configured. Skipping news analysis."
-        return f"News for {ticker}:\n```json\n{json.dumps(data.get('results', []), indent=2)}\n```"
+        return f"News for {symbol}:\n```json\n{json.dumps(data.get('results', []), indent=2)}\n```"
 
     @tool
     async def get_global_news(date_range: str = "7d", topic: str = "macro") -> str:
@@ -155,11 +176,12 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         return f"Global News:\n```json\n{json.dumps(data.get('results', []), indent=2)}\n```"
 
     @tool
-    async def get_stock_data(ticker: str, start_date: str, end_date: str) -> str:
-        """Daily OHLCV bars for the given ticker in the date range."""
+    async def get_stock_data(symbol: str, start_date: str, end_date: str) -> str:
+        """Daily OHLCV bars for the given symbol in the date range."""
         if opend_client is None:
-            return f"Market data unavailable for {ticker}."
-        bars = await _kline_bars(opend_client, ticker, ktype="K_DAY", num=252)
+            return f"Market data unavailable for {symbol}."
+        moomoo_code = _normalize_moomoo_symbol(symbol)
+        bars = await _kline_bars(opend_client, moomoo_code, ktype="K_DAY", num=252)
         # ``time_key`` is a datetime object on the production Bar model; the
         # JSON encoder doesn't know how to serialise it, so coerce to ISO
         # strings before dumping.
@@ -177,16 +199,17 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
             for b in bars
         ]
         return (
-            f"Daily bars for {ticker} ({start_date}..{end_date}):\n"
+            f"Daily bars for {symbol} ({start_date}..{end_date}):\n"
             f"```json\n{json.dumps(bars[-60:], indent=2, default=str)}\n```"
         )
 
     @tool
-    async def get_indicators(ticker: str, indicator: str, date: str) -> str:
-        """Technical indicator value (rsi/macd/etc.) for the given ticker on the given date."""
+    async def get_indicators(symbol: str, indicator: str, date: str) -> str:
+        """Technical indicator value (rsi/macd/etc.) for the given symbol on the given date."""
         if opend_client is None:
-            return f"Market data unavailable for {ticker}."
-        bars = await _kline_bars(opend_client, ticker, ktype="K_DAY", num=252)
+            return f"Market data unavailable for {symbol}."
+        moomoo_code = _normalize_moomoo_symbol(symbol)
+        bars = await _kline_bars(opend_client, moomoo_code, ktype="K_DAY", num=252)
         df = pd.DataFrame(bars).rename(
             columns={
                 "open": "open",
@@ -201,7 +224,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
             value = float(sdf[indicator].iloc[-1])
         except KeyError:
             return f"Indicator {indicator!r} not supported."
-        return f"{indicator.upper()} for {ticker} on {date}: {value:.4f}"
+        return f"{indicator.upper()} for {symbol} on {date}: {value:.4f}"
 
     return AgentToolkit(
         get_stock_data=get_stock_data,
