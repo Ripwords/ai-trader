@@ -225,105 +225,52 @@ export function makeTools(client: ApiClient) {
       },
     }),
 
-    // --- Research (multi-analyst + LLM personas) --------------------------
+    // --- Research (TradingAgents multi-agent debate) ---------------------
 
-    'research_ticker': tool({
+    'agents_debate': tool({
       description:
-        'Run a multi-perspective research pass on a symbol: deterministic analysts (fundamentals/valuation/technicals/sentiment) plus selected LLM investor personas (Buffett, Munger, Burry, Druckenmiller, Wood). Returns a list of signals each with confidence + reasoning. Read-only.',
+        'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker.',
       inputSchema: z.object({
-        symbol: z.string().describe('moomoo-style symbol like US.NVDA'),
-        personas: z
-          .array(z.enum(['buffett', 'munger', 'burry', 'druckenmiller', 'wood']))
-          .default(['buffett', 'burry', 'wood'])
-          .describe('which LLM personas to include'),
-        analysts: z
-          .array(z.enum(['fundamentals', 'valuation', 'technicals', 'sentiment']))
-          .default(['fundamentals', 'valuation', 'technicals', 'sentiment']),
+        symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
+        max_debate_rounds: z.number().int().min(1).max(3).default(1),
+        deep_thinking: z.boolean().default(true),
       }),
-      execute: async ({ symbol, personas, analysts }) => {
-        const { getResearchApi } = await import('./http')
-        const { findPersona, runPersona } = await import('./personas')
-        const yahoo = await import('../lib/yahoo')
-        const { getHoldingForSymbol } = await import('../lib/holdings')
-        const api = getResearchApi()
-
-        const [metrics, history, insider, news, holdings, earnings] = await Promise.all([
-          yahoo.getFinancialMetrics(symbol),
-          yahoo.getHistorical(symbol, 5),
-          yahoo.getInsiderTrades(symbol, 200),
-          yahoo.getCompanyNews(symbol, 50),
-          getHoldingForSymbol(symbol),
-          yahoo.getEarningsInfo(symbol),
-        ])
-        const bundle = { metrics, history }
-
-        const analystSignals = await Promise.all(
-          analysts.map((name) => {
-            if (name === 'fundamentals' || name === 'valuation') {
-              return api.runAnalyst(name, { symbol, metrics })
-            }
-            if (name === 'sentiment') {
-              return api.runAnalyst(name, { symbol, insider, news })
-            }
-            return api.runAnalyst(name, { symbol })
-          }),
-        )
-
-        const personaSignals = await Promise.all(
-          personas.map((id) => {
-            const p = findPersona(id)
-            if (!p) throw new Error(`unknown persona: ${id}`)
-            return runPersona(p, symbol, bundle, holdings, earnings)
-          }),
-        )
-
-        return { symbol, signals: [...analystSignals, ...personaSignals] }
-      },
-    }),
-
-    'synthesize_decisions': tool({
-      description:
-        'Given a set of research signals across symbols, run the risk manager + portfolio manager pipeline to produce final trade decisions (buy/sell/short/cover/hold + quantity + confidence). Read-only — does not place orders.',
-      inputSchema: z.object({
-        symbols: z.array(z.string()).min(1),
-        signals: z
-          .array(
-            z.object({
-              source: z.string(),
-              symbol: z.string(),
-              signal: z.enum(['bullish', 'bearish', 'neutral']),
-              confidence: z.number().int().min(0).max(100),
-              reasoning: z.string(),
-            }),
-          )
-          .optional()
-          .describe('omit to fetch fresh signals from /research/* — slower but always current'),
-      }),
-      execute: async ({ symbols, signals }) => {
-        const { getResearchApi } = await import('./http')
-        const { resolvePortfolio } = await import('../lib/portfolio-snapshot')
-        const portfolio = await resolvePortfolio()
-        return getResearchApi().synthesizeDecisions({ symbols, signals, portfolio })
-      },
-    }),
-
-    'analyze_ticker': tool({
-      description:
-        'COMPREHENSIVE ticker analysis via the Mastra workflow: fetches fundamentals, runs all 4 deterministic analysts AND all 5 LLM investor personas (Buffett/Munger/Burry/Druckenmiller/Wood), persists every signal, then synthesizes a final risk-managed decision. Returns a markdown report ready to show the user. Slower than research_ticker — use when the user asks for a deep dive, a full analysis, or "analyze X comprehensively".',
-      inputSchema: z.object({
-        symbol: z.string().describe('moomoo-style symbol like US.NVDA'),
-      }),
-      execute: async ({ symbol }) => {
-        const { runAnalyzeTickerTraced } = await import('../lib/workflow-trace')
-        const result = await runAnalyzeTickerTraced({
-          symbol,
-          analysts: ['fundamentals', 'valuation', 'technicals', 'sentiment'],
-          personas: ['buffett', 'munger', 'burry', 'druckenmiller', 'wood'],
+      execute: async (args) => {
+        const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+        const res = await fetch(`${baseUrl}/api/research/agents-run`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(args),
         })
-        if (result.status !== 'success') {
-          throw new Error(`analyze_ticker workflow status=${result.status}`)
+        if (!res.ok || !res.body) {
+          return { error: `agents service failed: ${res.status}` }
         }
-        return result.result
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buf = ''
+        let verdict: { rating?: string; confidence?: number; rationale?: string } | null = null
+        // Stream NDJSON events; the run-end / decision events arrive last.
+        // We only retain the final `decision` payload to return to the LLM.
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split('\n')
+          buf = lines.pop() ?? ''
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed) continue
+            try {
+              const ev = JSON.parse(trimmed) as { type?: string; rating?: string; confidence?: number; rationale?: string }
+              if (ev.type === 'decision') {
+                verdict = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
+              }
+            } catch {
+              /* skip malformed */
+            }
+          }
+        }
+        return verdict ?? { error: 'no decision emitted' }
       },
     }),
 

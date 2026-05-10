@@ -21,12 +21,15 @@ describe('tool catalogue', () => {
   it('exposes the expected tool names', () => {
     const tools = makeTools(fakeClient() as unknown as ApiClient)
     expect(Object.keys(tools).sort()).toEqual([
+      'agents_debate',
       'algo_backtest',
       'algo_kill',
       'algo_list',
       'algo_recent_signals',
       'algo_state',
       'algo_unkill',
+      'convert_fx',
+      'holdings_context',
       'market_kline',
       'market_snapshot',
       'search_news',
@@ -38,6 +41,7 @@ describe('tool catalogue', () => {
       'trade_orders',
       'trade_place_order',
       'trade_portfolio',
+      'usage_summary',
       'watchlist_add',
       'watchlist_list',
       'watchlist_remove',
