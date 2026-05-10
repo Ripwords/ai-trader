@@ -150,7 +150,122 @@ export function useAgentsRun() {
 
   function cancel() {
     controller?.abort()
+    if (pollTimer !== null) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
   }
 
-  return { events, status, currentNode, verdict, runId, error, start, resume, cancel }
+  /**
+   * Apply a batch of replayed events to reactive state. Identical semantics
+   * to the live ``consumeStream`` event handler so a run rehydrated from
+   * ``agent_messages`` after a refresh ends up in the same final state as
+   * one watched live.
+   */
+  function applyEvents(batch: AgentEvent[]) {
+    if (batch.length === 0) return
+    events.value = [...events.value, ...batch]
+    for (const ev of batch) {
+      if (ev.type === 'run-start') runId.value = ev.run_id
+      else if (ev.type === 'node-start') currentNode.value = ev.node
+      else if (ev.type === 'decision') {
+        verdict.value = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
+      }
+      else if (ev.type === 'error') {
+        error.value = ev.message
+      }
+    }
+  }
+
+  // ────── Refresh-survival: replay from ``agent_messages`` ──────
+  // The tee on the proxy route writes every event into ``agent_messages``
+  // keyed by (run_id, seq). Here we read those rows back so a page reload
+  // (or opening ``?run=<id>`` in a new tab) reconstructs the same timeline
+  // the live stream produced. If the server-side run is still ``running``,
+  // we additionally start a 2s poll loop that pulls new events keyed by
+  // last-seen seq — a pragmatic stand-in for reconnecting the original
+  // SSE/NDJSON stream from a different browser context, which HTTP doesn't
+  // allow.
+  let pollTimer: ReturnType<typeof setInterval> | null = null
+  let lastSeq = -1
+
+  function stopPoll() {
+    if (pollTimer !== null) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
+  }
+
+  interface MessagesResponse {
+    runId: string
+    status: 'running' | 'complete' | 'failed' | 'cancelled'
+    finishedAt: string | null
+    lastSeq: number
+    events: AgentEvent[]
+  }
+
+  async function fetchMessages(targetRunId: string, since: number): Promise<MessagesResponse | null> {
+    try {
+      const res = await fetch(`/api/research/agent-messages?run_id=${encodeURIComponent(targetRunId)}&since=${since}`, {
+        method: 'GET',
+        headers: { 'content-type': 'application/json' },
+      })
+      if (!res.ok) return null
+      return (await res.json()) as MessagesResponse
+    }
+    catch {
+      return null
+    }
+  }
+
+  /**
+   * Hydrate the composable from a run's persisted event log. Replaces any
+   * existing local state — callers should ensure they're not overwriting
+   * an in-flight live stream.
+   *
+   * If the server-side run is still ``running``, automatically starts a
+   * background poll for incremental updates; the poll stops when the run's
+   * status transitions out of ``running``.
+   */
+  async function loadFromHistory(targetRunId: string) {
+    stopPoll()
+    if (controller) controller.abort()
+    events.value = []
+    status.value = 'running'
+    currentNode.value = null
+    verdict.value = null
+    error.value = null
+    runId.value = targetRunId
+    lastSeq = -1
+
+    const initial = await fetchMessages(targetRunId, -1)
+    if (initial === null) {
+      status.value = 'failed'
+      error.value = 'failed to load run history'
+      return
+    }
+    applyEvents(initial.events)
+    lastSeq = initial.lastSeq
+    status.value = initial.status
+
+    if (initial.status === 'running') {
+      pollTimer = setInterval(() => {
+        void (async () => {
+          const next = await fetchMessages(targetRunId, lastSeq)
+          if (next === null) return
+          applyEvents(next.events)
+          lastSeq = next.lastSeq
+          // The server's truth wins — once it flips out of ``running`` we
+          // mirror that and stop polling. Note ``run-end`` may arrive in the
+          // event batch too, but ``status`` from the run row is authoritative.
+          if (next.status !== 'running') {
+            status.value = next.status
+            stopPoll()
+          }
+        })()
+      }, 2000)
+    }
+  }
+
+  return { events, status, currentNode, verdict, runId, error, start, resume, cancel, loadFromHistory }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useAgentsRun } from '../../../composables/useAgentsRun'
 
 definePageMeta({ section: 'research' })
@@ -30,7 +30,8 @@ const queryRunId = computed(() => {
 
 useHead({ title: () => `research · ${symbol.value}` })
 
-const { events, status, verdict, runId, error, start, resume, cancel } = useAgentsRun()
+const { events, status, verdict, runId, error, start, resume, cancel, loadFromHistory } = useAgentsRun()
+const router = useRouter()
 
 const { data: runHistory, refresh: refreshHistory } = await useFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs', {
   query: { symbol },
@@ -132,6 +133,31 @@ function onResume() {
     void refreshHistory()
   })
 }
+
+// ────── Refresh-survival ──────
+// Two pieces work together so a page reload doesn't lose the run:
+//
+// 1. When a fresh run starts, the first ``run-start`` event populates
+//    ``runId``; we mirror that into the URL as ``?run=<id>`` (replace, not
+//    push, so back-button keeps working). Any subsequent reload lands on the
+//    same URL and triggers piece 2.
+//
+// 2. On mount with ``?run=<id>``, we replay the persisted event log from
+//    ``agent_messages``. If the server-side run is still ``running``, the
+//    composable starts a 2s poll for incremental events — a stand-in for
+//    reconnecting to the original NDJSON stream, which HTTP doesn't allow
+//    across page contexts.
+watch(runId, (id) => {
+  if (!id) return
+  if (route.query.run === id) return
+  void router.replace({ query: { ...route.query, run: id } })
+})
+
+onMounted(() => {
+  if (queryRunId.value) {
+    void loadFromHistory(queryRunId.value)
+  }
+})
 </script>
 
 <template>
