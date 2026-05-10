@@ -89,12 +89,6 @@ const canRun = computed(() =>
   && (selectedAnalysts.value.length > 0 || selectedPersonas.value.length > 0)
   && !running.value,
 )
-const canSynthesize = computed(() => signals.value.length > 0 && !synthesizing.value)
-const synthesizeBtnLabel = computed(() => {
-  if (synthesizing.value) return 'synthesizing…'
-  if (decisions.value) return 're-synthesize ↻'
-  return 'synthesize decisions →'
-})
 
 function toggleAnalyst(a: AnalystName) {
   const idx = selectedAnalysts.value.indexOf(a)
@@ -241,7 +235,7 @@ onUnmounted(() => close())
     </header>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-6xl mx-auto px-7 py-8 space-y-8">
+      <div class="max-w-7xl mx-auto px-7 py-8 space-y-8">
         <!-- Run form -->
         <section class="surface-1 p-6 space-y-5">
           <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
@@ -304,79 +298,72 @@ onUnmounted(() => close())
           </div>
         </section>
 
-        <!-- Signals grid: skeleton-per-source while streaming, real cards as they land -->
-        <section v-if="sources.length > 0" class="space-y-4">
-          <div class="flex items-baseline justify-between gap-4">
-            <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">
-              signals · {{ lastSymbol }}
+        <!-- Two-column dock: signals stream on the left, verdict pinned on the right.
+             On mobile this collapses to a vertical stack (signals first, verdict below). -->
+        <div v-if="sources.length > 0" class="research-grid">
+          <!-- Signals column -->
+          <section class="research-grid__main space-y-4">
+            <div class="flex items-baseline justify-between gap-4">
+              <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">
+                signals · {{ lastSymbol }}
+              </div>
+              <div class="flex items-baseline gap-3 font-mono text-xs text-[var(--paper-3)]">
+                <span data-mono>
+                  [{{ String(completed).padStart(2, '0') }} / {{ String(total).padStart(2, '0') }}]
+                </span>
+                <span v-if="running" class="streaming-tag">streaming<span class="dots"><span>.</span><span>.</span><span>.</span></span></span>
+                <span v-else>complete</span>
+              </div>
             </div>
-            <div class="flex items-baseline gap-3 font-mono text-xs text-[var(--paper-3)]">
-              <span data-mono>
-                [{{ String(completed).padStart(2, '0') }} / {{ String(total).padStart(2, '0') }}]
-              </span>
-              <span v-if="running" class="streaming-tag">streaming<span class="dots"><span>.</span><span>.</span><span>.</span></span></span>
-              <span v-else>complete</span>
+
+            <div class="progress-track">
+              <div class="progress-fill" :style="{ width: progressPct + '%' }" />
+              <div v-if="running" class="progress-pulse" />
             </div>
-          </div>
 
-          <div class="progress-track">
-            <div class="progress-fill" :style="{ width: progressPct + '%' }" />
-            <div v-if="running" class="progress-pulse" />
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div
-              v-for="(s, i) in sources"
-              :key="s.name"
-              class="signal-slot"
-              :style="{ '--stagger': `${i * 60}ms` }"
-            >
-              <Transition name="slot" mode="out-in">
-                <PersonaSignalCard
-                  v-if="s.status === 'done' && s.signal"
-                  :key="'sig'"
-                  :signal="s.signal"
-                />
-                <SignalErrorCard
-                  v-else-if="s.status === 'error'"
-                  :key="'err'"
-                  :source="s.label"
-                  :message="s.error || ''"
-                />
-                <SignalSkeleton
-                  v-else
-                  :key="'skel'"
-                  :source="s.label"
-                  :running="s.status === 'running'"
-                />
-              </Transition>
+            <div class="signal-grid">
+              <div
+                v-for="(s, i) in sources"
+                :key="s.name"
+                class="signal-slot"
+                :style="{ '--stagger': `${i * 60}ms` }"
+              >
+                <Transition name="slot" mode="out-in">
+                  <PersonaSignalCard
+                    v-if="s.status === 'done' && s.signal"
+                    :key="'sig'"
+                    :signal="s.signal"
+                  />
+                  <SignalErrorCard
+                    v-else-if="s.status === 'error'"
+                    :key="'err'"
+                    :source="s.label"
+                    :message="s.error || ''"
+                  />
+                  <SignalSkeleton
+                    v-else
+                    :key="'skel'"
+                    :source="s.label"
+                    :running="s.status === 'running'"
+                  />
+                </Transition>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- Synthesize CTA + result -->
-        <section v-if="signals.length > 0" class="space-y-4">
-          <div class="flex items-center gap-4 flex-wrap">
-            <button
-              type="button"
-              class="run-btn"
-              :disabled="!canSynthesize"
-              @click="synthesize"
-            >
-              <span v-if="synthesizing" class="spinner" aria-hidden="true" />
-              <span>{{ synthesizeBtnLabel }}</span>
-            </button>
-            <span class="font-mono text-xs text-[var(--paper-3)]">
-              {{ decisions ? 're-fan signals into a fresh decision' : 'fan signals into a single decision per symbol' }}
-            </span>
+          <!-- Verdict rail: state machine + sticky on lg+ -->
+          <div class="research-grid__rail">
+            <VerdictPanel
+              :decisions="decisions"
+              :symbol="lastSymbol"
+              :running="running"
+              :synthesizing="synthesizing"
+              :signal-count="signals.length"
+              :error="synthError"
+              @synthesize="synthesize"
+            />
           </div>
-
-          <div v-if="synthError" class="font-mono text-sm text-[var(--tape-down)] whitespace-pre-wrap">
-            {{ synthError }}
-          </div>
-
-          <SynthesisCard v-if="decisions" :decisions="decisions" />
-        </section>
+        </div>
 
         <div
           v-else-if="!running && sources.length === 0"
@@ -522,6 +509,40 @@ onUnmounted(() => close())
 @keyframes pulse-sweep {
   0%   { transform: translateX(-30%); }
   100% { transform: translateX(330%); }
+}
+
+/* Two-column research dock.
+   Mobile: signals stack on top, verdict rail flows below.
+   lg+:    signals 8 cols, verdict 4 cols sticky to the scroll container. */
+.research-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+@media (min-width: 1024px) {
+  .research-grid {
+    grid-template-columns: minmax(0, 8fr) minmax(320px, 4fr);
+    gap: 1.75rem;
+    align-items: start;
+  }
+  .research-grid__rail {
+    position: sticky;
+    top: 1.5rem;
+    align-self: start;
+    /* keep the rail readable when content gets tall */
+    max-height: calc(100vh - 3rem);
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .research-grid__rail::-webkit-scrollbar { width: 0; height: 0; }
+}
+
+/* Signal grid auto-fits cards. Avoids cramped 2-up at the lg breakpoint
+   where the rail eats horizontal room. */
+.signal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
 }
 
 /* Per-slot Transition: skeleton/error → signal swap. Stagger via --stagger. */
