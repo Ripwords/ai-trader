@@ -22,8 +22,10 @@ docker service, which is just curl-on-a-schedule.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any, Literal, Protocol
 
 from .model_config import build_tradingagents_config
@@ -72,6 +74,101 @@ def _classify_outcome(rating: str, alpha: float) -> Outcome:
     return "wrong"
 
 
+def _bar_date(bar: dict[str, Any]) -> date | None:
+    """Extract the ``time_key`` of a bar as a :class:`date`.
+
+    Bars may surface ``time_key`` as a date-only ISO string (``2026-05-01``)
+    or a full ISO datetime (``2026-05-01 09:30:00``); ``date.fromisoformat``
+    rejects the latter so we parse via :class:`datetime` and discard the
+    time component. Returns ``None`` for malformed bars so the caller can
+    skip them rather than raise.
+    """
+    raw = bar.get("time_key")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        try:
+            return datetime.fromisoformat(text).date()
+        except ValueError:
+            return None
+
+
+def _closest_bar_at_or_after(bars: list[dict], target: date) -> dict | None:
+    """Return the first bar with ``time_key`` >= ``target`` (i.e. trade_date).
+
+    The realized-return contract is "buy at the first available close on or
+    after the decision day"; weekends and holidays mean the trade_date may
+    fall on a non-trading day, so we walk forward to the first qualifying
+    bar.
+    """
+    for bar in bars:
+        d = _bar_date(bar)
+        if d is not None and d >= target:
+            return bar
+    return None
+
+
+def _closest_bar_at_or_before(bars: list[dict], target: date) -> dict | None:
+    """Return the last bar with ``time_key`` <= ``target`` (i.e. exit day).
+
+    The exit is "sell at the close on the horizon day"; if the horizon day
+    is a non-trading day, we fall back to the most recent prior trading
+    close. Since :func:`compute_realized_return` may be called before the
+    horizon has even elapsed (in which case the latest bar is the best we
+    have), this handles both "horizon in the past" and "horizon already
+    happened" cases uniformly.
+    """
+    candidate: dict | None = None
+    for bar in bars:
+        d = _bar_date(bar)
+        if d is None:
+            continue
+        if d <= target:
+            candidate = bar
+        else:
+            break
+    return candidate
+
+
+async def _maybe_await_kline(
+    opend: Any, symbol: str, *, ktype: str, num: int
+) -> list[dict]:
+    """Fetch ``num`` daily bars whether ``opend.get_kline`` is sync or async.
+
+    The production :class:`OpendAdapter` is synchronous (it wraps the moomoo
+    OpenQuoteContext, which is itself blocking). The toolkit was originally
+    written against an async client; tests mock with :class:`AsyncMock`. We
+    accommodate both shapes here so the reflection job degrades gracefully
+    against either: an awaitable result is awaited, otherwise the bare
+    return value is used. Sync calls are routed through
+    :func:`asyncio.to_thread` so we don't block the event loop.
+
+    Returns a list of bar dicts (``[{time_key, close, ...}, ...]``).
+    Production OpendAdapter returns a :class:`KLineResponse`; if so, fall
+    back to ``.bars`` and convert each :class:`Bar` model to a dict.
+    """
+    if inspect.iscoroutinefunction(getattr(opend, "get_kline", None)):
+        result = await opend.get_kline(symbol, ktype=ktype, num=num)
+    else:
+        result = await asyncio.to_thread(
+            opend.get_kline, symbol, ktype=ktype, num=num
+        )
+    # AsyncMock-backed tests usually surface a list directly. Production's
+    # OpendAdapter wraps bars in a KLineResponse pydantic model with a
+    # ``.bars`` attribute; coerce.
+    if isinstance(result, list):
+        return result
+    bars = getattr(result, "bars", None)
+    if bars is None:
+        return []
+    return [b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in bars]
+
+
 async def compute_realized_return(
     opend: _OpenDLike,
     symbol: str,
@@ -79,21 +176,44 @@ async def compute_realized_return(
     rating: str,
     horizon_days: int,
 ) -> RealizedReturn:
-    """Compute alpha vs SPY over ``horizon_days`` of daily bars.
+    """Compute alpha vs SPY over the ``[trade_date, trade_date + horizon_days]`` window.
 
-    ``trade_date`` isn't currently fed to the OpenD call (the OpenD client
-    surfaces "latest N bars"); we ask for ``horizon_days + 5`` bars to ride
-    over weekends/holidays and use the first/last close of the returned
-    window. Bars are dicts with at least a ``close`` key.
+    Bars are fetched via :func:`_maybe_await_kline`; we ask for enough
+    history to cover ``trade_date`` even when the decision is N days old:
+    ``num = max(horizon_days + 5, days_since_trade + horizon_days + 10)``.
+    Window slicing is by ``time_key``, so weekends/holidays are tolerated
+    on either end.
 
-    Raises ``ValueError`` if either series is empty.
+    Raises :class:`ValueError` when bars don't cover the trade_date (the
+    caller logs ``[reflection failed: insufficient history for trade_date X]``
+    which surfaces in the UI).
     """
-    sym_bars = await opend.get_kline(symbol, ktype="K_DAY", num=horizon_days + 5)
-    spy_bars = await opend.get_kline("US.SPY", ktype="K_DAY", num=horizon_days + 5)
+    today = date.today()
+    days_since = max(0, (today - trade_date).days)
+    num = max(horizon_days + 5, days_since + horizon_days + 10)
+
+    sym_bars = await _maybe_await_kline(opend, symbol, ktype="K_DAY", num=num)
+    spy_bars = await _maybe_await_kline(opend, "US.SPY", ktype="K_DAY", num=num)
     if not sym_bars or not spy_bars:
         raise ValueError(f"insufficient bars to compute return for {symbol}")
-    sym_ret = (sym_bars[-1]["close"] / sym_bars[0]["close"] - 1) * 100
-    spy_ret = (spy_bars[-1]["close"] / spy_bars[0]["close"] - 1) * 100
+
+    horizon_date = trade_date + timedelta(days=horizon_days)
+
+    sym_entry = _closest_bar_at_or_after(sym_bars, trade_date)
+    sym_exit = _closest_bar_at_or_before(sym_bars, horizon_date)
+    spy_entry = _closest_bar_at_or_after(spy_bars, trade_date)
+    spy_exit = _closest_bar_at_or_before(spy_bars, horizon_date)
+
+    if not (sym_entry and sym_exit and spy_entry and spy_exit):
+        raise ValueError(
+            f"insufficient history for trade_date {trade_date.isoformat()} "
+            f"+ horizon {horizon_days}d for {symbol}"
+        )
+    # When entry == exit (e.g. only one bar in the window, or horizon hasn't
+    # elapsed), the return is 0 — that's still a meaningful "no movement"
+    # data point and we don't want to raise.
+    sym_ret = (sym_exit["close"] / sym_entry["close"] - 1) * 100
+    spy_ret = (spy_exit["close"] / spy_entry["close"] - 1) * 100
     alpha = sym_ret - spy_ret
     return RealizedReturn(
         realized_return=round(sym_ret, 4),

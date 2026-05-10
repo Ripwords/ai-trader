@@ -9,6 +9,8 @@ agents can quote it back in their analysis.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import os
 from dataclasses import dataclass
@@ -21,10 +23,40 @@ from langchain_core.tools import tool
 
 
 class OpenDClient(Protocol):
-    """Subset of the moomoo OpenD client the toolkit relies on."""
+    """Subset of the moomoo OpenD client the toolkit relies on.
 
-    async def get_kline(self, ticker: str, ktype: str, num: int) -> list[dict]: ...
-    async def get_snapshot(self, ticker: str) -> dict | None: ...
+    Both shapes are accepted by :func:`_kline_bars`: async (e.g. a future
+    HTTP-backed wrapper) and sync (the current :class:`OpendAdapter`, which
+    wraps the blocking moomoo OpenQuoteContext). Sync calls are routed
+    through :func:`asyncio.to_thread` so the event loop stays responsive.
+    """
+
+    def get_kline(self, ticker: str, ktype: str, num: int) -> Any: ...
+
+
+async def _kline_bars(
+    opend: Any, ticker: str, *, ktype: str, num: int
+) -> list[dict]:
+    """Call ``opend.get_kline`` (sync or async) and return a list of bar dicts.
+
+    Production's :class:`OpendAdapter.get_kline` is sync and returns a
+    :class:`KLineResponse` pydantic model whose ``.bars`` is a list of
+    :class:`Bar` models. Tests mock the call with :class:`AsyncMock` and
+    return raw list-of-dict. We accommodate both: we await coroutine
+    callables, run sync callables via :func:`asyncio.to_thread`, then
+    coerce a :class:`KLineResponse`-shaped result to a list of dicts.
+    """
+    fn = getattr(opend, "get_kline", None)
+    if inspect.iscoroutinefunction(fn):
+        result = await opend.get_kline(ticker, ktype=ktype, num=num)
+    else:
+        result = await asyncio.to_thread(opend.get_kline, ticker, ktype=ktype, num=num)
+    if isinstance(result, list):
+        return result
+    bars = getattr(result, "bars", None)
+    if bars is None:
+        return []
+    return [b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in bars]
 
 
 async def _internal_get(path: str, params: dict[str, Any]) -> dict:
@@ -127,10 +159,26 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         """Daily OHLCV bars for the given ticker in the date range."""
         if opend_client is None:
             return f"Market data unavailable for {ticker}."
-        bars = await opend_client.get_kline(ticker, ktype="K_DAY", num=252)
+        bars = await _kline_bars(opend_client, ticker, ktype="K_DAY", num=252)
+        # ``time_key`` is a datetime object on the production Bar model; the
+        # JSON encoder doesn't know how to serialise it, so coerce to ISO
+        # strings before dumping.
+        bars = [
+            {
+                **b,
+                "time": (
+                    b["time"].isoformat()
+                    if hasattr(b.get("time"), "isoformat")
+                    else b.get("time")
+                ),
+            }
+            if "time" in b and hasattr(b.get("time"), "isoformat")
+            else b
+            for b in bars
+        ]
         return (
             f"Daily bars for {ticker} ({start_date}..{end_date}):\n"
-            f"```json\n{json.dumps(bars[-60:], indent=2)}\n```"
+            f"```json\n{json.dumps(bars[-60:], indent=2, default=str)}\n```"
         )
 
     @tool
@@ -138,7 +186,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         """Technical indicator value (rsi/macd/etc.) for the given ticker on the given date."""
         if opend_client is None:
             return f"Market data unavailable for {ticker}."
-        bars = await opend_client.get_kline(ticker, ktype="K_DAY", num=252)
+        bars = await _kline_bars(opend_client, ticker, ktype="K_DAY", num=252)
         df = pd.DataFrame(bars).rename(
             columns={
                 "open": "open",
