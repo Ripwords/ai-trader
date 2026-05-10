@@ -288,7 +288,7 @@ function toIso(s: string | null): string | null {
   color: var(--paper-3);
   flex-shrink: 0;
 }
-.search__row > :global(*) { flex: 1 1 220px; }
+.search__row > :deep(*) { flex: 1 1 220px; }
 .search__btn {
   flex: 0 0 auto !important;
   display: inline-flex;
