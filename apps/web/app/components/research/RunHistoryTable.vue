@@ -34,6 +34,14 @@ function alphaTone(a?: number | string | null): 'up' | 'down' | 'neutral' {
   return n > 0 ? 'up' : n < 0 ? 'down' : 'neutral'
 }
 
+function outcomeTone(o?: string | null): 'up' | 'down' | 'neutral' {
+  if (!o) return 'neutral'
+  const v = String(o).toLowerCase()
+  if (v === 'correct') return 'up'
+  if (v === 'wrong') return 'down'
+  return 'neutral'
+}
+
 function fmtAlpha(a?: number | string | null): string {
   if (a === null || a === undefined) return '—'
   const n = typeof a === 'number' ? a : Number(a)
@@ -90,6 +98,7 @@ function rowClick(row: Row) {
           <th>rating</th>
           <th class="th-num">conf.</th>
           <th class="th-num">alpha</th>
+          <th>outcome</th>
           <th class="th-num">cost</th>
           <th class="th-num">dur.</th>
         </tr>
@@ -109,6 +118,15 @@ function rowClick(row: Row) {
           </td>
           <td class="num" data-mono>{{ fmtConfidence(r.confidence ?? null) }}</td>
           <td class="num" data-mono :data-tone="alphaTone(r.alpha)">{{ fmtAlpha(r.alpha) }}</td>
+          <td>
+            <span
+              v-if="r.outcome"
+              class="outcome-chip"
+              :data-tone="outcomeTone(r.outcome)"
+              data-mono
+            >{{ r.outcome }}</span>
+            <span v-else class="empty-cell" data-mono>—</span>
+          </td>
           <td class="num" data-mono>{{ fmtCost(r.costUsd) }}</td>
           <td class="num" data-mono>{{ fmtDuration(r) }}</td>
         </tr>
@@ -181,6 +199,21 @@ tbody tr:hover { background: var(--ink-2); }
 .rating-chip[data-tone="up"]      { color: var(--tape-up); border-color: color-mix(in srgb, var(--tape-up) 35%, transparent); }
 .rating-chip[data-tone="down"]    { color: var(--tape-down); border-color: color-mix(in srgb, var(--tape-down) 35%, transparent); }
 .rating-chip[data-tone="neutral"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+.outcome-chip {
+  display: inline-block;
+  padding: 0.18rem 0.5rem;
+  border-radius: 3px;
+  border: 1px solid var(--ink-line);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--paper-3);
+}
+.outcome-chip[data-tone="up"]      { color: var(--tape-up); border-color: color-mix(in srgb, var(--tape-up) 35%, transparent); }
+.outcome-chip[data-tone="down"]    { color: var(--tape-down); border-color: color-mix(in srgb, var(--tape-down) 35%, transparent); }
+.outcome-chip[data-tone="neutral"] { color: var(--paper-3); border-color: var(--ink-line); }
+.empty-cell { color: var(--paper-3); font-size: 0.78rem; }
 
 .empty {
   padding: 2rem 1.2rem;

@@ -35,6 +35,7 @@ from fastapi.responses import StreamingResponse
 
 from app.schemas.agents import RunRequest
 from app.services.agents import graph as graph_mod
+from app.services.agents import reflection as reflection_mod
 from app.services.agents.cost_cap import DailyCapExceeded
 from app.services.agents.memory import PostgresMemoryProvider
 from app.services.agents.streaming import translate_chunks
@@ -160,6 +161,29 @@ async def run_agents(
             ).encode()
 
     return StreamingResponse(_stream(), media_type="application/x-ndjson")
+
+
+@router.post("/reflect")
+async def trigger_reflect(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    horizon_days: int = 7,
+) -> dict[str, int]:
+    """Run the nightly reflection pass.
+
+    Iterates pending ``agent_decisions`` rows older than ``horizon_days``,
+    computes alpha vs SPY, asks the quick LLM for a lesson, and inserts a
+    paired ``agent_reflections`` row. The agents-cron container hits this
+    once a day; nothing about it is per-user, so no user header is needed
+    (just the internal bearer).
+    """
+    _check_bearer(authorization)
+    pool = getattr(request.app.state, "pg_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    opend = getattr(request.app.state, "opend_client", None)
+    n = await reflection_mod.reflect_pending(pool, opend, horizon_days=horizon_days)
+    return {"reflected": n}
 
 
 @router.delete("/run/{run_id}")

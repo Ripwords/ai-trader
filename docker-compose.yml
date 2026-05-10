@@ -98,5 +98,20 @@ services:
       drizzle-migrate:
         condition: service_completed_successfully
 
+  # Daily reflection trigger — busy-loop curl that hits /agents/reflect at
+  # SCHEDULE_HOUR_UTC. Picked over the more obvious crond because alpine's
+  # crond eats env vars and you have to template a crontab on entry; a
+  # while-loop is a third the lines.
+  agents-cron:
+    build: ./apps/cron
+    image: ai-trader-agents-cron:latest
+    environment:
+      INTERNAL_BEARER: ${INTERNAL_BEARER}
+      SCHEDULE_HOUR_UTC: ${REFLECT_HOUR_UTC:-08}
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   pgdata:
