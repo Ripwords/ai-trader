@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+import asyncpg
 from fastapi import Depends, FastAPI
 
 from app.deps import _build_adapter, require_internal_bearer
@@ -94,11 +95,25 @@ def _make_opend_bridges():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Open the algo DB pool and start the live scheduler."""
+    """Open the algo DB pool, the agents memory pool, and start the scheduler.
+
+    The agents memory pool is separate from ``algo_repo``'s pool so memory
+    recall can fail independently of algo persistence; both share
+    ``settings.DATABASE_URL``. ``app.state.pg_pool`` is what
+    :func:`app.routers.agents._recall_memory` looks up.
+    """
     settings = get_settings()
     scheduler: Scheduler | None = None
+    pg_pool: asyncpg.Pool | None = None
     if settings.DATABASE_URL:
         await algo_repo.init_pool(settings.DATABASE_URL)
+        try:
+            pg_pool = await asyncpg.create_pool(
+                settings.DATABASE_URL, min_size=1, max_size=5
+            )
+            app.state.pg_pool = pg_pool
+        except Exception as e:  # noqa: BLE001
+            print(f"[agents] Failed to create asyncpg pool: {e}")
         get_klines, get_position, get_account_summary, place = _make_opend_bridges()
         scheduler = Scheduler(
             get_klines=get_klines,
@@ -113,6 +128,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if scheduler is not None:
             await scheduler.stop()
+        if pg_pool is not None:
+            await pg_pool.close()
         await algo_repo.close_pool()
 
 

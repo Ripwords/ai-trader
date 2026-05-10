@@ -216,20 +216,87 @@ def _state_snapshot(state: Any) -> dict:
     return dict(state) if state else {}
 
 
+def _format_memory_situation(symbol: str, row: dict) -> str:
+    """Build the BM25 lookup key for a past reflection.
+
+    The trader's runtime ``curr_situation`` is the concatenation of the four
+    analyst reports for the current date, so to give past reflections a chance
+    of matching we lead the situation text with the symbol — analyst reports
+    routinely mention the company name and ticker. Outcome and rating give the
+    BM25 scorer extra terms when the trader's situation is dominated by
+    market commentary.
+    """
+    rating = row.get("rating") or "?"
+    outcome = row.get("outcome") or "?"
+    td = row.get("trade_date")
+    return f"{symbol} {rating} {outcome} on {td}"
+
+
+def _format_memory_recommendation(row: dict) -> str:
+    """Build the human-readable recommendation injected into the trader prompt.
+
+    Whatever string we return here is concatenated verbatim into
+    ``past_memory_str`` (see ``tradingagents.agents.trader.trader``) which is
+    formatted into the trader system prompt's ``{past_memory_str}`` slot.
+    Keeping each line short and parseable matters more than prose.
+    """
+    rating = row.get("rating") or "?"
+    outcome = row.get("outcome") or "?"
+    alpha = row.get("alpha")
+    text = row.get("text") or ""
+    alpha_str = f"{alpha:+.2%}" if isinstance(alpha, (int, float)) else "n/a"
+    return f"Past {rating} -> alpha {alpha_str}, outcome {outcome}: {text}"
+
+
+def _seed_trader_memory(
+    graph: TradingAgentsGraph, symbol: str, memory: list[dict]
+) -> None:
+    """Seed the trader's BM25 memory with prior reflections.
+
+    Tradingagents v0.2.4 already exposes a per-agent
+    :class:`FinancialSituationMemory` (BM25 over situation/recommendation
+    pairs) that the trader node consults in its prompt construction. We
+    reuse that surface — ``graph.trader_memory`` is a ``cached_property``,
+    so seeding it here mutates the same instance the trader node reads
+    later, with no monkey-patching required. ``graph.graph`` (cached
+    property that compiles the DAG) must not have been accessed yet for
+    other reasons, but it isn't a precondition for this seeding step:
+    seeding before *or* after compile is fine because the trader resolves
+    its memory by reference at call time.
+    """
+    if not memory:
+        return
+    pairs: list[tuple[str, str]] = [
+        (_format_memory_situation(symbol, row), _format_memory_recommendation(row))
+        for row in memory
+    ]
+    graph.trader_memory.add_situations(pairs)
+
+
 async def run_graph(
     graph: TradingAgentsGraph,
     symbol: str,
     trade_date: date,
     max_debate_rounds: int,
     deep_thinking: bool,
+    memory: list[dict] | None = None,
 ) -> AsyncIterator[dict]:
     """Run the compiled graph and yield normalized chunks.
 
     ``max_debate_rounds`` and ``deep_thinking`` are accepted for API symmetry
     with the router but are baked into ``graph`` at construction time (see the
     module docstring) — to change them mid-process you must rebuild the graph.
+
+    ``memory`` is the list of prior reflections returned by
+    :class:`app.services.agents.memory.PostgresMemoryProvider.recall`. When
+    non-empty, those rows are seeded into the trader's
+    :class:`FinancialSituationMemory` so the trader's existing prompt-time
+    BM25 lookup picks them up. ``None`` / ``[]`` is a no-op — runs without
+    memory are unchanged.
     """
     del max_debate_rounds, deep_thinking  # baked in at build_graph time
+
+    _seed_trader_memory(graph, symbol, memory or [])
 
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
     args = graph.propagator.get_graph_args()

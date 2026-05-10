@@ -40,7 +40,11 @@ async def test_streams_canned_events(monkeypatch: pytest.MonkeyPatch) -> None:
         trade_date,
         max_debate_rounds: int,
         deep_thinking: bool,
+        memory: list[dict] | None = None,
     ):
+        # ``memory`` is accepted for signature compatibility with the real
+        # ``run_graph``; the canned-event test doesn't exercise it.
+        del memory
         yield {
             "metadata": {"langgraph_node": "trader", "node_finished": True},
             "values": {
