@@ -90,4 +90,15 @@ describe('POST /api/research/agents-run', () => {
     const event = makeEvent({})
     await expect(handler(event)).rejects.toMatchObject({ statusCode: 400 })
   })
+
+  it('returns 409 when a run is already in-flight for the same (user, symbol)', async () => {
+    selectLimit.mockResolvedValueOnce([{ id: 'inflight-run-7' }])
+    const event = makeEvent({ symbol: 'NVDA' })
+    await expect(handler(event)).rejects.toMatchObject({
+      statusCode: 409,
+      data: { run_id: 'inflight-run-7' },
+    })
+    // No new row should have been inserted when a run is already in-flight.
+    expect(insertReturning).not.toHaveBeenCalled()
+  })
 })

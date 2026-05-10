@@ -99,6 +99,26 @@ export function useAgentsRun() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ symbol, ...opts }),
     })
+
+    // 409 = a run is already in-flight for this (user, symbol). The route
+    // includes ``data: { run_id }`` so we surface the existing run id; UI
+    // can offer a "Jump to in-flight run" link instead of starting another.
+    if (res.status === 409) {
+      let existingRunId: string | null = null
+      try {
+        const body = (await res.json()) as { data?: { run_id?: string } }
+        existingRunId = body?.data?.run_id ?? null
+      } catch {
+        /* fall through to plain failed state */
+      }
+      runId.value = existingRunId
+      status.value = 'failed'
+      error.value = existingRunId
+        ? `a run is already in progress (run_id ${existingRunId})`
+        : 'a run is already in progress'
+      return
+    }
+
     await consumeStream(res, controller)
   }
 

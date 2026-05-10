@@ -1,5 +1,5 @@
 import { defineEventHandler, readBody, createError } from 'h3'
-import { eq } from 'drizzle-orm'
+import { and, eq, gte, sql } from 'drizzle-orm'
 import { getDb } from '../../../db/client'
 import { agentRuns } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
@@ -13,6 +13,11 @@ interface AgentsRunBody {
   trade_date?: string
 }
 
+// A 'running' row older than this is treated as defunct (process died mid-run
+// without writing run-end / failed). New runs are allowed past the cutoff so
+// a crash doesn't permanently lock out a symbol.
+const STALE_RUN_CUTOFF_MIN = 15
+
 export default defineEventHandler(async (event) => {
   const userId = await getOwnerId()
   const body = await readBody<AgentsRunBody>(event)
@@ -20,6 +25,45 @@ export default defineEventHandler(async (event) => {
 
   const tradeDate = body.trade_date ?? new Date().toISOString().slice(0, 10)
   const db = getDb()
+
+  // Reject if a run is already in-flight for (user, symbol). Stale rows older
+  // than STALE_RUN_CUTOFF_MIN are ignored so a crashed run doesn't lock the
+  // symbol forever — they'll be GC'd by the next successful run's tee, or by
+  // an explicit DELETE.
+  const cutoff = new Date(Date.now() - STALE_RUN_CUTOFF_MIN * 60_000)
+  const inflight = await db
+    .select({ id: agentRuns.id })
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.userId, userId),
+        eq(agentRuns.symbol, body.symbol),
+        eq(agentRuns.status, 'running'),
+        gte(agentRuns.startedAt, cutoff),
+      ),
+    )
+    .limit(1)
+  if (inflight[0]) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'a run is already in progress for this symbol',
+      data: { run_id: inflight[0].id },
+    })
+  }
+  // Best-effort: reap any rows that ARE past the cutoff so the table doesn't
+  // accumulate zombie 'running' entries. Don't block on this.
+  await db
+    .update(agentRuns)
+    .set({ status: 'failed', error: 'stale (no run-end before cutoff)', finishedAt: new Date() })
+    .where(
+      and(
+        eq(agentRuns.userId, userId),
+        eq(agentRuns.symbol, body.symbol),
+        eq(agentRuns.status, 'running'),
+        sql`${agentRuns.startedAt} < ${cutoff}`,
+      ),
+    )
+
   const inserted = await db
     .insert(agentRuns)
     .values({

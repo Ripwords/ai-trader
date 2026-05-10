@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { parseNdjsonChunk } from '../../composables/useAgentsRun'
+import { describe, it, expect, vi } from 'vitest'
+import { parseNdjsonChunk, useAgentsRun } from '../../composables/useAgentsRun'
 import type { AgentEvent } from '../../types/agents'
 
 describe('parseNdjsonChunk', () => {
@@ -20,5 +20,21 @@ describe('parseNdjsonChunk', () => {
     const out: AgentEvent[] = []
     parseNdjsonChunk('', '\n\n{"type":"run-end","run_id":"r","tokens_in":0,"tokens_out":0,"cost_usd":0}\n\n', out)
     expect(out.length).toBe(1)
+  })
+})
+
+describe('useAgentsRun.start — concurrent-run guard', () => {
+  it('surfaces 409 with existing run_id and does NOT enter running state', async () => {
+    ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ data: { run_id: 'existing-7' } }),
+    }))
+    const run = useAgentsRun()
+    await run.start('NVDA')
+    expect(run.status.value).toBe('failed')
+    expect(run.runId.value).toBe('existing-7')
+    expect(run.error.value).toContain('existing-7')
+    expect(run.events.value).toEqual([])
   })
 })
