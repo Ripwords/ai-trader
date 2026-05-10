@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAgentsRun } from '../../../composables/useAgentsRun'
 
 definePageMeta({ section: 'research' })
@@ -63,6 +63,61 @@ const historyRows = computed(() =>
 const costSamples = computed(() =>
   historyRows.value.map(r => ({ costUsd: r.costUsd })),
 )
+
+// ────── Running-state progress UX ──────
+// The first analyst can take 15-30s to finish its report; without surfacing
+// per-tool / per-node activity the page reads as "stuck on running…". Track
+// elapsed seconds + the latest concrete activity so the banner can show
+// "Fundamentals Analyst · get_balance_sheet · 12s" instead of just a dot.
+const startedAt = ref<number | null>(null)
+const elapsedSec = ref(0)
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
+
+watch(status, (s) => {
+  if (s === 'running') {
+    startedAt.value = Date.now()
+    elapsedSec.value = 0
+    if (elapsedTimer) clearInterval(elapsedTimer)
+    elapsedTimer = setInterval(() => {
+      if (startedAt.value !== null) {
+        elapsedSec.value = Math.floor((Date.now() - startedAt.value) / 1000)
+      }
+    }, 1000)
+  }
+  else if (elapsedTimer) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+})
+
+const lastToolEvent = computed(() => {
+  for (let i = events.value.length - 1; i >= 0; i--) {
+    const ev = events.value[i]
+    if (ev.type === 'tool-call' || ev.type === 'tool-result') return ev
+  }
+  return null
+})
+
+const lastNodeStart = computed(() => {
+  for (let i = events.value.length - 1; i >= 0; i--) {
+    const ev = events.value[i]
+    if (ev.type === 'node-start') return ev
+  }
+  return null
+})
+
+const progressMessage = computed(() => {
+  const tool = lastToolEvent.value
+  const node = lastNodeStart.value
+  if (tool) {
+    const verb = tool.type === 'tool-call' ? 'calling' : 'received'
+    const nodeLabel = node ? node.node.replace(/_/g, ' ') + ' · ' : ''
+    return `${nodeLabel}${verb} ${tool.tool}`
+  }
+  if (node) return `${node.node.replace(/_/g, ' ')} · thinking`
+  if (events.value.length === 0) return 'spinning up agents…'
+  return 'thinking'
+})
 
 function onStart(opts: { max_debate_rounds: number; deep_thinking: boolean }) {
   void start(symbol.value, opts).then(() => {
@@ -136,12 +191,20 @@ function onResume() {
         />
 
         <div v-if="status === 'running'" class="flex items-center justify-between gap-4 surface-1 px-5 py-3 rounded-md">
-          <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--accent)]">
-            ● running…
-          </span>
+          <div class="flex items-baseline gap-3 min-w-0">
+            <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--accent)] running-dot shrink-0">
+              ●
+            </span>
+            <span class="font-mono text-xs lowercase tracking-[0.06em] text-[var(--paper-1)] truncate">
+              {{ progressMessage }}
+            </span>
+            <span class="font-mono text-xs text-[var(--paper-3)] tabular-nums shrink-0">
+              {{ elapsedSec }}s · {{ events.length }} event{{ events.length === 1 ? '' : 's' }}
+            </span>
+          </div>
           <button
             type="button"
-            class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-1.5 border border-[var(--ink-line)] rounded text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)] transition-colors"
+            class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-1.5 border border-[var(--ink-line)] rounded text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)] transition-colors shrink-0"
             @click="cancel"
           >
             cancel run
@@ -170,3 +233,13 @@ function onResume() {
     </main>
   </div>
 </template>
+
+<style scoped>
+.running-dot {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+</style>

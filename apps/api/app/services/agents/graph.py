@@ -236,11 +236,50 @@ _REPORT_NODE_MAP = {
 }
 
 
+# Map a tool name back to the analyst likely calling it. We use this when an
+# analyst is mid-execution (calling tools but hasn't finished its report yet)
+# so we can emit a ``node-start`` event early instead of leaving the UI silent
+# for the 15-30s it takes the first analyst to finish a report. Order doesn't
+# matter; each tool maps to exactly one analyst by design.
+_TOOL_TO_NODE = {
+    "get_balance_sheet": "Fundamentals Analyst",
+    "get_cashflow": "Fundamentals Analyst",
+    "get_income_statement": "Fundamentals Analyst",
+    "get_fundamentals": "Fundamentals Analyst",
+    "get_insider_transactions": "Fundamentals Analyst",
+    "get_news": "News Analyst",
+    "get_global_news": "News Analyst",
+    "get_stock_data": "Market Analyst",
+    "get_indicators": "Market Analyst",
+}
+
+
 def _detect_node(prev: dict, curr: dict) -> str | None:
     """Pick a node label by spotting which AgentState field changed."""
     for field, label in _REPORT_NODE_MAP.items():
         if (curr.get(field) or "") != (prev.get(field) or ""):
             return label
+    return None
+
+
+def _infer_node_from_tools(
+    calls: list[dict], results: list[dict]
+) -> str | None:
+    """Infer which analyst is running based on the tool name in flight.
+
+    A report-field change marks "analyst finished"; before that, the only
+    signal we have is which tool just got called. Mapping tool name -> analyst
+    lets the UI render a 'X Analyst (working...)' card the moment the first
+    tool call lands rather than waiting for the report to finalise.
+    """
+    for tc in calls:
+        node = _TOOL_TO_NODE.get(tc.get("name") or "")
+        if node:
+            return node
+    for tr in results:
+        node = _TOOL_TO_NODE.get(tr.get("name") or "")
+        if node:
+            return node
     return None
 
 
@@ -496,12 +535,21 @@ async def run_graph(
     prev: dict = {}
     async for chunk in graph.graph.astream(init_state, **args):
         curr = _state_snapshot(chunk)
-        node = _detect_node(prev, curr)
+        # ``node`` from a report-field change means "this analyst just finished".
+        # We mark such chunks ``node_finished=True`` so the UI flips the card to
+        # done. Mid-run chunks (tool call/result) get ``node`` from
+        # ``_infer_node_from_tools`` so the card *appears* early — the user sees
+        # 'Fundamentals Analyst (working...)' as soon as the first
+        # get_balance_sheet call fires, instead of staring at "running..." until
+        # the report finalises 15-30s later.
+        finished_node = _detect_node(prev, curr)
 
         prev_msgs = prev.get("messages") or []
         curr_msgs = curr.get("messages") or []
         added = _new_messages(prev_msgs, curr_msgs)
         calls, results = _extract_tool_events(added)
+
+        node = finished_node or _infer_node_from_tools(calls, results)
 
         values: dict[str, Any] = {}
         if calls:
@@ -515,7 +563,7 @@ async def run_graph(
         if decision:
             values["decision"] = decision
 
-        finished = bool(node and (calls or results or debate or decision or _detect_node(prev, curr)))
+        finished = bool(finished_node and (calls or results or debate or decision))
         if values or node:
             yield _normalize_chunk(node, values, finished=finished)
 
