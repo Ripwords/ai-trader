@@ -32,7 +32,7 @@ useHead({ title: () => `research · ${symbol.value}` })
 
 const {
   events, status, verdict, runId, error, startedAt,
-  start, resume, cancel, loadFromHistory,
+  start, resume, cancel, loadFromHistory, reset,
 } = useAgentsRun()
 const router = useRouter()
 
@@ -125,6 +125,26 @@ interface StartOpts {
   selected_analysts: string[]
 }
 
+/**
+ * Cancel an in-flight run that the user can see is alive (via the
+ * breadcrumb pill or the RunCostEstimate banner) but hasn't deep-linked
+ * into. Hits the same DELETE endpoint the run-view's cancel button uses,
+ * then refreshes history so the row flips to ``cancelled`` in the UI.
+ */
+async function onCancelInFlight(targetRunId: string) {
+  try {
+    await fetch(
+      `/api/research/agents-run?run_id=${encodeURIComponent(targetRunId)}`,
+      { method: 'DELETE' },
+    )
+  }
+  catch {
+    /* server error — DB row is still in 'running'; refresh below
+       so the user can see what state we're actually in. */
+  }
+  void refreshHistory()
+}
+
 function onStart(opts: StartOpts) {
   void start(symbol.value, opts).then(() => {
     void refreshHistory()
@@ -167,12 +187,27 @@ watch(runId, (id) => {
 watch(
   queryRunId,
   async (id, prev) => {
-    if (!id) return
     if (id === prev) return
+
+    // Transition to NO ?run= — user clicked the symbol breadcrumb (or
+    // the URL was otherwise cleared). Drop composable state back to
+    // idle so the page re-renders the RunCostEstimate / history surface
+    // instead of staying stuck on the previously-loaded run's events.
+    // Also re-fetch history so any runs that completed since the last
+    // visit are visible.
+    if (!id) {
+      reset()
+      void refreshHistory()
+      return
+    }
+
+    // Already showing this run live — no replay needed.
     if (id === runId.value && events.value.length > 0) return
+
     await loadFromHistory(id)
-    // loadFromHistory resets to ``idle`` (composable-side) when the run
-    // doesn't exist anymore — typically a stale URL from a prior DB
+
+    // ``loadFromHistory`` resets to ``idle`` (composable-side) when the
+    // run doesn't exist anymore — typically a stale URL from a prior DB
     // state. Strip the ``?run=`` so subsequent refreshes don't keep
     // hitting the same dead lookup and surfacing 404s in the console.
     if (status.value === 'idle' && runId.value === null) {
@@ -278,7 +313,10 @@ watch(
             v-if="status === 'idle' && !canResume"
             :symbol="symbol"
             :run-history="costSamples"
+            :in-flight="!!liveRun"
+            :in-flight-run-id="liveRun?.id ?? null"
             @start="onStart"
+            @cancel-in-flight="onCancelInFlight"
           />
 
           <!-- Empty state inside an active run before any events arrive

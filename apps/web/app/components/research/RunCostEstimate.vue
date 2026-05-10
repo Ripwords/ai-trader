@@ -8,6 +8,12 @@ interface RunHistoryRow {
 interface Props {
   symbol: string
   runHistory: RunHistoryRow[]
+  /** A run is in-flight for this symbol (started from any tab, not just
+   *  this one). Disables the Run button + shows a hint pointing at the
+   *  live run, so the user can't accidentally fire a duplicate. */
+  inFlight?: boolean
+  /** Run-id of the in-flight run, if any. Used in the disabled-state hint. */
+  inFlightRunId?: string | null
 }
 
 const props = defineProps<Props>()
@@ -26,7 +32,14 @@ export interface StartOpts {
   selected_analysts: string[]
 }
 
-const emit = defineEmits<{ start: [opts: StartOpts] }>()
+const emit = defineEmits<{
+  start: [opts: StartOpts]
+  /** Fired when the user clicks Cancel on the in-flight banner. The page
+   *  routes this to the same DELETE-and-mark-cancelled flow the RunHeader
+   *  uses, so cancelling here is identical to cancelling from inside the
+   *  run view. */
+  cancelInFlight: [runId: string]
+}>()
 
 // ─── Knob state ──────────────────────────────────────────────────────
 const debateRounds = ref(1)
@@ -214,13 +227,44 @@ function onStart() {
       </fieldset>
     </div>
 
+    <!-- In-flight notice — appears when ANY run for this symbol is live
+         (started from another tab, queued via cron, or still spinning
+         from this session). Blocks the Run button to prevent duplicate
+         spend, links to the live run, offers an inline cancel. -->
+    <div v-if="inFlight" class="cost__live" role="status">
+      <span class="cost__live-beacon" aria-hidden="true" />
+      <span class="cost__live-text" data-mono>
+        a run is already in flight
+        <span v-if="inFlightRunId" class="cost__live-runid">
+          · {{ inFlightRunId.slice(0, 8) }}
+        </span>
+      </span>
+      <NuxtLink
+        v-if="inFlightRunId"
+        :to="{ path: `/research/${symbol}`, query: { run: inFlightRunId } }"
+        class="cost__live-jump"
+        data-mono
+      >
+        view →
+      </NuxtLink>
+      <button
+        v-if="inFlightRunId"
+        type="button"
+        class="cost__live-cancel"
+        @click="emit('cancelInFlight', inFlightRunId)"
+      >
+        <span data-mono>cancel</span>
+      </button>
+    </div>
+
     <button
       type="button"
       class="cost__run"
-      :disabled="!enoughAnalysts"
+      :disabled="!enoughAnalysts || inFlight"
+      :title="inFlight ? 'a run is already in flight; cancel it first' : ''"
       @click="onStart"
     >
-      <span data-mono>transmit run</span>
+      <span data-mono>{{ inFlight ? 'run pending' : 'transmit run' }}</span>
       <span class="cost__run-glyph" data-mono aria-hidden="true">→</span>
     </button>
   </section>
@@ -426,6 +470,75 @@ function onStart() {
   color: var(--paper-3);
   line-height: 1.45;
   max-width: 70ch;
+}
+
+/* ─── In-flight notice ─── */
+.cost__live {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  background: rgba(212, 169, 106, 0.06);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-left: 2px solid var(--accent);
+  border-radius: 3px;
+  flex-wrap: wrap;
+}
+.cost__live-beacon {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(212, 169, 106, 0.55);
+  animation: live-beacon 1.4s ease-out infinite;
+  flex-shrink: 0;
+}
+@keyframes live-beacon {
+  0%   { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0.55); }
+  70%  { box-shadow: 0 0 0 7px rgba(212, 169, 106, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0); }
+}
+.cost__live-text {
+  flex: 1;
+  font-size: 0.78rem;
+  color: var(--paper-1);
+  letter-spacing: 0.02em;
+}
+.cost__live-runid {
+  color: var(--paper-3);
+  font-variant-numeric: tabular-nums;
+}
+.cost__live-jump {
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 2px;
+  padding: 0.25rem 0.55rem;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+.cost__live-jump:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: var(--accent);
+}
+.cost__live-cancel {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--ink-line-strong);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--paper-2);
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease;
+}
+.cost__live-cancel:hover {
+  color: var(--tape-down);
+  border-color: var(--tape-down);
+  background: rgba(224, 122, 95, 0.06);
 }
 
 /* ─── Run button ─── */

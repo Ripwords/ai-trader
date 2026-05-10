@@ -173,6 +173,29 @@ export function useAgentsRun() {
    * ``_active_runs`` registry which calls ``task.cancel()`` on the asyncio
    * task — that's the actual stop signal.
    */
+  /**
+   * Drop all reactive state back to the idle baseline without touching
+   * the upstream run. Used by the page when the user clicks the symbol
+   * breadcrumb to exit a ?run=<id> deep-link — we want the page to
+   * render the RunCostEstimate again as if no run had been loaded.
+   * ``cancel()`` is the wrong tool there because we don't want to fire
+   * a DELETE on a finished historical run.
+   */
+  function reset() {
+    if (controller) {
+      controller.abort()
+      controller = null
+    }
+    stopPoll()
+    events.value = []
+    status.value = 'idle'
+    currentNode.value = null
+    verdict.value = null
+    runId.value = null
+    error.value = null
+    startedAt.value = null
+  }
+
   function cancel() {
     const idToCancel = runId.value
     controller?.abort()
@@ -310,6 +333,6 @@ export function useAgentsRun() {
   return {
     events, status, currentNode, verdict, runId, error,
     startedAt,
-    start, resume, cancel, loadFromHistory,
+    start, resume, cancel, loadFromHistory, reset,
   }
 }
