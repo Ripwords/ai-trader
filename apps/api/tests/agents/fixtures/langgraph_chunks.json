@@ -1,0 +1,38 @@
+[
+  {
+    "metadata": { "langgraph_node": "Market Analyst" },
+    "values": {
+      "tool_calls": [
+        { "name": "get_stock_data", "args": { "ticker": "NVDA", "start_date": "2026-04-01", "end_date": "2026-05-01" } }
+      ]
+    }
+  },
+  {
+    "metadata": { "langgraph_node": "Market Analyst" },
+    "values": {
+      "tool_results": [
+        { "name": "get_stock_data", "ok": true, "preview": "Daily bars for NVDA: open 1234.5, close 1240.1 ..." }
+      ]
+    }
+  },
+  {
+    "metadata": { "langgraph_node": "Market Analyst", "node_finished": true },
+    "values": {
+      "messages": [
+        { "role": "assistant", "content": "Market report: bullish trend with RSI 62 and MACD positive crossover." }
+      ]
+    }
+  },
+  {
+    "metadata": { "langgraph_node": "Bull Researcher" },
+    "values": {
+      "debate": { "round": 1, "side": "bull", "text": "NVDA's GPU demand is structural, not cyclical." }
+    }
+  },
+  {
+    "metadata": { "langgraph_node": "Trader" },
+    "values": {
+      "decision": { "rating": "buy", "confidence": 72, "rationale": "Strong fundamentals + bullish technicals." }
+    }
+  }
+]

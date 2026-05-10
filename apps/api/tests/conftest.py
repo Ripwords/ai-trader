@@ -1,12 +1,18 @@
+import os
 from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.deps import get_opend
-from app.main import create_app
-from app.settings import get_settings
-from tests.test_quote import FakeAdapter
+# Set agent-related env defaults BEFORE importing app modules so anything that
+# reads them at import time (settings, model_config) gets sane test values.
+os.environ.setdefault("INTERNAL_BEARER", "test-bearer")
+os.environ.setdefault("LLM_MODEL", "anthropic/claude-sonnet-4-6")
+
+from app.deps import get_opend  # noqa: E402
+from app.main import create_app  # noqa: E402
+from app.settings import get_settings  # noqa: E402
+from tests.test_quote import FakeAdapter  # noqa: E402
 
 
 @pytest.fixture

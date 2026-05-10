@@ -5,7 +5,16 @@ from typing import AsyncIterator
 from fastapi import Depends, FastAPI
 
 from app.deps import _build_adapter, require_internal_bearer
-from app.routers import algo, health, quote, research, synthesis, trade, watchlist
+from app.routers import (
+    agents,
+    algo,
+    health,
+    quote,
+    research,
+    synthesis,
+    trade,
+    watchlist,
+)
 from app.services.algo import repo as algo_repo
 from app.services.algo.scheduler import (
     AccountSummary,
@@ -116,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(algo.router)
     app.include_router(research.router)
     app.include_router(synthesis.router)
+    app.include_router(agents.router)
 
     @app.get("/_internal/whoami", dependencies=[Depends(require_internal_bearer)])
     async def whoami() -> dict[str, str]:
