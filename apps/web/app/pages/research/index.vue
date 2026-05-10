@@ -8,7 +8,7 @@
 //
 // Data comes from /api/research/symbols (owner-scoped per-symbol aggregate).
 
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 definePageMeta({ section: 'research' })
 useHead({ title: 'research' })
@@ -46,11 +46,28 @@ function ratingTone(r: string | null): 'up' | 'down' | 'neutral' {
   return 'neutral'
 }
 
+// ─── Hydration-safe clock ──────────────────────────────────────────
+// fmtRelative reads ``Date.now()``, which differs between SSR and client
+// hydration by a few hundred ms — that's enough to render "12m ago" on
+// the server and "13m ago" on the client and trip a hydration mismatch.
+// Gate the clock behind a ref that starts at ``null`` (server) and
+// gets populated in ``onMounted`` (client only). The template renders
+// a stable placeholder until then.
+const now = ref<number | null>(null)
+onMounted(() => {
+  now.value = Date.now()
+  // Refresh every minute so "12m ago" eventually becomes "13m ago"
+  // without needing a full re-fetch.
+  setInterval(() => { now.value = Date.now() }, 60_000)
+})
+
 function fmtRelative(iso: string | null): string {
   if (!iso) return '—'
+  // Pre-mount: stable absolute-date fallback so SSR and hydration match.
+  if (now.value === null) return iso.slice(0, 10)
   const then = new Date(iso).getTime()
   if (!Number.isFinite(then)) return '—'
-  const ms = Date.now() - then
+  const ms = now.value - then
   const s = Math.floor(ms / 1000)
   if (s < 60) return `${s}s ago`
   const m = Math.floor(s / 60)
@@ -59,7 +76,7 @@ function fmtRelative(iso: string | null): string {
   if (h < 24) return `${h}h ago`
   const d = Math.floor(h / 24)
   if (d < 30) return `${d}d ago`
-  return new Date(iso).toISOString().slice(0, 10)
+  return iso.slice(0, 10)
 }
 </script>
 
