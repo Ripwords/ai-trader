@@ -47,14 +47,14 @@
     {
       "idx": 6,
       "version": "7",
-      "when": 1778393742124,
+      "when": 1778992000000,
       "tag": "0007_agents",
       "breakpoints": true
     },
     {
       "idx": 7,
       "version": "7",
-      "when": 1778397482875,
+      "when": 1778992100000,
       "tag": "0008_drop_persona_tables",
       "breakpoints": true
     }

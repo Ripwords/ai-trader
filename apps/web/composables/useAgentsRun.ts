@@ -148,12 +148,27 @@ export function useAgentsRun() {
     await consumeStream(res, controller)
   }
 
+  /**
+   * Cancel an in-flight run.
+   *
+   * Two-step: aborting the local fetch closes the HTTP connection so the
+   * browser stops receiving events, but the *upstream task* on the api side
+   * keeps running until LangGraph notices the disconnect (which it may not,
+   * especially during a long LLM call). Calling DELETE
+   * /api/research/agents-run?run_id=<id> proxies through to the api's
+   * ``_active_runs`` registry which calls ``task.cancel()`` on the asyncio
+   * task — that's the actual stop signal.
+   */
   function cancel() {
+    const idToCancel = runId.value
     controller?.abort()
-    if (pollTimer !== null) {
-      clearInterval(pollTimer)
-      pollTimer = null
+    stopPoll()
+    if (idToCancel) {
+      void fetch(`/api/research/agents-run?run_id=${encodeURIComponent(idToCancel)}`, {
+        method: 'DELETE',
+      }).catch(() => null)
     }
+    if (status.value === 'running') status.value = 'cancelled'
   }
 
   /**

@@ -21,6 +21,11 @@ dependencies = [
   "langchain-openai>=0.3.23",
   "langgraph>=0.4.8",
   "langgraph-checkpoint-postgres>=2.0.0",
+  # langgraph-checkpoint-postgres pulls psycopg, which needs either
+  # the precompiled `binary` extra OR libpq installed system-wide.
+  # The api image has neither by default → pin the binary wheel here so
+  # `langgraph.checkpoint.postgres` imports cleanly on container boot.
+  "psycopg[binary]>=3.2",
   "stockstats>=0.6.5",
   "tradingagents>=0.2.4",
 ]
