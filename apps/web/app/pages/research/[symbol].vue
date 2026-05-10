@@ -64,6 +64,18 @@ const historyRows = computed(() =>
   })),
 )
 
+// Most-recent ``running`` row for this symbol, if any. Used by the
+// breadcrumb pill so the user always knows there's a live run in flight
+// (across browser tabs / refreshes) even if the local composable hasn't
+// hooked into it yet. The composable's status drives the in-page run
+// surface; this is the global "for this symbol" signal.
+const liveRun = computed(() => {
+  for (const r of historyRows.value) {
+    if (r.status === 'running') return r
+  }
+  return null
+})
+
 const costSamples = computed(() =>
   historyRows.value.map(r => ({ costUsd: r.costUsd })),
 )
@@ -174,24 +186,48 @@ watch(
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
-    <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
-      <div class="flex items-baseline gap-4">
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">research</span>
-        <span class="font-mono text-xs text-[var(--paper-3)]">/</span>
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-1)]" data-mono>{{ symbol }}</span>
-      </div>
-      <div class="flex items-center gap-5">
-        <NuxtLink
-          :to="`/research/report/${symbol}`"
-          class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]"
-        >
-          risk report →
+    <header class="page-header">
+      <!-- Breadcrumb: ``research`` exits to the index, the symbol exits the
+           current ?run=<id> deep-link back to the symbol's main view. Both
+           segments are clickable; ``aria-current`` marks the active leaf
+           when no specific run is being viewed. -->
+      <nav class="crumb" aria-label="breadcrumb">
+        <NuxtLink to="/research" class="crumb__link crumb__research">
+          research
         </NuxtLink>
+        <span class="crumb__sep" aria-hidden="true">/</span>
         <NuxtLink
-          to="/research"
-          class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]"
+          :to="{ path: `/research/${symbol}`, query: {} }"
+          class="crumb__link crumb__symbol"
+          :aria-current="!queryRunId ? 'page' : undefined"
+          data-mono
         >
-          ← research
+          {{ symbol }}
+        </NuxtLink>
+
+        <!-- Pills: live-run indicator when *any* run is in-flight for this
+             symbol; specific-run indicator when the URL has ?run=<id>. -->
+        <span
+          v-if="liveRun && liveRun.id !== queryRunId"
+          class="crumb__pill crumb__pill--live"
+          data-mono
+          :title="`run started ${liveRun.startedAt ?? ''}`"
+        >
+          <span class="crumb__beacon" /> live run
+        </span>
+        <span
+          v-if="queryRunId"
+          class="crumb__pill crumb__pill--specific"
+          data-mono
+          :title="`viewing run ${queryRunId}`"
+        >
+          run · {{ queryRunId.slice(0, 8) }}
+        </span>
+      </nav>
+
+      <div class="page-header__actions">
+        <NuxtLink :to="`/research/report/${symbol}`" class="page-header__link">
+          risk report →
         </NuxtLink>
       </div>
     </header>
@@ -302,6 +338,101 @@ watch(
 </template>
 
 <style scoped>
+/* ─── Page header / breadcrumb ─── */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 4rem;
+  padding: 0 1.75rem;
+  border-bottom: 1px solid var(--ink-line);
+  flex-shrink: 0;
+}
+
+.crumb {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.crumb__link {
+  color: var(--paper-3);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 1px;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+.crumb__link:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.crumb__symbol {
+  color: var(--paper-1);
+  letter-spacing: 0.06em;
+}
+.crumb__symbol[aria-current="page"] {
+  /* Active leaf — visually the heaviest segment but still clickable
+     (clicking on the active symbol is a no-op refresh, which is fine). */
+  color: var(--paper-0);
+  cursor: default;
+}
+.crumb__sep { color: var(--ink-line-strong); }
+
+.crumb__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 2px;
+  border: 1px solid var(--ink-line-strong);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--paper-3);
+  background: var(--ink-2);
+}
+.crumb__pill--live {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.crumb__pill--specific {
+  color: var(--paper-1);
+  background: var(--ink-2);
+}
+.crumb__beacon {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(212, 169, 106, 0.5);
+  animation: crumb-beacon 1.4s ease-out infinite;
+}
+@keyframes crumb-beacon {
+  0%   { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0.55); }
+  70%  { box-shadow: 0 0 0 5px rgba(212, 169, 106, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0); }
+}
+
+.page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-shrink: 0;
+}
+.page-header__link {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--paper-3);
+  text-decoration: none;
+  transition: color 140ms ease;
+}
+.page-header__link:hover { color: var(--accent); }
+
 /* ─── Layout: a generous editorial column for the active run, with a
    smaller history aside. The run is the page; history sits beside,
    not below, so the user always knows where to look back. ─── */
