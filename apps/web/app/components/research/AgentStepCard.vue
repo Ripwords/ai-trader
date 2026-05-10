@@ -14,6 +14,10 @@ interface Props {
   toolCalls: ToolCall[]
   summary: string | null
   state: 'running' | 'done' | 'failed'
+  /** Full markdown report from the matching ``*_report`` AgentState field,
+   *  if one has been emitted for this node. When set, the expanded card
+   *  swaps the truncated summary for the full report. */
+  report?: string | null
 }
 
 const props = defineProps<Props>()
@@ -107,8 +111,20 @@ function previewSnippet(s: string | undefined): string {
         </li>
       </ol>
 
+      <!-- Full report takes precedence over the truncated node-end summary
+           when it's available. The summary is a 500-char preview pulled
+           from the last assistant message; the report is the canonical
+           markdown TradingAgents writes into AgentState. -->
+      <section v-if="report" class="report">
+        <header class="report__head">
+          <span class="report__eyebrow">analyst report</span>
+          <span class="report__rule" aria-hidden="true" />
+        </header>
+        <MarkdownText :content="report" flush />
+      </section>
+
       <MarkdownText
-        v-if="summary"
+        v-else-if="summary"
         :content="summary"
         flush
         class="summary"
@@ -277,5 +293,37 @@ function previewSnippet(s: string | undefined): string {
   max-width: 72ch;
   /* MarkdownText sets its own font sizes / colours; we only provide the
      surrounding card surface. */
+}
+
+/* ─── Analyst report (full markdown) ─── */
+.report {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem 0.95rem;
+  background: var(--ink-1);
+  border: 1px solid var(--ink-line);
+  border-left: 2px solid var(--accent);
+  border-radius: 3px;
+  /* Reports are long-form prose; let them breathe wider than tool log. */
+  max-width: none;
+}
+.report__head {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+.report__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.report__rule {
+  flex: 1;
+  height: 1px;
+  background: var(--ink-line);
 }
 </style>

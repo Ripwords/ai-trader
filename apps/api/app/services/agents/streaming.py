@@ -83,6 +83,33 @@ async def translate_chunks(
                 "side": debate.get("side"),
                 "text": debate.get("text", ""),
             }
+        risk_debate = values.get("risk_debate")
+        if risk_debate:
+            yield {
+                "type": "risk-debate-turn",
+                "speaker": risk_debate.get("speaker"),
+                "text": risk_debate.get("text", ""),
+                "turn": risk_debate.get("turn", 0),
+            }
+        # Full per-analyst markdown reports — one event each so the UI can
+        # attach them to the right step card. ``content`` is the unmodified
+        # report; truncation is the renderer's choice.
+        for r in values.get("reports") or []:
+            yield {
+                "type": "report",
+                "kind": r.get("kind"),
+                "node": r.get("node"),
+                "content": r.get("content", ""),
+            }
+        # Synthesis artifacts — Research Manager's investment_plan, Trader's
+        # trader_investment_plan, intermediate judge_decisions.
+        for s in values.get("synthesis") or []:
+            yield {
+                "type": "synthesis",
+                "stage": s.get("stage"),
+                "node": s.get("node"),
+                "content": s.get("content", ""),
+            }
         decision = values.get("decision")
         if decision:
             yield {

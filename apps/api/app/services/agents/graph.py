@@ -345,6 +345,118 @@ def _extract_debate(prev: dict, curr: dict) -> dict | None:
     return {"round": (ccount + 1) // 2, "side": side, "text": text}
 
 
+# Map ``*_report`` AgentState field → (kind tag, analyst label). The tag is
+# what the UI uses to colour-code / route the report; the label matches the
+# ``node`` we already emit elsewhere so the report can be attached to the
+# right step card.
+_REPORT_KIND_MAP: tuple[tuple[str, str, str], ...] = (
+    ("market_report",       "market",       "Market Analyst"),
+    ("sentiment_report",    "sentiment",    "Social Analyst"),
+    ("news_report",         "news",         "News Analyst"),
+    ("fundamentals_report", "fundamentals", "Fundamentals Analyst"),
+)
+
+
+def _extract_reports(prev: dict, curr: dict) -> list[dict]:
+    """Return one entry per analyst report that just landed.
+
+    TradingAgents writes each analyst's full markdown report into its own
+    AgentState field at the end of that node's run. Earlier we only surfaced
+    a 500-char ``summary`` truncation in ``node-end`` — the bulk of the
+    pipeline's output never reached the UI. Now we emit a separate ``report``
+    event with the full markdown so the UI can render each analyst's full
+    research note.
+    """
+    out: list[dict] = []
+    for field, kind, node in _REPORT_KIND_MAP:
+        pval = prev.get(field) or ""
+        cval = curr.get(field) or ""
+        if cval and cval != pval:
+            out.append({"kind": kind, "node": node, "content": cval})
+    return out
+
+
+def _extract_synthesis(prev: dict, curr: dict) -> list[dict]:
+    """Surface the Research Manager + Trader plans as standalone artifacts.
+
+    These intermediate syntheses (``investment_plan`` from the Research
+    Manager, ``trader_investment_plan`` from the Trader) are full markdown
+    documents in their own right but were getting swallowed by the
+    truncated node-end summary. Each becomes a ``synthesis`` event with a
+    distinct ``stage`` so the UI can place them between debate and verdict.
+    """
+    out: list[dict] = []
+    p_inv = prev.get("investment_plan") or ""
+    c_inv = curr.get("investment_plan") or ""
+    if c_inv and c_inv != p_inv:
+        out.append({"stage": "investment-plan", "node": "Research Manager", "content": c_inv})
+    p_tr = prev.get("trader_investment_plan") or ""
+    c_tr = curr.get("trader_investment_plan") or ""
+    if c_tr and c_tr != p_tr:
+        out.append({"stage": "trader-plan", "node": "Trader", "content": c_tr})
+    # The Research Manager's ``judge_decision`` on the bull/bear debate is
+    # also a distinct artifact — closing argument for the investment debate
+    # before the Trader picks it up.
+    pdb = prev.get("investment_debate_state") or {}
+    cdb = curr.get("investment_debate_state") or {}
+    if isinstance(pdb, dict) and isinstance(cdb, dict):
+        pj = pdb.get("judge_decision") or ""
+        cj = cdb.get("judge_decision") or ""
+        if cj and cj != pj:
+            out.append({"stage": "judge-decision", "node": "Research Manager", "content": cj})
+    return out
+
+
+# Map ``current_<speaker>_response`` field → speaker label. The risk debate
+# is three-way (aggressive vs conservative vs neutral) and rotates through
+# them; we identify whose turn just fired by ``latest_speaker`` from the
+# state, falling back to whichever response field changed.
+_RISK_SPEAKERS: tuple[tuple[str, str], ...] = (
+    ("current_aggressive_response",  "aggressive"),
+    ("current_conservative_response", "conservative"),
+    ("current_neutral_response",     "neutral"),
+)
+
+
+def _extract_risk_debate(prev: dict, curr: dict) -> dict | None:
+    """Detect a new turn in the three-way risk debate.
+
+    Driven by ``risk_debate_state.count`` so a quiet round (no text but the
+    speaker pointer advanced) doesn't produce a ghost event. The speaker is
+    inferred from which ``current_<X>_response`` field changed — more
+    reliable than ``latest_speaker``, which lags by one tick in some
+    upstream branches.
+    """
+    pdb = prev.get("risk_debate_state") or {}
+    cdb = curr.get("risk_debate_state") or {}
+    if not (isinstance(pdb, dict) and isinstance(cdb, dict)):
+        return None
+    pcount = pdb.get("count", 0)
+    ccount = cdb.get("count", 0)
+    if ccount <= pcount:
+        return None
+    speaker: str | None = None
+    text: str = ""
+    for field, label in _RISK_SPEAKERS:
+        if (cdb.get(field) or "") != (pdb.get(field) or ""):
+            speaker = label
+            text = cdb.get(field) or ""
+            break
+    if speaker is None:
+        # Fallback: trust ``latest_speaker``. TradingAgents stores it as a
+        # human-readable name (``"Risky Analyst"``) so we normalise.
+        raw = (cdb.get("latest_speaker") or "").lower()
+        if "aggress" in raw or "risky" in raw:
+            speaker = "aggressive"
+        elif "conserv" in raw or "safe" in raw:
+            speaker = "conservative"
+        elif "neutral" in raw:
+            speaker = "neutral"
+        else:
+            return None
+    return {"speaker": speaker, "text": text, "turn": ccount}
+
+
 # Match the five wire-supported rating buckets in the trader's free-text
 # decision. Order matters: we test ``strong-buy`` / ``strong-sell`` before
 # the plain ``buy`` / ``sell`` regexes so a ``STRONG BUY`` doesn't get
@@ -575,11 +687,20 @@ async def run_graph(
         debate = _extract_debate(prev, curr)
         if debate:
             values["debate"] = debate
+        risk_debate = _extract_risk_debate(prev, curr)
+        if risk_debate:
+            values["risk_debate"] = risk_debate
+        reports = _extract_reports(prev, curr)
+        if reports:
+            values["reports"] = reports
+        synthesis = _extract_synthesis(prev, curr)
+        if synthesis:
+            values["synthesis"] = synthesis
         decision = _extract_decision(prev, curr)
         if decision:
             values["decision"] = decision
 
-        finished = bool(finished_node and (calls or results or debate or decision))
+        finished = bool(finished_node and (calls or results or debate or decision or reports))
         if values or node:
             yield _normalize_chunk(node, values, finished=finished)
 
