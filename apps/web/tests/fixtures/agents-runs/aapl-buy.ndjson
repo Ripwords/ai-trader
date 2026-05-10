@@ -1,0 +1,12 @@
+{"type":"run-start","run_id":"e2e-1","symbol":"AAPL","config":{"max_debate_rounds":1,"deep_thinking":true}}
+{"type":"node-start","node":"fundamentals_analyst"}
+{"type":"tool-call","node":"fundamentals_analyst","tool":"get_balance_sheet","args":{"ticker":"AAPL"}}
+{"type":"tool-result","node":"fundamentals_analyst","tool":"get_balance_sheet","ok":true,"preview":"AAPL fundamentals look healthy"}
+{"type":"node-end","node":"fundamentals_analyst","summary":"strong balance sheet"}
+{"type":"node-start","node":"bull_researcher"}
+{"type":"debate-round","round":1,"side":"bull","text":"AAPL has strong cash flow"}
+{"type":"debate-round","round":1,"side":"bear","text":"China risk is real"}
+{"type":"node-end","node":"bull_researcher","summary":"bull case wins"}
+{"type":"node-start","node":"trader"}
+{"type":"decision","rating":"buy","confidence":72,"rationale":"strong fundamentals + bull thesis"}
+{"type":"run-end","run_id":"e2e-1","tokens_in":12000,"tokens_out":3000,"cost_usd":0.36}
