@@ -21,6 +21,7 @@ services:
     build:
       context: ./apps/web
       target: migrate
+    image: ai-trader-drizzle-migrate:latest
     environment:
       # Derive from parts so it can't drift if you rotate POSTGRES_PASSWORD.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -31,6 +32,7 @@ services:
 
   api:
     build: ./apps/api
+    image: ai-trader-api:latest
     environment:
       INTERNAL_BEARER: ${INTERNAL_BEARER}
       OPEND_HOST: ${OPEND_HOST}
