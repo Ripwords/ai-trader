@@ -48,6 +48,7 @@ services:
 
   web:
     build: ./apps/web
+    image: ai-trader-web:latest
     # Container ships the Nitro prod bundle (no bind mount, no HMR).
     # After editing apps/web: `docker compose up -d --build web`.
     environment:
