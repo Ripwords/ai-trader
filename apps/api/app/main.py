@@ -13,8 +13,6 @@ from app.routers import (
     algo,
     health,
     quote,
-    research,
-    synthesis,
     trade,
     watchlist,
 )
@@ -189,8 +187,6 @@ def create_app() -> FastAPI:
     app.include_router(watchlist.router)
     app.include_router(trade.router)
     app.include_router(algo.router)
-    app.include_router(research.router)
-    app.include_router(synthesis.router)
     app.include_router(agents.router)
 
     @app.get("/_internal/whoami", dependencies=[Depends(require_internal_bearer)])
