@@ -62,6 +62,7 @@ Checkpointing (Task 8):
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -289,19 +290,82 @@ def _extract_debate(prev: dict, curr: dict) -> dict | None:
     return {"round": (ccount + 1) // 2, "side": side, "text": text}
 
 
+# Match the five wire-supported rating buckets in the trader's free-text
+# decision. Order matters: we test ``strong-buy`` / ``strong-sell`` before
+# the plain ``buy`` / ``sell`` regexes so a ``STRONG BUY`` doesn't get
+# clobbered into ``buy``. ``\W*`` between ``strong`` and ``buy``/``sell``
+# tolerates hyphen, space, or no separator (``STRONG-BUY``, ``STRONG BUY``,
+# ``STRONGBUY``). All matches are case-insensitive at the call site.
+_RATING_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # ``strong-sell`` isn't a wire rating — collapse it to ``sell`` (still
+    # bearish) without letting the regex below mistake it for a plain
+    # ``sell`` and skip the plain ``buy`` branch's eagerness.
+    ("sell", re.compile(r"\bstrong\W*sell\b", re.IGNORECASE)),
+    ("strong-buy", re.compile(r"\bstrong\W*buy\b", re.IGNORECASE)),
+    ("reduce", re.compile(r"\breduce\b", re.IGNORECASE)),
+    # Use word boundaries so ``buyers``/``selling`` don't trip the match.
+    ("sell", re.compile(r"\bsell\b", re.IGNORECASE)),
+    ("buy", re.compile(r"\bbuy\b", re.IGNORECASE)),
+    ("hold", re.compile(r"\bhold\b", re.IGNORECASE)),
+)
+
+# Confidence is sometimes reported as ``confidence: 85`` or ``confidence 72%``
+# — accept both. The unsigned regex naturally drops a leading ``-`` (so
+# ``-5`` is read as ``5``).
+_CONFIDENCE_PATTERN = re.compile(
+    r"confidence[:\s]+(\d{1,3})", re.IGNORECASE
+)
+
+# ``confidence`` is ``integer NOT NULL`` in agent_decisions; we must hand
+# the tee writer a real int even when the LLM doesn't volunteer a number.
+# Mid-confidence (50) is the least-bad default — high enough that a
+# reasonable rating doesn't look anchored at zero, low enough that a UI
+# treating confidence as a weight doesn't over-trust the run.
+_DEFAULT_CONFIDENCE = 50
+
+
+def _parse_rating(text: str) -> str:
+    """Return the wire rating for ``text``. Defaults to ``hold`` when none match."""
+    for label, pattern in _RATING_PATTERNS:
+        if pattern.search(text):
+            return label
+    return "hold"
+
+
+def _parse_confidence(text: str) -> int:
+    """Extract an integer confidence in [0, 100], else :data:`_DEFAULT_CONFIDENCE`."""
+    m = _CONFIDENCE_PATTERN.search(text)
+    if not m:
+        return _DEFAULT_CONFIDENCE
+    try:
+        value = int(m.group(1))
+    except ValueError:
+        return _DEFAULT_CONFIDENCE
+    return max(0, min(100, value))
+
+
 def _extract_decision(prev: dict, curr: dict) -> dict | None:
-    """Surface ``final_trade_decision`` as a structured decision event."""
+    """Surface ``final_trade_decision`` as a structured decision event.
+
+    Recognises all five wire ratings (``strong-buy``, ``buy``, ``hold``,
+    ``reduce``, ``sell``) and parses an optional confidence number from
+    the decision text. Returns ``None`` when nothing changed (or the field
+    is empty), letting the caller skip emitting a ``decision`` event.
+
+    ``confidence`` is always an integer (defaults to 50 when not parseable)
+    because the downstream ``agent_decisions.confidence`` column is
+    ``NOT NULL``; the tee writer would silently lose the row if we passed
+    ``None`` here.
+    """
     pdec = prev.get("final_trade_decision") or ""
     cdec = curr.get("final_trade_decision") or ""
     if not cdec or cdec == pdec:
         return None
-    rating = "hold"
-    upper = cdec.upper()
-    if "BUY" in upper:
-        rating = "buy"
-    elif "SELL" in upper:
-        rating = "sell"
-    return {"rating": rating, "confidence": None, "rationale": cdec[:500]}
+    return {
+        "rating": _parse_rating(cdec),
+        "confidence": _parse_confidence(cdec),
+        "rationale": cdec[:500],
+    }
 
 
 def _state_snapshot(state: Any) -> dict:
