@@ -1,4 +1,5 @@
-import { boolean, date, integer, jsonb, numeric, pgTable, primaryKey, serial, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
+import { bigserial, boolean, date, index, integer, jsonb, numeric, pgTable, primaryKey, serial, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core'
 
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -156,4 +157,80 @@ export const llmUsage = pgTable('llm_usage', {
   totalTokens: integer('total_tokens').notNull(),
   estimatedCostUsd: numeric('estimated_cost_usd', { precision: 12, scale: 6 }).notNull().default('0'),
   ts: timestamp('ts').defaultNow().notNull(),
+})
+
+// TradingAgents (LangGraph) run record. One row per analyze invocation —
+// captures inputs (symbol/date/config), terminal status, and token/cost
+// telemetry. `resumedFrom` lets a re-run reference its parent. The partial
+// index on status='running' is the hot lookup for the "is this user already
+// running an agent?" check.
+export const agentRuns = pgTable('agent_runs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  symbol: text('symbol').notNull(),
+  tradeDate: date('trade_date').notNull(),
+  config: jsonb('config').notNull(),
+  status: text('status').notNull(),
+  resumedFrom: uuid('resumed_from'),
+  tokensIn: integer('tokens_in'),
+  tokensOut: integer('tokens_out'),
+  costUsd: numeric('cost_usd', { precision: 10, scale: 4 }),
+  error: text('error'),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+}, t => ({
+  userSymbolDate: index('agent_runs_user_symbol_date_idx').on(t.userId, t.symbol, t.tradeDate),
+  runningOnly: index('agent_runs_running_idx').on(t.status).where(sql`status = 'running'`),
+}))
+
+// Streamed messages from a run — analyst chatter, tool calls, debate turns,
+// final verdicts. `seq` is monotonic per run so a resume can resume from the
+// last seq. `kind` ∈ {'analyst','tool','debate','manager','trader','risk','status'}.
+export const agentMessages = pgTable('agent_messages', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  runId: uuid('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+  seq: integer('seq').notNull(),
+  kind: text('kind').notNull(),
+  node: text('node'),
+  payload: jsonb('payload').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  unique: uniqueIndex('agent_messages_run_seq_uq').on(t.runId, t.seq),
+}))
+
+// Final trade decision for a run. One per run (UNIQUE on runId). `rating` ∈
+// {'BUY','SELL','HOLD'}. `paperOrderId` is intentionally a plain nullable
+// uuid with NO foreign-key constraint — the `paper_orders` table doesn't
+// exist yet. A real FK will be added when paper_orders ships in a later
+// migration.
+export const agentDecisions = pgTable('agent_decisions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  runId: uuid('run_id').notNull().unique().references(() => agentRuns.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  symbol: text('symbol').notNull(),
+  tradeDate: date('trade_date').notNull(),
+  rating: text('rating').notNull(),
+  confidence: integer('confidence').notNull(),
+  rationale: text('rationale').notNull(),
+  priceAtDecision: numeric('price_at_decision', { precision: 18, scale: 6 }),
+  // No FK — paper_orders table not yet introduced. Will gain FK in a later migration.
+  paperOrderId: uuid('paper_order_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  bySymbol: index('agent_decisions_user_symbol_idx').on(t.userId, t.symbol, t.createdAt),
+}))
+
+// Post-hoc reflection on a decision after `horizonDays`. `outcome` ∈
+// {'win','loss','neutral'}. One reflection per decision (UNIQUE on
+// decisionId).
+export const agentReflections = pgTable('agent_reflections', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  decisionId: uuid('decision_id').notNull().unique().references(() => agentDecisions.id, { onDelete: 'cascade' }),
+  reflectedAt: timestamp('reflected_at', { withTimezone: true }).notNull().defaultNow(),
+  horizonDays: integer('horizon_days').notNull(),
+  realizedReturn: numeric('realized_return', { precision: 8, scale: 4 }),
+  benchmarkReturn: numeric('benchmark_return', { precision: 8, scale: 4 }),
+  alpha: numeric('alpha', { precision: 8, scale: 4 }),
+  outcome: text('outcome').notNull(),
+  text: text('text').notNull(),
 })
