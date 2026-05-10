@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import MarkdownText from './MarkdownText.vue'
 
 interface ToolCall {
   tool: string
@@ -114,7 +115,12 @@ function previewSnippet(s: string | undefined): string {
         </li>
       </ol>
 
-      <p v-if="summary" class="summary">{{ summary }}</p>
+      <MarkdownText
+        v-if="summary"
+        :content="summary"
+        flush
+        class="summary"
+      />
     </div>
   </article>
 </template>
@@ -272,14 +278,12 @@ function previewSnippet(s: string | undefined): string {
 }
 
 .summary {
-  margin: 0;
-  font-size: 0.85rem;
-  line-height: 1.55;
-  color: var(--paper-1);
-  padding: 0.55rem 0.8rem;
+  padding: 0.6rem 0.85rem;
   background: var(--ink-2);
   border-radius: 3px;
   border-left: 2px solid var(--accent-soft);
   max-width: 72ch;
+  /* MarkdownText sets its own font sizes / colours; we only provide the
+     surrounding card surface. */
 }
 </style>

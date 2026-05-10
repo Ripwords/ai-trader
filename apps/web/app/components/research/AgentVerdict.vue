@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { Rating } from '../../../types/agents'
+import MarkdownText from './MarkdownText.vue'
 
 interface Props {
   rating: Rating
@@ -102,7 +103,7 @@ const ringDash = computed(() => {
     </button>
 
     <div v-if="expanded" class="verdict__rationale-wrap">
-      <p class="verdict__rationale">{{ rationale }}</p>
+      <MarkdownText :content="rationale" class="verdict__rationale" />
     </div>
 
     <footer class="verdict__foot">
@@ -286,16 +287,7 @@ const ringDash = computed(() => {
 .verdict[data-tone="down"]    .verdict__rationale-wrap { border-left-color: color-mix(in srgb, var(--tape-down) 30%, transparent); }
 .verdict[data-tone="neutral"] .verdict__rationale-wrap { border-left-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 
-.verdict__rationale {
-  margin: 0;
-  font-size: 0.92rem;
-  line-height: 1.65;
-  color: var(--paper-1);
-  max-width: 65ch;
-  white-space: pre-wrap;
-  /* Tight sibling-letter spacing for body to keep the editorial feel. */
-  letter-spacing: 0.005em;
-}
+/* MarkdownText supplies its own styling; no overrides needed here. */
 
 /* ─── Footer ─── */
 .verdict__foot {

@@ -191,14 +191,11 @@ const statusLabel = computed(() => {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: linear-gradient(180deg, var(--ink-1) 0%, var(--ink-1) 80%, transparent 100%);
-  border-bottom: 1px solid var(--ink-line-strong);
-  padding: 1.1rem 1.5rem 0.85rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-  /* Subtle scanline texture for the "tape" feel — barely perceptible but
-     reads as transmitting hardware rather than chrome. */
+  /* Solid background — earlier I had a fade-to-transparent at the bottom for
+     a "soft" effect, but it let timeline cards underneath bleed through and
+     collide with the elapsed counter. The header is a fixed surface; treat
+     it like one. The shadow underneath provides the elevation cue instead. */
+  background-color: var(--ink-1);
   background-image:
     linear-gradient(180deg, transparent 0%, rgba(212, 169, 106, 0.015) 50%, transparent 100%),
     repeating-linear-gradient(
@@ -206,6 +203,12 @@ const statusLabel = computed(() => {
       transparent 0px, transparent 3px,
       rgba(255, 245, 230, 0.012) 3px, rgba(255, 245, 230, 0.012) 4px
     );
+  border-bottom: 1px solid var(--ink-line-strong);
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.5);
+  padding: 0.9rem 1.5rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
 }
 .run-header[data-status="running"]::before {
   /* Active runs get a thin amber rule along the bottom — the "live wire". */
@@ -284,9 +287,9 @@ const statusLabel = computed(() => {
   min-width: 6.5rem;
 }
 .run-header__elapsed-value {
-  font-size: 2.4rem;
+  font-size: 1.65rem;
   line-height: 1;
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.02em;
   color: var(--paper-0);
   font-variant-numeric: tabular-nums;

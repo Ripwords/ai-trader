@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MarkdownText from './MarkdownText.vue'
 defineProps<{ round: number; bull: string; bear: string }>()
 </script>
 
@@ -18,7 +19,8 @@ defineProps<{ round: number; bull: string; bear: string }>()
           <span class="debate__arrow" data-mono aria-hidden="true">▲</span>
           bull
         </span>
-        <p class="debate__text">{{ bull || '—' }}</p>
+        <MarkdownText v-if="bull" :content="bull" flush class="debate__text" />
+        <p v-else class="debate__text debate__text--empty">—</p>
       </article>
 
       <div class="debate__divider" aria-hidden="true" />
@@ -28,7 +30,8 @@ defineProps<{ round: number; bull: string; bear: string }>()
           <span class="debate__arrow" data-mono aria-hidden="true">▼</span>
           bear
         </span>
-        <p class="debate__text">{{ bear || '—' }}</p>
+        <MarkdownText v-if="bear" :content="bear" flush class="debate__text" />
+        <p v-else class="debate__text debate__text--empty">—</p>
       </article>
     </div>
   </section>
@@ -123,19 +126,18 @@ defineProps<{ round: number; bull: string; bear: string }>()
 }
 
 .debate__text {
-  margin: 0;
-  font-size: 0.88rem;
-  line-height: 1.65;
-  color: var(--paper-1);
-  white-space: pre-wrap;
-  /* Editorial measure — keep the reading column sharp and self-contained. */
+  /* MarkdownText brings its own typographic styling. We only constrain the
+     measure so each side stays in its column without bleeding wide. */
   max-width: 50ch;
-  letter-spacing: 0.005em;
+}
+.debate__text--empty {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--paper-3);
 }
 .debate__col[data-side="bear"] .debate__text {
   /* Bear sits visually quieter — the page should feel like a reasoned
      contrarian voice, not a screaming red box. */
-  color: var(--paper-1);
   opacity: 0.96;
 }
 </style>

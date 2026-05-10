@@ -31,6 +31,7 @@
     "codemirror": "^6.0.2",
     "diff": "^9.0.0",
     "lightweight-charts": "^5.2.0",
+    "marked": "^18.0.3",
     "nuxt": "^4.4.4",
     "ofetch": "^1.5.1",
     "shiki": "^4.0.2",
