@@ -218,11 +218,15 @@ const ringDash = computed(() => {
 
 .verdict__ring {
   position: relative;
-  width: 80px;
-  height: 80px;
+  width: 96px;
+  height: 96px;
   flex-shrink: 0;
 }
-.verdict__ring svg { display: block; }
+.verdict__ring svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .verdict__ring-bg { stroke: var(--ink-line-strong); }
 .verdict__ring-fg {
   stroke: var(--paper-1);
@@ -233,22 +237,36 @@ const ringDash = computed(() => {
 .verdict[data-tone="neutral"] .verdict__ring-fg { stroke: var(--accent); }
 
 .verdict__ring-label {
+  /* Sit in the geometric centre of the ring. ``align-items: baseline``
+     was forcing the text up because the value and unit have different
+     font sizes — baseline alignment shoves the line-box around. Use
+     centered alignment with explicit baseline coupling on the children
+     instead so the ``50`` and ``%`` still share a typographic baseline
+     but the whole label is vertically centred in the ring. */
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: center;
-  gap: 0.1rem;
+  gap: 0.05rem;
+  pointer-events: none;
 }
 .verdict__ring-value {
   font-size: 1.35rem;
   font-weight: 500;
+  line-height: 1;
   color: var(--paper-0);
   font-variant-numeric: tabular-nums;
 }
 .verdict__ring-unit {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
+  line-height: 1;
   color: var(--paper-3);
+  /* Nudge the ``%`` so it baselines with the digits instead of sitting
+     centred on the line-box, which always reads "above" next to a
+     larger character. */
+  align-self: flex-end;
+  padding-bottom: 0.18rem;
 }
 
 /* ─── Toggle + rationale ─── */
