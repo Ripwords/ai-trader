@@ -204,27 +204,67 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         )
 
     @tool
-    async def get_indicators(symbol: str, indicator: str, date: str) -> str:
-        """Technical indicator value (rsi/macd/etc.) for the given symbol on the given date."""
+    async def get_indicators(
+        symbol: str,
+        indicator: str | list[str],
+        curr_date: str,
+        look_back_days: int = 30,
+    ) -> str:
+        """Compute one or more technical indicators (RSI, MACD, BBANDS, …)
+        for the given symbol over the trailing ``look_back_days`` window.
+
+        Mirrors TradingAgents' bundled ``get_indicators`` signature so analyst
+        prompts that request multiple indicators in one call (``"macd,rsi"``
+        or ``["macd", "rsi"]``) hit the right path. ``indicator`` accepts a
+        single name, a list, or a comma-separated string.
+        """
         if opend_client is None:
             return f"Market data unavailable for {symbol}."
+
+        if isinstance(indicator, list):
+            indicators = [str(s).strip() for s in indicator if str(s).strip()]
+        else:
+            indicators = [s.strip() for s in str(indicator).split(",") if s.strip()]
+        if not indicators:
+            return "No indicators requested."
+
         moomoo_code = _normalize_moomoo_symbol(symbol)
-        bars = await _kline_bars(opend_client, moomoo_code, ktype="K_DAY", num=252)
-        df = pd.DataFrame(bars).rename(
-            columns={
-                "open": "open",
-                "high": "high",
-                "low": "low",
-                "close": "close",
-                "volume": "volume",
-            }
+        # Daily bars; ``look_back_days`` plus a small buffer so multi-period
+        # indicators like SMA-50 / MACD have warm-up data on the front end.
+        bars = await _kline_bars(
+            opend_client, moomoo_code, ktype="K_DAY", num=max(look_back_days + 60, 120)
         )
+        df = pd.DataFrame(bars)
         sdf = stockstats.StockDataFrame.retype(df)
-        try:
-            value = float(sdf[indicator].iloc[-1])
-        except KeyError:
-            return f"Indicator {indicator!r} not supported."
-        return f"{indicator.upper()} for {symbol} on {date}: {value:.4f}"
+
+        sections: list[str] = []
+        for ind in indicators:
+            try:
+                series = sdf[ind]
+            except (KeyError, ValueError) as e:
+                sections.append(f"{ind.upper()}: unsupported ({e})")
+                continue
+            if isinstance(series, pd.Series):
+                latest = series.iloc[-1]
+                try:
+                    val = f"{float(latest):.4f}"
+                except (TypeError, ValueError):
+                    val = str(latest)
+                sections.append(f"{ind.upper()}: {val}")
+            elif isinstance(series, pd.DataFrame):
+                # Some indicators (boll → boll, boll_ub, boll_lb) are
+                # multi-column. Render every column on its own line.
+                row = series.iloc[-1]
+                lines = [
+                    f"{ind.upper()}.{col}: "
+                    + (f"{float(row[col]):.4f}" if pd.notna(row[col]) else "n/a")
+                    for col in series.columns
+                ]
+                sections.append("\n".join(lines))
+            else:
+                sections.append(f"{ind.upper()}: {series}")
+        body = "\n".join(sections)
+        return f"Indicators for {symbol} as of {curr_date} (look_back={look_back_days}d):\n{body}"
 
     return AgentToolkit(
         get_stock_data=get_stock_data,

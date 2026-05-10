@@ -22,6 +22,62 @@ def test_normalize_moomoo_symbol_preserves_existing_prefix():
 
 
 @pytest.mark.asyncio
+async def test_get_indicators_accepts_comma_separated_string():
+    """TradingAgents' analyst prompts call get_indicators with a
+    comma-separated string of indicators (``"macd,rsi"``). Our shim must
+    split + iterate, not pass the joined string to stockstats which would
+    error with ``Invalid number of return arguments``."""
+    class FakeOpend:
+        async def get_kline(self, symbol, ktype, num):
+            # 200 days of synthetic OHLCV; enough warmup for SMA / MACD.
+            return [
+                {"time": f"2026-01-{(i % 28) + 1:02d}",
+                 "open": 100 + i * 0.1, "high": 101 + i * 0.1,
+                 "low": 99 + i * 0.1, "close": 100 + i * 0.1,
+                 "volume": 1_000_000}
+                for i in range(200)
+            ]
+
+    toolkit = build_toolkit(opend_client=FakeOpend())
+    result = await toolkit.get_indicators.ainvoke({
+        "symbol": "AAPL",
+        "indicator": "rsi,macd",
+        "curr_date": "2026-05-10",
+        "look_back_days": 60,
+    })
+    assert "RSI:" in result.upper()
+    assert "MACD:" in result.upper()
+
+
+@pytest.mark.asyncio
+async def test_get_indicators_handles_multi_column_indicator():
+    """``boll`` returns three columns (boll, boll_ub, boll_lb); the previous
+    shim crashed with ``Invalid number of return arguments`` because it
+    indexed the joined column name."""
+    class FakeOpend:
+        async def get_kline(self, symbol, ktype, num):
+            return [
+                {"time": f"2026-01-{(i % 28) + 1:02d}",
+                 "open": 100.0, "high": 101.0, "low": 99.0,
+                 "close": 100.0 + (i % 5) * 0.5, "volume": 1_000_000}
+                for i in range(200)
+            ]
+
+    toolkit = build_toolkit(opend_client=FakeOpend())
+    result = await toolkit.get_indicators.ainvoke({
+        "symbol": "AAPL",
+        "indicator": "boll",
+        "curr_date": "2026-05-10",
+        "look_back_days": 30,
+    })
+    # Should NOT contain a stockstats parse error; either a single-column
+    # readout (newer stockstats versions return Series) or expanded multi-
+    # column lines.
+    assert "Invalid" not in result
+    assert "BOLL" in result.upper() or "boll" in result.lower()
+
+
+@pytest.mark.asyncio
 async def test_get_balance_sheet_calls_internal(monkeypatch):
     monkeypatch.setenv("WEB_INTERNAL_BASE_URL", "http://web:3000")
     monkeypatch.setenv("INTERNAL_BEARER", "secret")
