@@ -89,6 +89,128 @@ docker-compose.yml
 - [**Ghostfolio MCP**](https://github.com/mhajder/ghostfolio-mcp) is a remote MCP endpoint you bring yourself (set `GHOSTFOLIO_MCP_URL` + bearer); it talks to your [**Ghostfolio**](https://github.com/ghostfolio/ghostfolio) instance and gives the agent cross-broker holdings/performance/dividends tools. Leave it unset and the agent simply doesn't see the `ghostfolio_*` tools.
 - The agent streams **NDJSON** chunks (`run-start`, `node-start`, `node-end`, `tool-call`, `tool-result`, `debate-round`, `risk-debate-turn`, `report`, `decision`, `synthesis`, `final-state`) which the chat + research UIs parse inline.
 
+### Research pipeline
+
+One `/research/<symbol>` run flows through the TradingAgents LangGraph: four analysts pull from their own data sources, two researchers debate, the trader proposes a transaction, three risk personas debate the proposal, the portfolio manager calls it, and the decision lands as either a paper or (gated) live order on moomoo.
+
+```mermaid
+flowchart LR
+    %% ───── Data sources ─────
+    subgraph SRC["📡 Data sources"]
+        direction TB
+        MOOMOO["moomoo OpenD<br/>klines · watchlist"]
+        STOCK["stockstats<br/>50+ indicators"]
+        YAHOO["Yahoo Finance<br/>balance sheet · cashflow<br/>income statement<br/>fundamentals · insider txn"]
+        SEARCH["Brave / Tavily<br/>news · web · social"]
+    end
+
+    %% ───── Analyst Team ─────
+    subgraph ANL["🔬 Analyst Team (LangGraph nodes)"]
+        direction TB
+        MA["Market Analyst"]
+        FA["Fundamentals Analyst"]
+        NA["News Analyst"]
+        SA["Social Analyst"]
+    end
+
+    %% ───── Researcher debate ─────
+    subgraph RES["⚖️ Researcher Team"]
+        direction TB
+        BULL["Bullish Researcher"]
+        BEAR["Bearish Researcher"]
+        BULL <-. "debate<br/>(max_debate_rounds)" .-> BEAR
+    end
+
+    TRADER(["💼 Trader<br/>transaction proposal"])
+
+    %% ───── Risk debate ─────
+    subgraph RISK["🛡️ Risk Management Team"]
+        direction TB
+        AGG["Aggressive"]
+        NEU["Neutral"]
+        CON["Conservative"]
+        AGG <-. "risk debate<br/>(max_risk_discuss_rounds)" .-> NEU
+        NEU <-. " " .-> CON
+    end
+
+    MGR{{"👔 Portfolio Manager<br/>final decision"}}
+
+    %% ───── Execution + side systems ─────
+    subgraph EXEC["⚡ Execution"]
+        direction TB
+        PAPER["moomoo paper<br/>(SIMULATE)"]
+        LIVE["moomoo live<br/>(REAL — gated by<br/>daily $ cap)"]
+    end
+
+    DB[("Postgres<br/>langgraph checkpoints<br/>per-role reflections<br/>algo state · chat")]
+    UI{{"Nuxt 4 + ai-sdk UI<br/>NDJSON stream<br/>chat · research · algo"}}
+    GFMCP["Ghostfolio MCP<br/>(BYO endpoint)"]
+    GF["Ghostfolio<br/>cross-broker holdings"]
+
+    %% ───── Flow ─────
+    MOOMOO --> MA
+    STOCK --> MA
+    YAHOO --> FA
+    SEARCH --> NA
+    SEARCH --> SA
+
+    MA --> RES
+    FA --> RES
+    NA --> RES
+    SA --> RES
+
+    RES == "buy / sell evidence" ==> TRADER
+    TRADER == "transaction proposal" ==> RISK
+    RISK == "risk-adjusted plan" ==> MGR
+    MGR == "BUY / SELL / HOLD" ==> EXEC
+
+    ANL -. "reports + state" .-> DB
+    RES -. " " .-> DB
+    TRADER -. " " .-> DB
+    MGR -. " " .-> DB
+
+    UI <== "streams research run" ==> ANL
+    UI <-. "holdings tools" .-> GFMCP
+    GFMCP <--> GF
+
+    %% ───── Styling ─────
+    classDef src fill:#fff7d6,stroke:#d4b400,color:#5a4500
+    classDef anl fill:#fbf3df,stroke:#caa84a,color:#3a2f00
+    classDef bull fill:#dcfbe6,stroke:#3aa860,color:#0e3a1c
+    classDef bear fill:#fde0e0,stroke:#c44d4d,color:#4b1010
+    classDef trader fill:#ece1ff,stroke:#7c4ed1,color:#241144
+    classDef risk fill:#e8f0ff,stroke:#5a7bd6,color:#15224a
+    classDef mgr fill:#dde7ff,stroke:#3a5fcc,color:#0f1f4a
+    classDef exec fill:#d6ecff,stroke:#2f6fdc,color:#103366
+    classDef our fill:#f3f4f6,stroke:#888,color:#222
+
+    class MOOMOO,STOCK,YAHOO,SEARCH src
+    class MA,FA,NA,SA anl
+    class BULL bull
+    class BEAR bear
+    class TRADER trader
+    class AGG,NEU,CON risk
+    class MGR mgr
+    class PAPER,LIVE exec
+    class DB,UI,GFMCP,GF our
+```
+
+**Role overview**
+
+| Role | What it does | Inputs |
+| --- | --- | --- |
+| **Market Analyst** | Reads price + computes indicators (MACD, RSI, SMA family, …). | moomoo k-lines → `stockstats` |
+| **Fundamentals Analyst** | Walks balance sheet / cashflow / income statement / insider activity. | Yahoo Finance (via Nuxt `/internal` proxy) |
+| **News Analyst** | Pulls symbol-specific + global market news. | Brave (primary) / Tavily (fallback) |
+| **Social Analyst** | Sentiment read of recent chatter around the ticker. | Brave / Tavily |
+| **Bull / Bear Researchers** | Debate the analyst reports for `max_debate_rounds` turns. | Analyst reports |
+| **Trader** | Synthesises debate into a concrete proposal (direction, sizing rationale). | Debate transcript |
+| **Aggressive / Neutral / Conservative Risk** | Debate the trader's proposal from three risk stances. | Proposal + reports |
+| **Portfolio Manager** | Authorises BUY / SELL / HOLD with a confidence + reasoning. | Risk debate |
+| **Execution** | Places the order against `SIMULATE` (paper) by default; `REAL` is gated by `MAX_DAILY_LIVE_NOTIONAL_USD`. | Manager decision → moomoo OpenD |
+
+After every authorised decision, the Reflector reads the four analyst reports + both debate transcripts and writes a per-role reflection to Postgres — next time that role runs on a similar setup, its top-K nearest reflections are injected into context.
+
 ## Tests
 
 ```sh
