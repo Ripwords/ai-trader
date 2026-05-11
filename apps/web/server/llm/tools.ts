@@ -1,4 +1,5 @@
 import { tool } from 'ai'
+import { getCookie, type H3Event } from 'h3'
 import { z } from 'zod'
 import type { ApiClient } from './http'
 import { searchWithFallback } from '../lib/search'
@@ -11,7 +12,7 @@ import { searchWithFallback } from '../lib/search'
  * sees as the tool name. Use kebab-or-dotted names; the chat UI renders
  * them in the UChatTool indicator.
  */
-export function makeTools(client: ApiClient) {
+export function makeTools(client: ApiClient, event?: H3Event) {
   return {
     'market_kline': tool({
       description:
@@ -237,9 +238,16 @@ export function makeTools(client: ApiClient) {
       }),
       execute: async (args) => {
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+        // Forward the caller's session cookie. Without it, the self-fetch
+        // hits server/middleware/auth.ts and gets a 401 — surfacing in chat
+        // as "agents service failed: 401".
+        const sessionCookie = event ? getCookie(event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/agents-run`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: {
+            'content-type': 'application/json',
+            ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}),
+          },
           body: JSON.stringify(args),
         })
         if (!res.ok || !res.body) {

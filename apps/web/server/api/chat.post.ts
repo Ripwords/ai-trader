@@ -113,7 +113,7 @@ export default defineEventHandler(async (event) => {
     getGhostfolioTools(),
     getGhostfolioStatus(),
   ])
-  const tools = { ...makeTools(client), ...ghostfolioTools }
+  const tools = { ...makeTools(client, event), ...ghostfolioTools }
   const modelMessages = await convertToModelMessages(
     body.messages as Parameters<typeof convertToModelMessages>[0],
   )
