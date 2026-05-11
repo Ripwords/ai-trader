@@ -67,21 +67,27 @@ docker-compose.yml
 ## Architecture
 
 ```
-┌──────────────── docker compose ────────────────┐
-│  web (Nuxt 4 + Mastra) :3000   →  agent.stream │
-│  api (FastAPI)         :8000   →  moomoo SDK   │
-│  drizzle-migrate (one-shot)                    │
-│  postgres (16-alpine)          :5432 (in-net)  │
-└────────────────────────────────────────────────┘
-        │                       │
-        │ host.docker.internal  │ Anthropic API
-        ▼                       ▼
-   moomoo OpenD (host)   Claude Sonnet 4.6
+┌──────────────────── docker compose ─────────────────────┐
+│  web (Nuxt 4 + ai-sdk)   :3000   chat • research • algo │
+│  api (FastAPI)           :8000   TradingAgents          │
+│                                  (LangGraph multi-agent)│
+│  agents-cron             daily reflection trigger       │
+│  drizzle-migrate         one-shot schema sync           │
+│  postgres (16-alpine)    chat • runs • algo • agents    │
+└──┬──────────────┬──────────────────┬────────────────────┘
+   │              │                  │
+   ▼              ▼                  ▼
+ moomoo OpenD   LLM APIs           external HTTP
+ (host :11111)  • Anthropic        • Brave / Tavily (search)
+ • market data  • OpenAI           • Yahoo Finance (fundamentals)
+ • watchlist    • Google           • Ghostfolio MCP (BYO endpoint)
+ • paper trade  • DeepSeek            └→ Ghostfolio (cross-broker)
 ```
 
-- The Nuxt server runs Mastra agents and proxies to FastAPI for moomoo data.
-- FastAPI is **stateless**; all persistence is owned by Drizzle/Postgres on the Nuxt side.
-- The Mastra agent streams **NDJSON** chunks (`text-delta`, `tool-call`, `tool-result`, `finish`, `error`) which the chat UI parses inline.
+- The Nuxt server runs **`ai-sdk`** (plus `@modelcontextprotocol/sdk` for the Ghostfolio MCP client) and proxies market data + paper-trading calls to FastAPI.
+- The FastAPI side embeds [**TradingAgents**](https://github.com/TauricResearch/TradingAgents) — a LangGraph multi-agent debate (analysts → bull/bear researchers → trader → risk panel → portfolio manager). Run checkpoints + per-role reflections persist via `langgraph-checkpoint-postgres`. Algo strategies/runs/signals are also written from this side via asyncpg, so both services share the Drizzle-managed schema.
+- [**Ghostfolio MCP**](https://github.com/mhajder/ghostfolio-mcp) is a remote MCP endpoint you bring yourself (set `GHOSTFOLIO_MCP_URL` + bearer); it talks to your [**Ghostfolio**](https://github.com/ghostfolio/ghostfolio) instance and gives the agent cross-broker holdings/performance/dividends tools. Leave it unset and the agent simply doesn't see the `ghostfolio_*` tools.
+- The agent streams **NDJSON** chunks (`run-start`, `node-start`, `node-end`, `tool-call`, `tool-result`, `debate-round`, `risk-debate-turn`, `report`, `decision`, `synthesis`, `final-state`) which the chat + research UIs parse inline.
 
 ## Tests
 
