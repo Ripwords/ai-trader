@@ -39,11 +39,13 @@ class OpendAdapter:
         host: str,
         port: int,
         *,
+        rsa_key_path: str | None = None,
         _ctx_factory: Callable[[], Any] | None = None,
         _trade_ctx_factory: Callable[[], Any] | None = None,
     ) -> None:
         self._host = host
         self._port = port
+        self._rsa_key_path = rsa_key_path
         self._ctx_factory = _ctx_factory or self._default_ctx_factory
         self._trade_ctx_factory = _trade_ctx_factory or self._default_trade_ctx_factory
 
@@ -52,13 +54,22 @@ class OpendAdapter:
         return OpenQuoteContext(host=self._host, port=self._port)
 
     def _default_trade_ctx_factory(self) -> Any:
-        from moomoo import OpenSecTradeContext, SecurityFirm, TrdMarket  # type: ignore[import-not-found]
-        return OpenSecTradeContext(
-            host=self._host,
-            port=self._port,
-            filter_trdmarket=TrdMarket.NONE,
-            security_firm=SecurityFirm.NONE,
-        )
+        # OpenD refuses plaintext Trd_* RPCs from any host that isn't loopback
+        # ("To ensure trading security, cross-network trade connections must be
+        # encrypted"). Quote RPCs have no such rule, so we keep them plaintext
+        # and only flip is_encrypt on the trade ctx — the same RSA key must be
+        # configured on the host OpenD with -rsa_pri_key_path.
+        from moomoo import OpenSecTradeContext, SecurityFirm, SysConfig, TrdMarket  # type: ignore[import-not-found]
+        kwargs: dict[str, Any] = {
+            "host": self._host,
+            "port": self._port,
+            "filter_trdmarket": TrdMarket.NONE,
+            "security_firm": SecurityFirm.NONE,
+        }
+        if self._rsa_key_path:
+            SysConfig.set_init_rsa_file(self._rsa_key_path)
+            kwargs["is_encrypt"] = True
+        return OpenSecTradeContext(**kwargs)
 
     def get_kline(self, code: str, *, ktype: KLineType, num: int) -> KLineResponse:
         """Fetch latest N bars via request_history_kline (no subscribe needed).

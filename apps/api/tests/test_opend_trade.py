@@ -1,4 +1,7 @@
 """Adapter-level tests for OpendAdapter trade methods using FakeTradeCtx."""
+import sys
+import types
+
 import pandas as pd
 import pytest
 
@@ -166,3 +169,84 @@ def test_list_fills_returns_typed():
     assert f.side == "SELL"
     assert f.qty == 5
     assert f.price == 115.0
+
+
+def test_default_trade_ctx_factory_encrypts_when_key_path_set(monkeypatch, tmp_path):
+    """OpenD rejects unencrypted trade RPCs from non-loopback hosts. When an
+    RSA key path is configured, the default trade-ctx factory must register
+    that key with the SDK and request an encrypted trade context. The quote
+    factory stays untouched — quote works without encryption."""
+    key_path = tmp_path / "futu_rsa.key"
+    key_path.write_text("dummy-key-bytes")  # SDK isn't actually invoked here
+
+    captured: dict = {}
+
+    class FakeSysConfig:
+        @classmethod
+        def set_init_rsa_file(cls, path):
+            captured["rsa_file"] = path
+
+    class FakeOpenSecTradeContext:
+        def __init__(self, **kwargs):
+            captured["trade_kwargs"] = kwargs
+
+    class FakeOpenQuoteContext:
+        def __init__(self, **kwargs):
+            captured["quote_kwargs"] = kwargs
+
+    class FakeTrdMarket:
+        NONE = "TRDMKT_NONE"
+
+    class FakeSecurityFirm:
+        NONE = "SF_NONE"
+
+    fake_moomoo = types.ModuleType("moomoo")
+    fake_moomoo.OpenSecTradeContext = FakeOpenSecTradeContext
+    fake_moomoo.OpenQuoteContext = FakeOpenQuoteContext
+    fake_moomoo.SecurityFirm = FakeSecurityFirm
+    fake_moomoo.TrdMarket = FakeTrdMarket
+    fake_moomoo.SysConfig = FakeSysConfig
+    monkeypatch.setitem(sys.modules, "moomoo", fake_moomoo)
+
+    adapter = OpendAdapter(host="host.docker.internal", port=11111, rsa_key_path=str(key_path))
+    adapter._default_trade_ctx_factory()
+    adapter._default_ctx_factory()
+
+    assert captured["rsa_file"] == str(key_path)
+    assert captured["trade_kwargs"]["is_encrypt"] is True
+    assert "is_encrypt" not in captured["quote_kwargs"]
+
+
+def test_default_trade_ctx_factory_skips_encryption_without_key(monkeypatch):
+    """No key path configured → leave is_encrypt unset so the SDK falls back to
+    the global SysConfig flag (off by default). This keeps the in-process /
+    127.0.0.1 dev path working without forcing key generation."""
+    captured: dict = {}
+
+    class FakeSysConfig:
+        @classmethod
+        def set_init_rsa_file(cls, path):
+            captured["rsa_file"] = path
+
+    class FakeOpenSecTradeContext:
+        def __init__(self, **kwargs):
+            captured["trade_kwargs"] = kwargs
+
+    class FakeTrdMarket:
+        NONE = "TRDMKT_NONE"
+
+    class FakeSecurityFirm:
+        NONE = "SF_NONE"
+
+    fake_moomoo = types.ModuleType("moomoo")
+    fake_moomoo.OpenSecTradeContext = FakeOpenSecTradeContext
+    fake_moomoo.SecurityFirm = FakeSecurityFirm
+    fake_moomoo.TrdMarket = FakeTrdMarket
+    fake_moomoo.SysConfig = FakeSysConfig
+    monkeypatch.setitem(sys.modules, "moomoo", fake_moomoo)
+
+    adapter = OpendAdapter(host="127.0.0.1", port=11111)
+    adapter._default_trade_ctx_factory()
+
+    assert "rsa_file" not in captured
+    assert "is_encrypt" not in captured["trade_kwargs"]

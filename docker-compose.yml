@@ -37,6 +37,8 @@ services:
       INTERNAL_BEARER: ${INTERNAL_BEARER}
       OPEND_HOST: ${OPEND_HOST}
       OPEND_PORT: ${OPEND_PORT}
+      # RSA key baked into the image at build (see apps/api/Dockerfile + apps/api/secrets/).
+      OPEND_RSA_KEY_PATH: ${OPEND_RSA_KEY_PATH:-/app/secrets/futu_rsa.key}
       # Same DB Drizzle migrates — algo persistence (strategies/runs/signals)
       # is read/written from this side via asyncpg.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}

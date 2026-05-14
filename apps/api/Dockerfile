@@ -9,6 +9,9 @@ RUN pip install --no-cache-dir uv==0.4.20
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
+# RSA key shared with OpenD's encrypted trade channel. Local-only image; key
+# never leaves dev. The host OpenD must read the same file (-rsa_pri_key_path).
+COPY secrets ./secrets
 COPY app ./app
 
 EXPOSE 8000

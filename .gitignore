@@ -23,3 +23,7 @@ nvda_kline.png
 # build artifacts from scripts/build-web-image.sh
 dist/
 .claude/scheduled_tasks.lock
+
+# RSA key shared with OpenD for encrypted trade channel — never commit.
+secrets/
+apps/api/secrets/

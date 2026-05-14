@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     INTERNAL_BEARER: str = "dev-bearer"
     OPEND_HOST: str = "127.0.0.1"
     OPEND_PORT: int = 11111
+    # Path to the RSA-1024 PKCS#1 private key shared with OpenD. Required for
+    # trade RPCs when api connects from a non-loopback host (e.g. the Docker
+    # bridge); quote RPCs work without it. Leave unset for in-process /
+    # 127.0.0.1 dev.
+    OPEND_RSA_KEY_PATH: str | None = None
     # postgresql://user:pass@host:port/db — points at the same DB the web
     # app uses (Drizzle owns the schema; algo persistence reads/writes via asyncpg).
     DATABASE_URL: str = ""
