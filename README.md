@@ -57,10 +57,6 @@ apps/
   api/                 # FastAPI wrapping moomoo OpenD
     app/               # routers, services, schemas
     tests/             # pytest
-docs/superpowers/
-  specs/               # design docs (one per feature)
-  plans/               # implementation plans (one per phase)
-  morning-questions.md # decisions log from autonomous build sessions
 docker-compose.yml
 ```
 
