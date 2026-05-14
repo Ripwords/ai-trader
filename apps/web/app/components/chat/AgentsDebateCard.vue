@@ -1,13 +1,10 @@
 <script setup lang="ts">
 import type { AgentEvent, Rating } from '~~/types/agents'
 
-// TODO(task-11+): wire this card into chat.post.ts via a custom data part.
-// Today the agents_debate tool returns only the final verdict to the LLM
-// (chat.post.ts has no per-tool streaming-data hook). To stream live events
-// into this component, the chat handler will need to forward intermediate
-// NDJSON events as `dataParts` (e.g. via `streamText({ experimental_dataStream })`)
-// or expose them through a sibling SSE channel. Until then, this component is
-// a no-op placeholder rendered by the eventual integration layer.
+// Driven by the `agents_debate` chat tool's async-generator execute (see
+// server/llm/tools.ts). Each NDJSON event from the agents pipeline produces
+// a preliminary tool-output frame; the chat page binds the latest snapshot
+// here so the timeline + verdict update in real time.
 
 interface Verdict { rating: Rating; confidence: number; rationale: string }
 

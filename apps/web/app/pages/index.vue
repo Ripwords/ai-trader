@@ -100,6 +100,11 @@ const suggestions = [
 
 function getToolOutput(part: unknown): unknown { return (part as { output?: unknown })?.output }
 function hasOutput(part: unknown): boolean { return (part as { state?: string })?.state === 'output-available' }
+function agentsVerdict(output: unknown) {
+  const o = output as { rating?: 'strong-buy' | 'buy' | 'hold' | 'reduce' | 'sell'; confidence?: number; rationale?: string } | undefined
+  if (!o?.rating) return null
+  return { rating: o.rating, confidence: o.confidence ?? 0, rationale: o.rationale ?? '' }
+}
 </script>
 
 <template>
@@ -184,6 +189,11 @@ function hasOutput(part: unknown): boolean { return (part as { state?: string })
               <OrderCard
                 v-else-if="hasOutput(part) && getToolName(part) === 'trade_place_order' && (getToolOutput(part) as { order_id?: string })?.order_id"
                 :result="getToolOutput(part) as any"
+              />
+              <AgentsDebateCard
+                v-else-if="hasOutput(part) && getToolName(part) === 'agents_debate'"
+                :events="(getToolOutput(part) as { events?: any[] })?.events ?? []"
+                :verdict="agentsVerdict(getToolOutput(part))"
               />
               <UChatTool
                 v-else

@@ -236,7 +236,23 @@ export function makeTools(client: ApiClient, event?: H3Event) {
         max_debate_rounds: z.number().int().min(1).max(3).default(1),
         deep_thinking: z.boolean().default(true),
       }),
-      execute: async (args) => {
+      // Async generator: each yield is sent as a `tool-output-available`
+      // (preliminary) frame on the chat stream. This serves two purposes:
+      //   1. Keeps the outer /api/chat connection alive during the 30-60s
+      //      pipeline run — without periodic bytes the socket goes idle and
+      //      the browser's useChat hook stays stuck in 'streaming' even
+      //      after the server completes.
+      //   2. Surfaces the per-step node timeline (market → social → news →
+      //      fundamentals → bull/bear → trader → risk gate) to the chat UI,
+      //      which AgentsDebateCard renders.
+      // The return value is the FINAL output the LLM consumes.
+      execute: async function* (args) {
+        // Yield immediately so the chat stream gets a frame before we even
+        // start the upstream fetch — no dead air between the LLM's tool
+        // call and the first agent event.
+        const events: Array<{ type: 'node-start'; node: string }> = []
+        yield { events: [...events] }
+
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
         // Forward the caller's session cookie. Without it, the self-fetch
         // hits server/middleware/auth.ts and gets a 401 — surfacing in chat
@@ -251,14 +267,14 @@ export function makeTools(client: ApiClient, event?: H3Event) {
           body: JSON.stringify(args),
         })
         if (!res.ok || !res.body) {
-          return { error: `agents service failed: ${res.status}` }
+          return { events, error: `agents service failed: ${res.status}` }
         }
+
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
         let buf = ''
-        let verdict: { rating?: string; confidence?: number; rationale?: string } | null = null
-        // Stream NDJSON events; the run-end / decision events arrive last.
-        // We only retain the final `decision` payload to return to the LLM.
+        let verdict: { rating?: string; confidence?: number; rationale?: string } = {}
+
         while (true) {
           const { value, done } = await reader.read()
           if (done) break
@@ -269,16 +285,34 @@ export function makeTools(client: ApiClient, event?: H3Event) {
             const trimmed = line.trim()
             if (!trimmed) continue
             try {
-              const ev = JSON.parse(trimmed) as { type?: string; rating?: string; confidence?: number; rationale?: string }
+              const ev = JSON.parse(trimmed) as {
+                type?: string
+                node?: string
+                rating?: string
+                confidence?: number
+                rationale?: string
+              }
+              // Only forward the structural events the UI card renders —
+              // skip massive payloads (final-state) and chatty deltas
+              // (node-message) so we don't bloat the message persisted to
+              // agent_messages-equivalent storage on the chat side.
+              if (ev.type === 'node-start' && ev.node) {
+                events.push({ type: 'node-start', node: ev.node })
+              }
               if (ev.type === 'decision') {
                 verdict = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
               }
+              yield { events: [...events], ...verdict }
             } catch {
               /* skip malformed */
             }
           }
         }
-        return verdict ?? { error: 'no decision emitted' }
+
+        if (!verdict.rating) {
+          return { events, error: 'no decision emitted' }
+        }
+        return { events, ...verdict }
       },
     }),
 
