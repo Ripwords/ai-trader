@@ -50,15 +50,23 @@ class OpendAdapter:
         self._trade_ctx_factory = _trade_ctx_factory or self._default_trade_ctx_factory
 
     def _default_ctx_factory(self) -> Any:
-        from moomoo import OpenQuoteContext  # type: ignore[import-not-found]
-        return OpenQuoteContext(host=self._host, port=self._port)
+        # OpenD enforces InitConnect-handshake encryption on every non-loopback
+        # connection (both quote and trade) once it's started with
+        # -rsa_pri_key_path. Without is_encrypt=True here, quote handshakes
+        # fail with "check sha error" because the integrity hash OpenD computes
+        # against the RSA key won't match a plaintext request.
+        from moomoo import OpenQuoteContext, SysConfig  # type: ignore[import-not-found]
+        kwargs: dict[str, Any] = {"host": self._host, "port": self._port}
+        if self._rsa_key_path:
+            SysConfig.set_init_rsa_file(self._rsa_key_path)
+            kwargs["is_encrypt"] = True
+        return OpenQuoteContext(**kwargs)
 
     def _default_trade_ctx_factory(self) -> Any:
-        # OpenD refuses plaintext Trd_* RPCs from any host that isn't loopback
-        # ("To ensure trading security, cross-network trade connections must be
-        # encrypted"). Quote RPCs have no such rule, so we keep them plaintext
-        # and only flip is_encrypt on the trade ctx — the same RSA key must be
-        # configured on the host OpenD with -rsa_pri_key_path.
+        # Trade has the same encryption requirement as quote (see
+        # _default_ctx_factory). OpenD's original error wording for trade —
+        # "cross-network trade connections must be encrypted" — is what first
+        # surfaced the constraint.
         from moomoo import OpenSecTradeContext, SecurityFirm, SysConfig, TrdMarket  # type: ignore[import-not-found]
         kwargs: dict[str, Any] = {
             "host": self._host,
