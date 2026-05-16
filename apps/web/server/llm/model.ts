@@ -3,6 +3,63 @@ import { createDeepSeek } from '@ai-sdk/deepseek'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 
+export const DEFAULT_MODEL_SPEC = 'anthropic/claude-sonnet-4-6'
+
+export interface ModelInfo {
+  spec: string
+  provider: string
+  modelId: string
+  contextWindow: number
+  outputReserve: number
+  contextWindowSource: 'env' | 'known' | 'fallback'
+}
+
+const FALLBACK_CONTEXT_WINDOW = 128_000
+const DEFAULT_OUTPUT_RESERVE = 8_000
+
+const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
+  'anthropic/claude-sonnet-4-6': 200_000,
+  'anthropic/claude-opus-4-7': 200_000,
+  'openai/gpt-4o': 128_000,
+  'openai/gpt-4o-mini': 128_000,
+  'google/gemini-2.5-pro': 1_048_576,
+  'deepseek/deepseek-v4-flash': 128_000,
+}
+
+function parsePositiveInt(value: string | undefined): number | null {
+  if (!value) return null
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null
+}
+
+export function splitModelSpec(spec: string): { provider: string; modelId: string } {
+  const slash = spec.indexOf('/')
+  if (slash < 0) {
+    throw new Error(
+      `LLM_MODEL must be "<provider>/<model-id>" (got "${spec}"). ` +
+        `Examples: anthropic/claude-sonnet-4-6, openai/gpt-4o, ` +
+        `google/gemini-2.5-pro, deepseek/deepseek-v4-flash.`,
+    )
+  }
+  return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) }
+}
+
+export function getModelInfo(spec: string = process.env.LLM_MODEL || DEFAULT_MODEL_SPEC): ModelInfo {
+  const { provider, modelId } = splitModelSpec(spec)
+  const envWindow = parsePositiveInt(process.env.LLM_CONTEXT_WINDOW)
+  const knownWindow = KNOWN_CONTEXT_WINDOWS[spec]
+  const outputReserve = parsePositiveInt(process.env.LLM_OUTPUT_RESERVE) ?? DEFAULT_OUTPUT_RESERVE
+
+  return {
+    spec,
+    provider,
+    modelId,
+    contextWindow: envWindow ?? knownWindow ?? FALLBACK_CONTEXT_WINDOW,
+    outputReserve,
+    contextWindowSource: envWindow ? 'env' : knownWindow ? 'known' : 'fallback',
+  }
+}
+
 /**
  * Build a Vercel AI SDK LanguageModel from the LLM_MODEL env var,
  * which is a magic string `<provider>/<model-id>` — e.g.
@@ -14,17 +71,8 @@ import { createOpenAI } from '@ai-sdk/openai'
  * Each provider reads its API key from process.env (ANTHROPIC_API_KEY,
  * OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, DEEPSEEK_API_KEY).
  */
-export function buildModel(spec: string = process.env.LLM_MODEL || 'anthropic/claude-sonnet-4-6') {
-  const slash = spec.indexOf('/')
-  if (slash < 0) {
-    throw new Error(
-      `LLM_MODEL must be "<provider>/<model-id>" (got "${spec}"). ` +
-        `Examples: anthropic/claude-sonnet-4-6, openai/gpt-4o, ` +
-        `google/gemini-2.5-pro, deepseek/deepseek-v4-flash.`,
-    )
-  }
-  const provider = spec.slice(0, slash)
-  const modelId = spec.slice(slash + 1)
+export function buildModel(spec: string = process.env.LLM_MODEL || DEFAULT_MODEL_SPEC) {
+  const { provider, modelId } = splitModelSpec(spec)
 
   switch (provider) {
     case 'anthropic':
