@@ -1,5 +1,5 @@
-import { getOwnerId, getThread, getThreadMessages } from '../../db/repo'
-import { getConversationMetadata } from '../../lib/conversation-metadata'
+import { getOwnerId, getThread } from '../../../db/repo'
+import { patchConversationMetadata } from '../../../lib/conversation-metadata'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -7,9 +7,7 @@ export default defineEventHandler(async (event) => {
   const ownerId = await getOwnerId()
   const thread = await getThread(ownerId, id)
   if (!thread) throw createError({ statusCode: 404, statusMessage: 'not found' })
-  const [messages, metadata] = await Promise.all([
-    getThreadMessages(id),
-    getConversationMetadata(id),
-  ])
-  return { thread, metadata, messages }
+
+  const body = await readBody(event)
+  return { metadata: await patchConversationMetadata(id, body ?? {}) }
 })
