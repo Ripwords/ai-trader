@@ -1,16 +1,12 @@
-import { getFullPortfolio, type FullPortfolio } from '../lib/holdings'
+import type { FullPortfolio } from '../lib/holdings'
+import { getFullPortfolioCached } from '../lib/portfolio-cache'
 
-// SWR cache: serve fresh for 60s, then serve stale up to 10min while a
-// background revalidation runs. The page's refresh button passes ?force=1
-// to bypass the cache for hard refreshes.
-export default defineCachedEventHandler(
-  async (): Promise<FullPortfolio> => getFullPortfolio(),
-  {
-    name: 'portfolio',
-    getKey: () => 'full',
-    maxAge: 60,
-    staleMaxAge: 60 * 10,
-    swr: true,
-    shouldBypassCache: (event) => Boolean(getQuery(event).force),
-  },
-)
+// Caching + concurrent-request coalescing live in getFullPortfolioCached
+// (SWR: fresh 60s, stale up to 10min while revalidating). That same shared
+// function cache backs /api/planning, so a cold page load runs the
+// expensive cross-broker fetch once instead of twice. The page's refresh
+// button passes ?force=1 to invalidate and recompute.
+export default defineEventHandler(async (event): Promise<FullPortfolio> => {
+  const force = Boolean(getQuery(event).force)
+  return getFullPortfolioCached({ force })
+})
