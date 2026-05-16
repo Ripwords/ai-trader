@@ -1,7 +1,7 @@
 /**
  * Curated rules + lookups extracted from `.claude/skills/moomooapi/SKILL.md`
  * (the Futu/moomoo Claude skill we installed locally). Embedded here as a
- * static string so the Mastra agent always carries the canonical conventions
+ * static string so the chat agent always carries the canonical conventions
  * without having to read files at runtime.
  *
  * Refresh this when bumping the moomoo skill version.
