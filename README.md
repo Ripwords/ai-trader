@@ -1,21 +1,23 @@
 # ai-trader
 
-Self-hosted trading copilot. Chat with an AI that has tools for moomoo market data + (later) Ghostfolio portfolio + algo trading.
+Self-hosted trading copilot. Chat with an AI that has tools for moomoo market data/trading, Ghostfolio portfolio reconciliation, TradingAgents research, and paper-only algo workflows.
 
-**Plans 1 + 2 complete.** End-to-end:
+**Current end-to-end flow:**
 
 - Log in (single password), see your moomoo watchlist in the sidebar.
 - Ask `show NVDA daily` → real candlestick chart inline.
 - Ask `what's on my watchlist?` → list pulled from your real moomoo account.
 - Ask `add US.AAPL to my watchlist` / `remove US.NVDA` → mutates moomoo's watchlist.
 - Ask `any news on NVDA?` → Tavily-powered news cards.
-- Ask `show me my portfolio` → real positions + cash from your paper or live moomoo account (read-only).
+- Ask `show me my portfolio` → real positions + cash from your paper or live moomoo account; Ghostfolio MCP can add tracker/reconciliation context when configured.
+- Ask for a full ticker analysis → TradingAgents runs analysts, bull/bear debate, risk review, and a portfolio-manager verdict.
+- Manage paper algo strategies from `/algo`; scheduler order placement is paper-only.
 
 ## Prereqs
 
 - Docker Desktop (or compose v2)
 - moomoo OpenD installed on the host machine and **logged in**, listening on `127.0.0.1:11111`
-- Anthropic API key
+- An LLM provider API key for your selected `LLM_MODEL` (`anthropic/...`, `openai/...`, `google/...`, or `deepseek/...`)
 - (Optional but recommended) Tavily API key for news/web search — without it, search tools surface a clean error message and the rest still works
 
 ## First run
@@ -26,7 +28,8 @@ cp .env.example .env
 #   APP_PASSWORD       — what you type to log in (anything)
 #   SESSION_SECRET     — at least 32 random bytes
 #   INTERNAL_BEARER    — random string, used between Nuxt and FastAPI
-#   ANTHROPIC_API_KEY  — real sk-ant-… key
+#   LLM_MODEL          — provider/model, e.g. anthropic/claude-sonnet-4-6
+#   ANTHROPIC_API_KEY  — real sk-ant-… key if using an Anthropic model
 #   TAVILY_API_KEY     — tvly-… key for news/web search (optional)
 #   POSTGRES_PORT      — host port for postgres (default 5432; override if 5432 is taken)
 
@@ -49,9 +52,9 @@ docker compose down -v    # also wipe DB volume (resets users / chat history)
 
 ```
 apps/
-  web/                 # Nuxt 4 + Nuxt UI v4 + Mastra (chat orchestration)
+  web/                 # Nuxt 4 + Nuxt UI v4 + AI SDK chat orchestration
     app/               # Nuxt 4 layout: components, pages, layouts
-    server/            # Nitro routes, middleware, mastra agent + tools
+    server/            # Nitro routes, middleware, chat prompt + tools
     db/                # Drizzle schema + migrations
     tests/             # vitest unit + playwright e2e
   api/                 # FastAPI wrapping moomoo OpenD
@@ -224,7 +227,8 @@ The e2e test passes if either a chart canvas OR an inline error message appears 
 
 ## What's next (later plans)
 
-- Plan 3: paper trading (place/modify/cancel orders via chat) + push subscriptions (live ticker / orderbook streaming)
-- Plan 4: options chain viewer + screener UI + Ghostfolio MCP integration
-- Plan 5: algo backtesting via backtrader + scheduled live algo strategies
-- Plan 6: live broker trading (with confirmation gates) + polish
+- Push subscriptions: live ticker / orderbook streaming
+- Options chain viewer + screener UI
+- Financial planning hub: goals, target allocation, rebalancing, liabilities, cashflow, and net-worth history
+- Trade-safety evals + tool-call trace normalization (framework-free, against existing Postgres)
+- Live broker trading polish: stronger approval UX, max-notional policies, audit ledger, and account allowlists
