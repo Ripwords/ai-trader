@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.deps import get_opend, require_internal_bearer
-from app.schemas.quote import KLineResponse, KLineType, Snapshot
+from app.schemas.quote import KLineResponse, KLineType, OrderBook, Snapshot
 from app.services.opend import OpendAdapter, OpendError
 
 router = APIRouter(
@@ -18,6 +18,18 @@ async def snapshot(
 ) -> Snapshot:
     try:
         return opend.get_snapshot(code)
+    except OpendError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@router.get("/order-book", response_model=OrderBook)
+async def order_book(
+    code: str = Query(..., examples=["US.NVDA"]),
+    num: int = Query(10, ge=1, le=50),
+    opend: OpendAdapter = Depends(get_opend),
+) -> OrderBook:
+    try:
+        return opend.get_order_book(code, num=num)
     except OpendError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 

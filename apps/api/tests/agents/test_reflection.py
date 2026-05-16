@@ -10,7 +10,7 @@ covered against a real Postgres testcontainer with the LLM step stubbed.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -218,6 +218,7 @@ async def test_reflect_pending_writes_rows(
           '{"bull_history":"bull case","bear_history":"bear case","judge_decision":"buy"},'
         '"risk_debate_state":{"judge_decision":"approve"}}'
     )
+    trade_date = date.today() - timedelta(days=10)
     async with pg_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO users(id, name) VALUES($1, 'reflectee') "
@@ -226,33 +227,30 @@ async def test_reflect_pending_writes_rows(
         )
         run_id = await conn.fetchval(
             "INSERT INTO agent_runs(user_id, symbol, trade_date, config, status, final_state) "
-            "VALUES($1, 'NVDA', current_date - 10, '{}'::jsonb, 'complete', $2::jsonb) "
+            "VALUES($1, 'NVDA', $3, '{}'::jsonb, 'complete', $2::jsonb) "
             "RETURNING id",
-            user_id, final_state_json,
+            user_id, final_state_json, trade_date,
         )
         decision_id = await conn.fetchval(
             "INSERT INTO agent_decisions"
             "(run_id, user_id, symbol, trade_date, rating, confidence, rationale, "
             " created_at) "
-            "VALUES($1, $2, 'NVDA', current_date - 10, 'buy', 70, 'r', "
+            "VALUES($1, $2, 'NVDA', $3, 'buy', 70, 'r', "
             " now() - interval '10 days') RETURNING id",
             run_id,
             user_id,
+            trade_date,
         )
 
     opend = AsyncMock()
 
     async def kline(ticker: str, ktype: str, num: int) -> list[dict]:
-        from datetime import date as _d
-        from datetime import timedelta
-
-        td = _d.today() - timedelta(days=10)
         if ticker == "NVDA":
             closes = [100, 102, 104, 106, 108, 109, 109.5, 110]
         else:
             closes = [100, 100.3, 100.6, 100.9, 101.2, 101.5, 101.8, 102]
         return [
-            {"time_key": (td + timedelta(days=i)).isoformat(), "close": closes[i]}
+            {"time_key": (trade_date + timedelta(days=i)).isoformat(), "close": closes[i]}
             for i in range(len(closes))
         ]
 

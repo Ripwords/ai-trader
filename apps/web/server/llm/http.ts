@@ -35,6 +35,22 @@ export interface Snapshot {
   updateTime: string
 }
 
+export interface OrderBookLevel {
+  price: number
+  volume: number
+  order_count: number
+  details: Record<string, unknown>
+}
+
+export interface OrderBook {
+  code: string
+  name: string | null
+  bid_time: string | null
+  ask_time: string | null
+  bids: OrderBookLevel[]
+  asks: OrderBookLevel[]
+}
+
 export interface WatchlistItem {
   code: string
   name: string | null
@@ -121,6 +137,10 @@ export class ApiClient {
   async getSnapshot(args: { code: string }): Promise<Snapshot> {
     const raw = await this.fetch<Record<string, unknown>>('/quote/snapshot', { query: args })
     return snakeToCamel(raw) as unknown as Snapshot
+  }
+
+  async getOrderBook(args: { code: string; num?: number }): Promise<OrderBook> {
+    return this.fetch('/quote/order-book', { query: args })
   }
 
   async getOpendState(): Promise<{ reachable: boolean; qot_logined: boolean; trd_logined: boolean; server_ver?: string }> {
@@ -344,4 +364,3 @@ export function getApiClient() {
   const cfg = useRuntimeConfig()
   return new ApiClient({ baseUrl: cfg.apiBaseUrl as string, bearer: cfg.internalBearer as string })
 }
-

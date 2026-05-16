@@ -23,6 +23,22 @@ class KLineResponse(BaseModel):
     bars: list[Bar] = Field(default_factory=list)
 
 
+class OrderBookLevel(BaseModel):
+    price: float
+    volume: int
+    order_count: int
+    details: dict = Field(default_factory=dict)
+
+
+class OrderBook(BaseModel):
+    code: str
+    name: str | None = None
+    bid_time: str | None = None
+    ask_time: str | None = None
+    bids: list[OrderBookLevel] = Field(default_factory=list)
+    asks: list[OrderBookLevel] = Field(default_factory=list)
+
+
 class Snapshot(BaseModel):
     code: str
     name: str | None = None

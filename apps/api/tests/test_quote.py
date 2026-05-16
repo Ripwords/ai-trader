@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi.testclient import TestClient
 
-from app.schemas.quote import Bar, KLineResponse, Snapshot
+from app.schemas.quote import Bar, KLineResponse, OrderBook, OrderBookLevel, Snapshot
 
 
 class FakeAdapter:
@@ -38,6 +38,16 @@ class FakeAdapter:
             update_time=datetime(2026, 5, 7, 16, 0),
         )
 
+    def get_order_book(self, code, *, num):
+        return OrderBook(
+            code=code,
+            name="Test",
+            bid_time="2026-05-07 16:00:00.000",
+            ask_time="2026-05-07 16:00:00.000",
+            bids=[OrderBookLevel(price=125.40, volume=300, order_count=2)],
+            asks=[OrderBookLevel(price=125.50, volume=200, order_count=1)],
+        )
+
 
 def test_kline_endpoint_returns_bars(client_with_bearer_and_fake: TestClient):
     res = client_with_bearer_and_fake.get(
@@ -59,6 +69,18 @@ def test_snapshot_endpoint_returns_quote(client_with_bearer_and_fake: TestClient
     assert res.status_code == 200
     body = res.json()
     assert body["last_price"] == 125.5
+
+
+def test_order_book_endpoint_returns_depth(client_with_bearer_and_fake: TestClient):
+    res = client_with_bearer_and_fake.get(
+        "/quote/order-book",
+        params={"code": "US.NVDA", "num": 5},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["code"] == "US.NVDA"
+    assert body["bids"][0]["price"] == 125.40
+    assert body["asks"][0]["volume"] == 200
 
 
 def test_quote_routes_require_bearer(client: TestClient):

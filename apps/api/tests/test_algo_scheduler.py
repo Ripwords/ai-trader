@@ -36,7 +36,10 @@ async def db_pool() -> Any:
     url = os.environ.get("DATABASE_URL")
     if not url:
         pytest.skip("no DATABASE_URL — algo DB tests need the compose stack")
-    pool = await repo.init_pool(url)
+    try:
+        pool = await repo.init_pool(url)
+    except OSError as exc:
+        pytest.skip(f"algo DB unavailable for DATABASE_URL={url!r}: {exc}")
     try:
         yield pool
     finally:

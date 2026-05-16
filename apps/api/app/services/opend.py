@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from app.schemas.quote import Bar, KLineResponse, KLineType, Snapshot
+from app.schemas.quote import Bar, KLineResponse, KLineType, OrderBook, OrderBookLevel, Snapshot
 from app.schemas.trade import Account, Fill, Order, PlaceOrderResult, Portfolio, Position
 from app.schemas.watchlist import WatchlistItem
 
@@ -268,6 +268,63 @@ class OpendAdapter:
             volume=int(row["volume"]),
             turnover=float(row["turnover"]),
             update_time=update_time,
+        )
+
+    def get_order_book(self, code: str, *, num: int = 10) -> OrderBook:
+        """Fetch a one-shot real-time order book after subscribing to depth.
+
+        The moomoo SDK requires an ORDER_BOOK subscription before
+        get_order_book can return data. This method performs that subscription
+        only for the current short-lived quote context, then closes the context.
+        """
+        ctx = self._ctx_factory()
+        try:
+            try:
+                from moomoo import SubType  # type: ignore[import-not-found]
+                is_real_sdk = "moomoo" in str(type(ctx))
+                subtype = SubType.ORDER_BOOK if is_real_sdk else "ORDER_BOOK"
+            except ImportError:
+                subtype = "ORDER_BOOK"
+
+            sub_result = ctx.subscribe([code], [subtype], subscribe_push=False)
+            sub_ret = sub_result[0] if isinstance(sub_result, tuple | list) else sub_result
+            sub_msg = sub_result[1] if isinstance(sub_result, tuple | list) and len(sub_result) > 1 else sub_result
+            if sub_ret != 0:
+                raise OpendError(f"subscribe ORDER_BOOK failed: {sub_msg}")
+
+            ret, data = ctx.get_order_book(code, num=num)
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"get_order_book failed: {data}")
+
+        def _levels(rows: object) -> list[OrderBookLevel]:
+            levels: list[OrderBookLevel] = []
+            if not isinstance(rows, list):
+                return levels
+            for row in rows:
+                if not isinstance(row, tuple | list) or len(row) < 3:
+                    continue
+                details = row[3] if len(row) > 3 and isinstance(row[3], dict) else {}
+                levels.append(OrderBookLevel(
+                    price=float(row[0]),
+                    volume=int(row[1]),
+                    order_count=int(row[2]),
+                    details=details,
+                ))
+            return levels
+
+        book = data if isinstance(data, dict) else {}
+        return OrderBook(
+            code=str(book.get("code", code)),
+            name=str(book["name"]) if book.get("name") else None,
+            bid_time=str(book["svr_recv_time_bid"]) if book.get("svr_recv_time_bid") else None,
+            ask_time=str(book["svr_recv_time_ask"]) if book.get("svr_recv_time_ask") else None,
+            bids=_levels(book.get("Bid")),
+            asks=_levels(book.get("Ask")),
         )
 
     # ------------------------------------------------------------------
