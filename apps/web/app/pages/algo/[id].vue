@@ -9,6 +9,7 @@ import type {
   AlgoState,
   AlgoStrategy,
 } from '../../../server/llm/http'
+import { assessAlgoMaturity, type AlgoMaturityStatus } from '../../../server/lib/algo-risk'
 import { buildHunks, type DiffPayload } from '../../components/algo/diff-hunks'
 
 const route = useRoute()
@@ -118,9 +119,21 @@ function formatApiError(e: unknown): string {
 const backtest = ref<AlgoBacktestResult | null>(null)
 const backtesting = ref(false)
 const bars = ref(200)
+const maturity = computed(() => assessAlgoMaturity(draft.value, backtest.value, signals.value ?? []))
+const canEnableLive = computed(() => strategy.value?.enabled || (!dirty.value && maturity.value.status !== 'block'))
 
 const toggling = ref(false)
 async function toggleEnabled() {
+  if (!strategy.value!.enabled) {
+    if (dirty.value) {
+      saveError.value = 'Save changes and run a fresh backtest before enabling live paper ticks.'
+      return
+    }
+    if (maturity.value.status === 'block') {
+      saveError.value = 'Live paper enable blocked by the maturity checklist. Run a successful backtest and resolve blocking checks first.'
+      return
+    }
+  }
   toggling.value = true
   try {
     await $fetch(`/api/algo/strategies/${id.value}`, {
@@ -226,6 +239,12 @@ function onApplyConfig(cfg: ProposedConfig) {
   if (cfg.pyramiding_max !== undefined) draft.value.pyramiding_max = cfg.pyramiding_max
 }
 
+function maturityClass(status: AlgoMaturityStatus) {
+  if (status === 'block') return 'text-[var(--tape-down)]'
+  if (status === 'warn') return 'text-[var(--accent)]'
+  return 'text-[var(--tape-up)]'
+}
+
 async function runBacktest() {
   backtesting.value = true
   backtest.value = null
@@ -295,8 +314,9 @@ async function runBacktest() {
           </div>
           <div class="flex items-center gap-3">
             <button
-              :disabled="toggling"
+              :disabled="toggling || !canEnableLive"
               class="font-mono text-xs uppercase tracking-[0.18em] px-4 py-2 rounded transition-colors disabled:opacity-60"
+              :title="!canEnableLive ? 'Run a clean backtest and resolve blocking maturity checks before enabling.' : undefined"
               :class="strategy!.enabled
                 ? 'border border-[var(--tape-up)] text-[var(--tape-up)] hover:bg-[var(--tape-up)] hover:text-[#07080a]'
                 : 'border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--tape-up)] hover:border-[var(--tape-up)]'"
@@ -312,6 +332,38 @@ async function runBacktest() {
             >
               {{ saving ? 'saving…' : 'save' }}
             </button>
+          </div>
+        </div>
+
+        <!-- Maturity gate -->
+        <div class="surface-1 p-5 space-y-4">
+          <div class="flex flex-col md:flex-row md:items-baseline md:justify-between gap-2">
+            <div>
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">paper-live maturity</div>
+              <div class="text-sm text-[var(--paper-2)] mt-1">
+                enablement uses the latest backtest in this editor session plus recent signal health
+              </div>
+            </div>
+            <div class="font-mono text-sm uppercase tracking-[0.16em]" :class="maturityClass(maturity.status)" data-mono>
+              {{ maturity.status }} · {{ maturity.score }}/100
+            </div>
+          </div>
+          <div class="grid md:grid-cols-2 gap-3">
+            <div
+              v-for="check in maturity.checks"
+              :key="check.key"
+              class="border hairline bg-[var(--ink-2)] p-3"
+            >
+              <div class="flex items-baseline justify-between gap-3">
+                <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">{{ check.label }}</div>
+                <div class="font-mono text-[10px] uppercase tracking-[0.14em]" :class="maturityClass(check.status)" data-mono>
+                  {{ check.status }}
+                </div>
+              </div>
+              <div class="mt-2 text-xs text-[var(--paper-2)]">
+                {{ check.note }}
+              </div>
+            </div>
           </div>
         </div>
 
