@@ -4,6 +4,75 @@ import { z } from 'zod'
 import type { ApiClient } from './http'
 import { searchWithFallback } from '../lib/search'
 
+interface MakeToolsOptions {
+  event?: H3Event
+  latestUserText?: string
+}
+
+type MakeToolsArg = H3Event | MakeToolsOptions | undefined
+
+function isMakeToolsOptions(arg: MakeToolsArg): arg is MakeToolsOptions {
+  return !!arg && ('latestUserText' in arg || 'event' in arg)
+}
+
+function normalizeOptions(arg: MakeToolsArg): MakeToolsOptions {
+  if (!arg) return {}
+  if (isMakeToolsOptions(arg)) return arg
+  return { event: arg }
+}
+
+function normalizeConfirmationText(value: string | undefined): string {
+  return (value ?? '').trim().replace(/\s+/g, ' ').toUpperCase()
+}
+
+function formatLiveNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(value)
+}
+
+export function expectedLivePlaceConfirmation(args: {
+  code: string
+  side: 'BUY' | 'SELL'
+  qty: number
+  price?: number
+  order_type?: 'NORMAL' | 'MARKET'
+}): string {
+  const orderType = args.order_type ?? 'NORMAL'
+  const pricePart = args.price != null ? ` @ ${formatLiveNumber(args.price)}` : ''
+  return `LIVE PLACE ${args.side} ${args.qty} ${args.code} ${orderType}${pricePart}`.toUpperCase()
+}
+
+export function expectedLiveModifyConfirmation(args: {
+  order_id: string
+  price?: number
+  qty?: number
+}): string {
+  const pricePart = args.price != null ? ` PRICE ${formatLiveNumber(args.price)}` : ''
+  const qtyPart = args.qty != null ? ` QTY ${args.qty}` : ''
+  return `LIVE MODIFY ${args.order_id}${pricePart}${qtyPart}`.toUpperCase()
+}
+
+export function expectedLiveCancelConfirmation(args: { order_id: string }): string {
+  return `LIVE CANCEL ${args.order_id}`.toUpperCase()
+}
+
+function assertLiveTradeConfirmed(args: {
+  trd_env?: 'SIMULATE' | 'REAL'
+  expected: string
+  provided?: string
+  latestUserText?: string
+}) {
+  if (args.trd_env !== 'REAL') return
+
+  const expected = normalizeConfirmationText(args.expected)
+  const provided = normalizeConfirmationText(args.provided)
+  const latestUserText = normalizeConfirmationText(args.latestUserText)
+  if (provided !== expected || !latestUserText.includes(expected)) {
+    throw new Error(
+      `Live trade blocked. Ask the user to type this exact confirmation in their next message: ${expected}`,
+    )
+  }
+}
+
 /**
  * Tool catalogue for the trading copilot. All tools are simple
  * Vercel AI SDK `tool()` definitions — no abstraction layer.
@@ -12,7 +81,8 @@ import { searchWithFallback } from '../lib/search'
  * sees as the tool name. Use kebab-or-dotted names; the chat UI renders
  * them in the UChatTool indicator.
  */
-export function makeTools(client: ApiClient, event?: H3Event) {
+export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
+  const options = normalizeOptions(arg)
   return {
     'market_kline': tool({
       description:
@@ -33,6 +103,16 @@ export function makeTools(client: ApiClient, event?: H3Event) {
         'Fetch the latest quote snapshot for a symbol (last price, change, volume, etc.).',
       inputSchema: z.object({ code: z.string() }),
       execute: async ({ code }) => client.getSnapshot({ code }),
+    }),
+
+    'market_order_book': tool({
+      description:
+        'Fetch current bid/ask order-book depth for a symbol. Read-only. Use when the user asks about liquidity, spread, depth, or best bid/ask. The server performs the required temporary moomoo ORDER_BOOK subscription for this read.',
+      inputSchema: z.object({
+        code: z.string().describe('moomoo symbol like US.NVDA, HK.00700'),
+        num: z.number().int().min(1).max(50).default(10).describe('depth levels per side'),
+      }),
+      execute: async ({ code, num }) => client.getOrderBook({ code, num }),
     }),
 
     'watchlist_list': tool({
@@ -84,6 +164,36 @@ export function makeTools(client: ApiClient, event?: H3Event) {
       execute: async () => ({ accounts: await client.listAccounts() }),
     }),
 
+    'trade_account_overview': tool({
+      description:
+        'Read-only account overview for moomoo accounts in one environment. Filters IPO-only accounts by default, fetches portfolio totals for each usable account, and aggregates cash, market value, and total assets. Use before sizing trades or when the user asks for account-level buying power/exposure.',
+      inputSchema: z.object({
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
+        include_ipo: z.boolean().default(false),
+      }),
+      execute: async ({ trd_env, include_ipo }) => {
+        const accounts = await client.listAccounts()
+        const usable = accounts.filter(account => account.trd_env === trd_env && (include_ipo || account.acc_role !== 'IPO'))
+        const skipped = accounts
+          .filter(account => account.trd_env === trd_env && !include_ipo && account.acc_role === 'IPO')
+          .map(account => ({ acc_id: String(account.acc_id), reason: 'IPO account' }))
+        const rows = []
+        for (const account of usable) {
+          const portfolio = await client.getPortfolio({ acc_id: String(account.acc_id), trd_env })
+          rows.push({ account, portfolio })
+        }
+        const totals = rows.reduce(
+          (sum, row) => ({
+            cash: sum.cash + row.portfolio.cash,
+            market_val: sum.market_val + row.portfolio.market_val,
+            total_assets: sum.total_assets + row.portfolio.total_assets,
+          }),
+          { cash: 0, market_val: 0, total_assets: 0 },
+        )
+        return { trd_env, totals, accounts: rows, skipped }
+      },
+    }),
+
     'trade_portfolio': tool({
       description: 'Get positions and cash for an account. Read-only. Defaults to REAL.',
       inputSchema: z.object({
@@ -120,7 +230,7 @@ export function makeTools(client: ApiClient, event?: H3Event) {
     'trade_place_order': tool({
       description:
         'Place a paper trading order (default trd_env=SIMULATE). REFUSE to place live orders ' +
-        '(trd_env=REAL) unless the user explicitly says "live" or "real". For NORMAL (limit) orders ' +
+        '(trd_env=REAL) unless the latest user message includes the exact LIVE PLACE confirmation phrase. For NORMAL (limit) orders ' +
         'price is required; for MARKET orders price is ignored. acc_id is optional for paper — server ' +
         'auto-picks the first SIMULATE account if omitted.',
       inputSchema: z.object({
@@ -131,31 +241,61 @@ export function makeTools(client: ApiClient, event?: H3Event) {
         order_type: z.enum(['NORMAL', 'MARKET']).default('NORMAL'),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
         acc_id: z.string().optional(),
+        live_confirmation: z.string().optional().describe('Required only for REAL orders. Must exactly match the LIVE PLACE phrase typed by the user in the latest message.'),
       }),
-      execute: async (args) => client.placeOrder(args),
+      execute: async (args) => {
+        const { live_confirmation, ...order } = args
+        assertLiveTradeConfirmed({
+          trd_env: order.trd_env,
+          expected: expectedLivePlaceConfirmation(order),
+          provided: live_confirmation,
+          latestUserText: options.latestUserText,
+        })
+        return client.placeOrder(order)
+      },
     }),
 
     'trade_modify_order': tool({
       description:
-        'Modify an existing order\'s price and/or quantity. acc_id required. trd_env defaults to SIMULATE.',
+        'Modify an existing order\'s price and/or quantity. acc_id required. trd_env defaults to SIMULATE. REAL modifies require an exact LIVE MODIFY confirmation phrase in the latest user message.',
       inputSchema: z.object({
         order_id: z.string(),
         acc_id: z.string(),
         price: z.number().optional(),
         qty: z.number().int().optional(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
+        live_confirmation: z.string().optional().describe('Required only for REAL order modifies. Must exactly match the LIVE MODIFY phrase typed by the user in the latest message.'),
       }),
-      execute: async (args) => client.modifyOrder(args),
+      execute: async (args) => {
+        const { live_confirmation, ...modify } = args
+        assertLiveTradeConfirmed({
+          trd_env: modify.trd_env,
+          expected: expectedLiveModifyConfirmation(modify),
+          provided: live_confirmation,
+          latestUserText: options.latestUserText,
+        })
+        return client.modifyOrder(modify)
+      },
     }),
 
     'trade_cancel_order': tool({
-      description: 'Cancel an existing order by order_id. acc_id required.',
+      description: 'Cancel an existing order by order_id. acc_id required. REAL cancels require an exact LIVE CANCEL confirmation phrase in the latest user message.',
       inputSchema: z.object({
         order_id: z.string(),
         acc_id: z.string(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
+        live_confirmation: z.string().optional().describe('Required only for REAL order cancels. Must exactly match the LIVE CANCEL phrase typed by the user in the latest message.'),
       }),
-      execute: async (args) => client.cancelOrder(args),
+      execute: async (args) => {
+        const { live_confirmation, ...cancel } = args
+        assertLiveTradeConfirmed({
+          trd_env: cancel.trd_env,
+          expected: expectedLiveCancelConfirmation(cancel),
+          provided: live_confirmation,
+          latestUserText: options.latestUserText,
+        })
+        return client.cancelOrder(cancel)
+      },
     }),
 
     // --- Algo trading (paper-only, kill-gated) ----------------------------
@@ -257,7 +397,7 @@ export function makeTools(client: ApiClient, event?: H3Event) {
         // Forward the caller's session cookie. Without it, the self-fetch
         // hits server/middleware/auth.ts and gets a 401 — surfacing in chat
         // as "agents service failed: 401".
-        const sessionCookie = event ? getCookie(event, 'session') : undefined
+        const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/agents-run`, {
           method: 'POST',
           headers: {
@@ -318,7 +458,7 @@ export function makeTools(client: ApiClient, event?: H3Event) {
 
     'holdings_context': tool({
       description:
-        "Get the user's current holdings for a symbol across both Ghostfolio (cross-broker truth) and Moomoo (paper + live). Returns positions per source, total quantity, allocation % of net worth, unrealized P&L, and available cash. Use when the user asks vague questions like 'what's my NVDA exposure', 'do I already own X', or before recommending a trade size. If Ghostfolio is misconfigured the response will indicate that explicitly via ghostfolio_status — surface it to the user.",
+        "Get the user's current holdings for a symbol with moomoo as broker data and Ghostfolio as tracker/reconciliation data. Returns broker_quantity (moomoo live), paper_quantity (moomoo paper), tracker_quantity (Ghostfolio), owned_quantity, reconciliation status, allocation % of net worth, and cash. Use when the user asks vague questions like 'how many NVDA shares do I have', 'what's my NVDA exposure', 'do I already own X', or before recommending a trade size. Never add tracker_quantity to broker_quantity; if they differ, explain it as a reconciliation mismatch. If Ghostfolio is misconfigured the response will indicate that explicitly via ghostfolio_status — surface it to the user.",
       inputSchema: z.object({
         symbol: z.string().describe('moomoo-style symbol like US.NVDA'),
       }),
@@ -355,4 +495,3 @@ export function makeTools(client: ApiClient, event?: H3Event) {
     }),
   }
 }
-

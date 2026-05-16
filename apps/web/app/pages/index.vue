@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { DefaultChatTransport, type UIMessage } from 'ai'
 import { Chat } from '@ai-sdk/vue'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   getToolName,
   isReasoningUIPart,
@@ -20,6 +20,37 @@ const chatId = ref<string | null>(typeof route.query.c === 'string' ? route.quer
 const conversationsList = ref<{ refresh: () => Promise<void> } | null>(null)
 
 const drawerOpen = useState('shell.drawerOpen', () => false)
+
+interface ConversationMetadata {
+  pinned: boolean
+  archived: boolean
+  summary?: string
+  decisions: Array<{ id: string; title: string; note?: string; created_at: string }>
+}
+
+type ContextStatus = 'ok' | 'warn' | 'critical'
+
+interface ChatContextInfo {
+  modelSpec: string
+  contextWindow: number
+  contextWindowSource: 'env' | 'known' | 'fallback'
+  estimatedInputTokens: number
+  outputReserveTokens: number
+  estimatedTotalTokens: number
+  remainingTokens: number
+  usagePct: number
+  status: ContextStatus
+  approximate: boolean
+}
+
+const contextInfo = ref<ChatContextInfo | null>(null)
+const contextPending = ref(false)
+const contextError = ref<string | null>(null)
+const activeConversationMetadata = ref<ConversationMetadata | null>(null)
+const conversationAction = ref<'summary' | 'decision' | ''>('')
+const conversationMessage = ref('')
+let contextTimer: ReturnType<typeof setTimeout> | null = null
+let contextSeq = 0
 
 const chat = new Chat({
   transport: new DefaultChatTransport({
@@ -44,21 +75,34 @@ const chat = new Chat({
 async function loadConversation(id: string | null) {
   if (!id) {
     chat.messages = []
+    activeConversationMetadata.value = null
+    scheduleContextEstimate(0)
     return
   }
   try {
-    const r = await $fetch<{ messages: UIMessage[] }>(`/api/conversations/${id}`)
+    const r = await $fetch<{ metadata: ConversationMetadata; messages: UIMessage[] }>(`/api/conversations/${id}`)
     chat.messages = (r.messages || []) as UIMessage[]
+    activeConversationMetadata.value = r.metadata
+    scheduleContextEstimate(0)
   } catch (e) {
     console.error('failed to load conversation', e)
     chat.messages = []
+    activeConversationMetadata.value = null
     chatId.value = null
     const { c: _, ...rest1 } = route.query
     router.replace({ query: rest1 })
+    scheduleContextEstimate(0)
   }
 }
 
-onMounted(() => { if (chatId.value) loadConversation(chatId.value) })
+onMounted(async () => {
+  if (chatId.value) await loadConversation(chatId.value)
+  else scheduleContextEstimate(0)
+})
+
+onBeforeUnmount(() => {
+  if (contextTimer) clearTimeout(contextTimer)
+})
 
 watch(() => route.query.c, async (next) => {
   const nextId = typeof next === 'string' ? next : null
@@ -70,8 +114,11 @@ watch(() => route.query.c, async (next) => {
 function startNewChat() {
   chatId.value = null
   chat.messages = []
+  activeConversationMetadata.value = null
+  conversationMessage.value = ''
   const { c: _drop, ...rest } = route.query
   router.replace({ query: rest })
+  scheduleContextEstimate(0)
 }
 function onSelectConversation(id: string) { router.push({ query: { ...route.query, c: id } }) }
 function onConversationDeleted(id: string) { if (id === chatId.value) startNewChat() }
@@ -89,6 +136,43 @@ function onSelect(code: string) {
   drawerOpen.value = false
 }
 
+async function summarizeActiveConversation() {
+  if (!chatId.value) return
+  conversationAction.value = 'summary'
+  conversationMessage.value = ''
+  try {
+    const r = await $fetch<{ metadata: ConversationMetadata; summary: string }>(`/api/conversations/${chatId.value}/summary`, {
+      method: 'POST',
+    })
+    activeConversationMetadata.value = r.metadata
+    conversationMessage.value = 'summary saved'
+    await conversationsList.value?.refresh()
+  } catch (e) {
+    conversationMessage.value = e instanceof Error ? e.message : 'summary failed'
+  } finally {
+    conversationAction.value = ''
+  }
+}
+
+async function recordActiveDecision() {
+  if (!chatId.value) return
+  conversationAction.value = 'decision'
+  conversationMessage.value = ''
+  try {
+    const r = await $fetch<{ metadata: ConversationMetadata }>(`/api/conversations/${chatId.value}/decision`, {
+      method: 'POST',
+      body: {},
+    })
+    activeConversationMetadata.value = r.metadata
+    conversationMessage.value = 'decision recorded'
+    await conversationsList.value?.refresh()
+  } catch (e) {
+    conversationMessage.value = e instanceof Error ? e.message : 'decision failed'
+  } finally {
+    conversationAction.value = ''
+  }
+}
+
 const hasMessages = computed(() => chat.messages.length > 0)
 
 const suggestions = [
@@ -100,6 +184,89 @@ const suggestions = [
 
 function getToolOutput(part: unknown): unknown { return (part as { output?: unknown })?.output }
 function hasOutput(part: unknown): boolean { return (part as { state?: string })?.state === 'output-available' }
+function getPartState(part: unknown): string | undefined { return (part as { state?: string })?.state }
+
+async function refreshContextEstimate() {
+  const seq = ++contextSeq
+  contextPending.value = true
+  contextError.value = null
+  try {
+    const info = await $fetch<ChatContextInfo>('/api/chat-context', {
+      method: 'POST',
+      body: { messages: chat.messages },
+    })
+    if (seq !== contextSeq) return
+    contextInfo.value = info
+  } catch (e) {
+    if (seq !== contextSeq) return
+    contextError.value = e instanceof Error ? e.message : 'failed to estimate context'
+  } finally {
+    if (seq === contextSeq) contextPending.value = false
+  }
+}
+
+function scheduleContextEstimate(delay = 350) {
+  if (contextTimer) clearTimeout(contextTimer)
+  contextTimer = setTimeout(() => {
+    contextTimer = null
+    void refreshContextEstimate()
+  }, delay)
+}
+
+watch(
+  () => chat.messages,
+  () => scheduleContextEstimate(chat.status === 'ready' ? 350 : 900),
+  { deep: true },
+)
+
+watch(
+  () => chat.status,
+  () => scheduleContextEstimate(chat.status === 'ready' ? 250 : 900),
+)
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(Math.round(n))
+}
+
+const contextPct = computed(() => Math.min(100, Math.round((contextInfo.value?.usagePct ?? 0) * 100)))
+const contextToneClass = computed(() => {
+  if (contextInfo.value?.status === 'critical') return 'text-[var(--tape-down)]'
+  if (contextInfo.value?.status === 'warn') return 'text-[var(--accent)]'
+  return 'text-[var(--paper-2)]'
+})
+const contextBarClass = computed(() => {
+  if (contextInfo.value?.status === 'critical') return 'bg-[var(--tape-down)]'
+  if (contextInfo.value?.status === 'warn') return 'bg-[var(--accent)]'
+  return 'bg-[var(--paper-2)]'
+})
+const contextTooltip = computed(() => {
+  if (!contextInfo.value) return 'Context estimate is loading'
+  const src = contextInfo.value.contextWindowSource === 'env' ? 'configured' : 'model default'
+  return `Approximate prompt + output reserve: ${formatTokens(contextInfo.value.estimatedTotalTokens)} / ${formatTokens(contextInfo.value.contextWindow)} tokens (${src})`
+})
+const activeToolNames = computed(() => {
+  const names = new Set<string>()
+  for (const message of chat.messages) {
+    for (const part of message.parts ?? []) {
+      if (!isToolUIPart(part)) continue
+      if (getPartState(part) === 'output-error') continue
+      if (isToolStreaming(part) || !hasOutput(part)) names.add(getToolName(part))
+    }
+  }
+  return [...names]
+})
+const liveStatusText = computed(() => {
+  if (activeToolNames.value.length > 0) {
+    return activeToolNames.value.length === 1
+      ? `running ${activeToolNames.value[0]}`
+      : `running ${activeToolNames.value.length} tools`
+  }
+  if (chat.status === 'submitted') return 'waiting for model'
+  if (chat.status === 'streaming') return 'streaming response'
+  return ''
+})
 function agentsVerdict(output: unknown) {
   const o = output as { rating?: 'strong-buy' | 'buy' | 'hold' | 'reduce' | 'sell'; confidence?: number; rationale?: string } | undefined
   if (!o?.rating) return null
@@ -194,10 +361,13 @@ function agentsVerdict(output: unknown) {
                 v-else-if="hasOutput(part) && getToolName(part) === 'agents_debate'"
                 :events="(getToolOutput(part) as { events?: any[] })?.events ?? []"
                 :verdict="agentsVerdict(getToolOutput(part))"
+                :error="(getToolOutput(part) as { error?: string })?.error ?? null"
+                :running="isToolStreaming(part) && !agentsVerdict(getToolOutput(part))"
               />
-              <UChatTool
+              <ToolStatusCard
                 v-else
-                :text="getToolName(part)"
+                :tool-name="getToolName(part)"
+                :state="getPartState(part)"
                 :streaming="isToolStreaming(part)"
               />
             </template>
@@ -221,6 +391,78 @@ function agentsVerdict(output: unknown) {
 
     <footer class="px-4 sm:px-6 py-4 sm:py-5 border-t hairline shrink-0">
       <div class="max-w-3xl mx-auto">
+        <div class="mb-3 space-y-2">
+          <div
+            v-if="chatId"
+            class="border hairline bg-[var(--ink-2)] px-3 py-2"
+          >
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div class="min-w-0">
+                <div class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)]">
+                  chat memory
+                  <span v-if="activeConversationMetadata?.decisions.length" class="text-[var(--paper-2)]">
+                    · {{ activeConversationMetadata.decisions.length }} decision{{ activeConversationMetadata.decisions.length === 1 ? '' : 's' }}
+                  </span>
+                </div>
+                <div class="mt-1 text-xs text-[var(--paper-2)] truncate">
+                  {{ activeConversationMetadata?.summary || conversationMessage || 'save a summary or decision record for this chat' }}
+                </div>
+              </div>
+              <div class="shrink-0 flex items-center gap-3">
+                <button
+                  class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--paper-3)]"
+                  :disabled="!!conversationAction"
+                  @click="summarizeActiveConversation()"
+                >
+                  {{ conversationAction === 'summary' ? 'saving…' : 'summarize' }}
+                </button>
+                <button
+                  class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--paper-3)]"
+                  :disabled="!!conversationAction"
+                  @click="recordActiveDecision()"
+                >
+                  {{ conversationAction === 'decision' ? 'saving…' : 'decision' }}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div
+            v-if="liveStatusText"
+            class="flex items-center justify-between gap-4 font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)]"
+          >
+            <span>{{ liveStatusText }}</span>
+            <span class="size-2 rounded-full bg-[var(--accent)] dot-pulse shrink-0" />
+          </div>
+
+          <div
+            class="space-y-1"
+            :title="contextTooltip"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 font-mono text-xs uppercase tracking-[0.14em]">
+              <div class="min-w-0 text-[var(--paper-3)] truncate">
+                model
+                <span class="text-[var(--paper-2)] normal-case tracking-normal">{{ contextInfo?.modelSpec ?? 'loading' }}</span>
+              </div>
+              <div v-if="contextError" class="text-[var(--tape-down)]">
+                context unavailable
+              </div>
+              <div v-else class="text-[var(--paper-3)]">
+                context
+                <span :class="contextToneClass">
+                  {{ contextInfo ? `${formatTokens(contextInfo.estimatedTotalTokens)} / ${formatTokens(contextInfo.contextWindow)} (${contextPct}%)` : 'estimating' }}
+                </span>
+                <span v-if="contextPending" class="text-[var(--paper-3)]">...</span>
+              </div>
+            </div>
+            <div class="h-1 bg-[var(--ink-2)] rounded-sm overflow-hidden">
+              <div
+                class="h-full transition-[width] duration-300"
+                :class="contextBarClass"
+                :style="{ width: contextInfo ? `${contextPct}%` : '8%' }"
+              />
+            </div>
+          </div>
+        </div>
         <UChatPrompt
           v-model="input"
           :error="chat.error"

@@ -7,6 +7,7 @@ function fakeClient() {
   return {
     getKline: vi.fn(async () => ({ code: 'US.NVDA', ktype: '1d', bars: [{ time: 't', open: 1, high: 2, low: 0.5, close: 1.5, volume: 10, turnover: 15 }] })),
     getSnapshot: vi.fn(async () => ({ code: 'US.NVDA', name: 'NVIDIA', lastPrice: 100, openPrice: 99, highPrice: 101, lowPrice: 98, prevClosePrice: 99, changeRate: 0.01, volume: 1000, turnover: 100000, updateTime: 't' })),
+    getOrderBook: vi.fn(async () => ({ code: 'US.NVDA', name: 'NVIDIA', bids: [{ price: 99, volume: 100, order_count: 1, details: {} }], asks: [{ price: 100, volume: 200, order_count: 2, details: {} }] })),
     listWatchlist: vi.fn(async () => [{ code: 'US.NVDA', name: 'NVIDIA', group: 'All' }]),
     addWatchlistItem: vi.fn(async () => ({ status: 'ok' })),
     removeWatchlistItem: vi.fn(async () => ({ status: 'ok' })),
@@ -14,6 +15,9 @@ function fakeClient() {
     getPortfolio: vi.fn(async () => ({ cash: 10000, market_val: 5000, total_assets: 15000, positions: [] })),
     listOrders: vi.fn(async () => []),
     listFills: vi.fn(async () => []),
+    placeOrder: vi.fn(async args => ({ order_id: 'paper-1', status: 'submitted', ...args, acc_id: args.acc_id ?? '1', price: args.price ?? 0, trd_env: args.trd_env ?? 'SIMULATE' })),
+    modifyOrder: vi.fn(async args => ({ order_id: args.order_id, status: 'modified' })),
+    cancelOrder: vi.fn(async args => ({ order_id: args.order_id, status: 'cancelled' })),
   }
 }
 
@@ -31,9 +35,11 @@ describe('tool catalogue', () => {
       'convert_fx',
       'holdings_context',
       'market_kline',
+      'market_order_book',
       'market_snapshot',
       'search_news',
       'search_web',
+      'trade_account_overview',
       'trade_accounts',
       'trade_cancel_order',
       'trade_fills',
@@ -56,11 +62,38 @@ describe('tool catalogue', () => {
     expect((out as { bars: unknown[] }).bars.length).toBe(1)
   })
 
+  it('market.order_book forwards to client.getOrderBook', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient)
+    const out = await (tools['market_order_book'] as { execute: (args: { code: string; num: number }) => Promise<unknown> }).execute({ code: 'US.NVDA', num: 5 })
+    expect(c.getOrderBook).toHaveBeenCalledWith({ code: 'US.NVDA', num: 5 })
+    expect((out as { asks: unknown[] }).asks.length).toBe(1)
+  })
+
   it('watchlist.list wraps result under {items}', async () => {
     const c = fakeClient()
     const tools = makeTools(c as unknown as ApiClient)
     const out = await (tools['watchlist_list'] as { execute: (args: { group: string }) => Promise<unknown> }).execute({ group: 'All' })
     expect((out as { items: unknown[] }).items.length).toBe(1)
+  })
+
+  it('trade.account_overview aggregates non-IPO accounts for an environment', async () => {
+    const c = fakeClient()
+    c.listAccounts.mockResolvedValueOnce([
+      { acc_id: '1', trd_env: 'REAL', acc_type: 'CASH', card_num: null, security_firm: null, trdmarket_auth: ['US'], acc_role: 'OWNER' },
+      { acc_id: '2', trd_env: 'REAL', acc_type: 'CASH', card_num: null, security_firm: null, trdmarket_auth: ['US'], acc_role: 'IPO' },
+      { acc_id: '3', trd_env: 'SIMULATE', acc_type: 'CASH', card_num: null, security_firm: null, trdmarket_auth: ['US'], acc_role: 'OWNER' },
+    ])
+    const tools = makeTools(c as unknown as ApiClient)
+    const out = await (tools['trade_account_overview'] as { execute: (args: { trd_env: 'REAL' }) => Promise<unknown> }).execute({ trd_env: 'REAL' })
+
+    expect(c.getPortfolio).toHaveBeenCalledTimes(1)
+    expect(c.getPortfolio).toHaveBeenCalledWith({ acc_id: '1', trd_env: 'REAL' })
+    expect(out).toMatchObject({
+      trd_env: 'REAL',
+      totals: { cash: 10000, market_val: 5000, total_assets: 15000 },
+      skipped: [{ acc_id: '2', reason: 'IPO account' }],
+    })
   })
 
   it('search throws when no provider keys are set', async () => {
@@ -70,5 +103,67 @@ describe('tool catalogue', () => {
     await expect(
       (tools['search_web'] as { execute: (args: { query: string; maxResults: number }) => Promise<unknown> }).execute({ query: 'x', maxResults: 3 }),
     ).rejects.toThrow(/BRAVE_API_KEY|TAVILY_API_KEY|search provider/)
+  })
+
+  it('blocks live order placement unless the latest user message includes the exact confirmation phrase', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient, {
+      latestUserText: 'yes, place it live',
+    })
+
+    await expect(
+      (tools['trade_place_order'] as { execute: (args: {
+        code: string
+        side: 'BUY'
+        qty: number
+        price: number
+        order_type: 'NORMAL'
+        trd_env: 'REAL'
+      }) => Promise<unknown> }).execute({
+        code: 'US.NVDA',
+        side: 'BUY',
+        qty: 1,
+        price: 100,
+        order_type: 'NORMAL',
+        trd_env: 'REAL',
+      }),
+    ).rejects.toThrow(/LIVE PLACE BUY 1 US.NVDA NORMAL @ 100/)
+    expect(c.placeOrder).not.toHaveBeenCalled()
+  })
+
+  it('allows live order placement only when confirmation is copied from the latest user message', async () => {
+    const c = fakeClient()
+    const phrase = 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100'
+    const tools = makeTools(c as unknown as ApiClient, {
+      latestUserText: `confirmed: ${phrase}`,
+    })
+
+    const out = await (tools['trade_place_order'] as { execute: (args: {
+      code: string
+      side: 'BUY'
+      qty: number
+      price: number
+      order_type: 'NORMAL'
+      trd_env: 'REAL'
+      live_confirmation: string
+    }) => Promise<unknown> }).execute({
+      code: 'US.NVDA',
+      side: 'BUY',
+      qty: 1,
+      price: 100,
+      order_type: 'NORMAL',
+      trd_env: 'REAL',
+      live_confirmation: phrase,
+    })
+
+    expect(c.placeOrder).toHaveBeenCalledWith({
+      code: 'US.NVDA',
+      side: 'BUY',
+      qty: 1,
+      price: 100,
+      order_type: 'NORMAL',
+      trd_env: 'REAL',
+    })
+    expect((out as { order_id: string }).order_id).toBe('paper-1')
   })
 })

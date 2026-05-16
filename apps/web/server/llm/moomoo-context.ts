@@ -98,6 +98,7 @@ If a name isn't on this table, use your knowledge to determine market + ticker. 
 ### Out of scope (don't promise)
 - Futures trading: not surfaced in v1 tools.
 - Crypto trading: not surfaced in v1 tools.
-- Order placement / modification / cancellation: not in v1 (Plan 3 will add).
-- Backtesting / algo strategies: not in v1 (Plan 5 will add).
+- Options chain / screener UIs: not surfaced yet; option codes must be resolved from an option-chain tool before trading options.
+- Live order writes are server-gated and require an exact confirmation phrase from the latest user message.
+- Algo scheduler order placement is paper-only.
 `.trim()
