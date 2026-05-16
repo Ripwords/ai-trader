@@ -17,13 +17,29 @@ export interface HoldingPosition {
 export interface HoldingSummary {
   symbol: string
   positions: HoldingPosition[]
+  owned_quantity: number
+  owned_market_value: number
+  answer_source: 'moomoo_live' | 'ghostfolio_tracker' | 'none'
+  broker_quantity: number
+  broker_market_value: number
+  paper_quantity: number
+  paper_market_value: number
+  tracker_quantity: number
+  tracker_market_value: number
   total_quantity: number
   total_market_value: number
   net_worth_total: number | null
   allocation_pct: number | null
+  allocation_source: 'ghostfolio_tracker' | null
   cash_paper_usd: number
   cash_live_usd: number
   ghostfolio_status: GhostfolioStatus
+  reconciliation: {
+    status: 'matched' | 'mismatch' | 'not_compared'
+    quantity_delta: number | null
+    note: string
+  }
+  value_units_note: string
   // Names of every Ghostfolio account, surfaced for context. Ghostfolio's
   // get_portfolio_holdings aggregates a symbol across all accounts, so we
   // can't attribute per-position without reconstructing from get_orders.
@@ -277,22 +293,86 @@ export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummar
     : { positions: [], total_market_value: 0, cash_paper_usd: 0, cash_live_usd: 0, paper_total_value: 0, paper_positions_by_symbol: {} }
 
   const positions = [...ghos.positions, ...moomoo.positions]
-  const total_market_value = ghos.total_market_value + moomoo.total_market_value
-  const total_quantity = positions.reduce((sum, p) => sum + (p.quantity || 0), 0)
-  const allocation_pct = ghos.net_worth_total && ghos.net_worth_total > 0
-    ? (total_market_value / ghos.net_worth_total) * 100
+  const brokerPositions = moomoo.positions.filter(p => p.source === 'moomoo_live')
+  const paperPositions = moomoo.positions.filter(p => p.source === 'moomoo_paper')
+  const trackerPositions = ghos.positions
+
+  const sumQty = (rows: HoldingPosition[]) => rows.reduce((sum, p) => sum + (p.quantity || 0), 0)
+  const sumMarketValue = (rows: HoldingPosition[]) => rows.reduce((sum, p) => sum + (p.market_value || 0), 0)
+
+  const broker_quantity = sumQty(brokerPositions)
+  const broker_market_value = sumMarketValue(brokerPositions)
+  const paper_quantity = sumQty(paperPositions)
+  const paper_market_value = sumMarketValue(paperPositions)
+  const tracker_quantity = sumQty(trackerPositions)
+  const tracker_market_value = ghos.total_market_value
+
+  const hasBrokerPosition = brokerPositions.length > 0
+  const hasTrackerPosition = trackerPositions.length > 0
+  const owned_quantity = hasBrokerPosition ? broker_quantity : hasTrackerPosition ? tracker_quantity : 0
+  const owned_market_value = hasBrokerPosition
+    ? broker_market_value
+    : hasTrackerPosition
+      ? tracker_market_value
+      : 0
+  const answer_source: HoldingSummary['answer_source'] = hasBrokerPosition
+    ? 'moomoo_live'
+    : hasTrackerPosition
+      ? 'ghostfolio_tracker'
+      : 'none'
+
+  const quantityDelta = hasBrokerPosition && hasTrackerPosition
+    ? tracker_quantity - broker_quantity
+    : null
+  const reconciliation: HoldingSummary['reconciliation'] = quantityDelta == null
+    ? {
+        status: 'not_compared',
+        quantity_delta: null,
+        note: hasTrackerPosition
+          ? 'Only Ghostfolio tracker data was found for this symbol.'
+          : 'Need both moomoo live and Ghostfolio tracker positions to compare quantities.',
+      }
+    : Math.abs(quantityDelta) < 0.000001
+      ? {
+          status: 'matched',
+          quantity_delta: 0,
+          note: 'Ghostfolio tracker quantity matches the moomoo live broker quantity.',
+        }
+      : {
+          status: 'mismatch',
+          quantity_delta: quantityDelta,
+          note: 'Ghostfolio tracker quantity differs from the moomoo live broker quantity; treat this as a reconciliation issue, not extra shares.',
+        }
+
+  const allocation_pct = ghos.net_worth_total && ghos.net_worth_total > 0 && tracker_market_value > 0
+    ? (tracker_market_value / ghos.net_worth_total) * 100
     : null
 
   return {
     symbol,
     positions,
-    total_quantity,
-    total_market_value,
+    owned_quantity,
+    owned_market_value,
+    answer_source,
+    broker_quantity,
+    broker_market_value,
+    paper_quantity,
+    paper_market_value,
+    tracker_quantity,
+    tracker_market_value,
+    // Backward-compatible fields deliberately mirror the answerable owned
+    // value instead of summing tracker + broker data. Ghostfolio is not an
+    // independent broker, so adding it to moomoo double counts.
+    total_quantity: owned_quantity,
+    total_market_value: owned_market_value,
     net_worth_total: ghos.net_worth_total,
     allocation_pct,
+    allocation_source: allocation_pct == null ? null : 'ghostfolio_tracker',
     cash_paper_usd: moomoo.cash_paper_usd,
     cash_live_usd: moomoo.cash_live_usd,
     ghostfolio_status: ghos.status,
+    reconciliation,
+    value_units_note: 'Ghostfolio values are in its base currency (MYR here). Moomoo live/paper market values are in the broker market currency, typically USD for US symbols and HKD for HK symbols. Do not add those values without FX conversion.',
     ghostfolio_accounts: ghos.account_names,
   }
 }
