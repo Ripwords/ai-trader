@@ -23,11 +23,52 @@ interface SymbolSummary {
   latestConfidence: number | null
 }
 
+interface IntelligenceQueueItem {
+  symbol: string
+  action: 'monitor_running' | 'rerun_failed' | 'review_thesis' | 'refresh_stale' | 'none'
+  severity: 'high' | 'medium' | 'low'
+  note: string
+  latest_run_id: string
+  latest_started_at: string
+  latest_rating: string | null
+  latest_confidence: number | null
+  days_since_complete: number | null
+}
+
+interface ResearchIntelligence {
+  summary: {
+    total_symbols: number
+    running_symbols: number
+    stale_symbols: number
+    failed_runs_7d: number
+    avg_confidence: number | null
+    total_cost_30d: number
+  }
+  queue: IntelligenceQueueItem[]
+}
+
 const { data: summary, refresh: refreshSummary } = await useFetch<{ symbols: SymbolSummary[] }>(
   '/api/research/symbols',
   { default: () => ({ symbols: [] }) },
 )
+const { data: intelligence, refresh: refreshIntelligence } = await useFetch<ResearchIntelligence>(
+  '/api/research/intelligence',
+  {
+    default: () => ({
+      summary: {
+        total_symbols: 0,
+        running_symbols: 0,
+        stale_symbols: 0,
+        failed_runs_7d: 0,
+        avg_confidence: null,
+        total_cost_30d: 0,
+      },
+      queue: [],
+    }),
+  },
+)
 const tiles = computed(() => summary.value?.symbols ?? [])
+const queue = computed(() => intelligence.value?.queue.slice(0, 4) ?? [])
 
 const search = ref('')
 const trimmed = computed(() => search.value.trim().toUpperCase())
@@ -44,6 +85,19 @@ function ratingTone(r: string | null): 'up' | 'down' | 'neutral' {
   if (v === 'strong-buy' || v === 'buy') return 'up'
   if (v === 'reduce' || v === 'sell') return 'down'
   return 'neutral'
+}
+
+function actionLabel(action: IntelligenceQueueItem['action']): string {
+  if (action === 'monitor_running') return 'monitor'
+  if (action === 'rerun_failed') return 'rerun'
+  if (action === 'review_thesis') return 'review'
+  if (action === 'refresh_stale') return 'refresh'
+  return 'current'
+}
+
+function refreshAll() {
+  refreshSummary()
+  refreshIntelligence()
 }
 
 // Postgres serialises timestamps as ``2026-05-10 15:35:40.874689+00``
@@ -101,6 +155,53 @@ function toIso(s: string | null): string | null {
           </label>
         </section>
 
+        <section class="intel">
+          <header class="intel__head">
+            <span class="intel__eyebrow">research intelligence</span>
+            <span class="intel__cost" data-mono>
+              30d cost ${{ intelligence?.summary.total_cost_30d.toFixed(2) ?? '0.00' }}
+            </span>
+          </header>
+          <div class="intel__stats">
+            <div>
+              <span class="intel__stat-label">symbols</span>
+              <strong data-mono>{{ intelligence?.summary.total_symbols ?? 0 }}</strong>
+            </div>
+            <div>
+              <span class="intel__stat-label">running</span>
+              <strong data-mono>{{ intelligence?.summary.running_symbols ?? 0 }}</strong>
+            </div>
+            <div>
+              <span class="intel__stat-label">stale</span>
+              <strong data-mono>{{ intelligence?.summary.stale_symbols ?? 0 }}</strong>
+            </div>
+            <div>
+              <span class="intel__stat-label">failed 7d</span>
+              <strong data-mono>{{ intelligence?.summary.failed_runs_7d ?? 0 }}</strong>
+            </div>
+            <div>
+              <span class="intel__stat-label">avg conf</span>
+              <strong data-mono>{{ intelligence?.summary.avg_confidence ?? '—' }}{{ intelligence?.summary.avg_confidence == null ? '' : '%' }}</strong>
+            </div>
+          </div>
+          <div v-if="queue.length > 0" class="intel__queue">
+            <NuxtLink
+              v-for="item in queue"
+              :key="`${item.symbol}-${item.action}`"
+              :to="`/research/${encodeURIComponent(item.symbol)}`"
+              class="intel__item"
+              :data-severity="item.severity"
+            >
+              <span class="intel__symbol" data-mono>{{ item.symbol }}</span>
+              <span class="intel__action" data-mono>{{ actionLabel(item.action) }}</span>
+              <span class="intel__note">{{ item.note }}</span>
+            </NuxtLink>
+          </div>
+          <p v-else class="intel__empty" data-mono>
+            research queue clear
+          </p>
+        </section>
+
         <!-- ─── Tickers with prior runs ─── -->
         <section class="tiles">
           <header class="tiles__head">
@@ -112,7 +213,7 @@ function toIso(s: string | null): string | null {
               type="button"
               class="tiles__refresh"
               data-mono
-              @click="refreshSummary()"
+              @click="refreshAll()"
             >
               ↻ refresh
             </button>
@@ -317,6 +418,103 @@ function toIso(s: string | null): string | null {
 }
 .search__btn-glyph { font-size: 0.95rem; }
 
+/* ─── Intelligence queue ─── */
+.intel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1rem 1.2rem;
+  background: var(--ink-1);
+  border: 1px solid var(--ink-line-strong);
+  border-radius: 4px;
+}
+.intel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.intel__eyebrow,
+.intel__cost,
+.intel__stat-label,
+.intel__action {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+.intel__eyebrow {
+  font-size: 0.7rem;
+  letter-spacing: 0.22em;
+  color: var(--paper-3);
+}
+.intel__cost {
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  color: var(--paper-3);
+}
+.intel__stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.intel__stats > div {
+  padding: 0.75rem;
+  background: var(--ink-2);
+  border: 1px solid var(--ink-line);
+}
+.intel__stat-label {
+  display: block;
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+  color: var(--paper-3);
+}
+.intel__stats strong {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 1.1rem;
+  color: var(--paper-0);
+}
+.intel__queue {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+.intel__item {
+  display: grid;
+  grid-template-columns: 76px 72px minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: center;
+  padding: 0.75rem;
+  color: var(--paper-1);
+  text-decoration: none;
+  background: var(--ink-2);
+  border: 1px solid var(--ink-line);
+  border-left-width: 2px;
+}
+.intel__item[data-severity="high"] { border-left-color: var(--tape-down); }
+.intel__item[data-severity="medium"] { border-left-color: var(--accent); }
+.intel__symbol {
+  font-family: var(--font-mono);
+  color: var(--paper-0);
+}
+.intel__action {
+  font-size: 0.62rem;
+  letter-spacing: 0.13em;
+  color: var(--accent);
+}
+.intel__note {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--paper-2);
+  font-size: 0.82rem;
+}
+.intel__empty {
+  margin: 0;
+  color: var(--paper-3);
+  font-size: 0.78rem;
+}
+
 /* ─── Tiles ─── */
 .tiles {
   display: flex;
@@ -475,4 +673,17 @@ function toIso(s: string | null): string | null {
 }
 .tile__sep { color: var(--ink-line-strong); }
 .tile__time { color: var(--paper-2); }
+
+@media (max-width: 760px) {
+  .intel__stats,
+  .intel__queue {
+    grid-template-columns: 1fr;
+  }
+  .intel__item {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+  .intel__note {
+    grid-column: 1 / -1;
+  }
+}
 </style>

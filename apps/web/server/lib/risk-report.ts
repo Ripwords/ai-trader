@@ -6,6 +6,7 @@
 // being dropped.
 
 import { getApiClient } from '../llm/http'
+import type { KLineResponse, Snapshot } from '../llm/http'
 import { buildChartSummary, generateRiskReport } from '../llm/risk-report'
 import {
   getCompanyNews,
@@ -30,7 +31,7 @@ const fetchSnapshotCached = defineCachedFunction(
     swr: true,
     getKey: (symbol: string) => symbol,
   },
-)
+) as (symbol: string) => Promise<Snapshot>
 
 const fetchKlineCached = defineCachedFunction(
   async (symbol: string) => {
@@ -43,7 +44,7 @@ const fetchKlineCached = defineCachedFunction(
     swr: true,
     getKey: (symbol: string) => symbol,
   },
-)
+) as (symbol: string) => Promise<KLineResponse>
 
 // 35% valuation · 35% health · 30% growth — fixed weights so the score
 // breakdown bars on the page always equal the displayed total. The LLM
@@ -105,7 +106,7 @@ export async function* streamRiskReport({ symbol, signal }: StreamArgs): AsyncGe
     ['yahoo', Promise.all([metricsP, quarterlyP, earningsP, newsP]).then(v => ({ branch: 'yahoo' as Branch, value: v }))],
   ])
 
-  let snapshot: Awaited<ReturnType<typeof fetchSnapshotCached>> | null = null
+  let snapshot: Snapshot | null = null
   let bars: PriceBar[] = []
   let metrics!: Awaited<typeof metricsP>
   let quarterlyRaw!: Awaited<typeof quarterlyP>
@@ -118,7 +119,7 @@ export async function* streamRiskReport({ symbol, signal }: StreamArgs): AsyncGe
     branches.delete(winner.branch)
 
     if (winner.branch === 'snapshot') {
-      snapshot = winner.value as typeof snapshot
+      snapshot = winner.value as Snapshot | null
       const price = {
         last: snapshot?.lastPrice ?? null,
         change: snapshot && snapshot.lastPrice !== null && snapshot.prevClosePrice !== null
@@ -130,7 +131,7 @@ export async function* streamRiskReport({ symbol, signal }: StreamArgs): AsyncGe
       yield { kind: 'meta', symbol, name: snapshot?.name ?? null }
       yield { kind: 'price', price }
     } else if (winner.branch === 'kline') {
-      const klineRes = winner.value as Awaited<typeof klineP>
+      const klineRes = winner.value as KLineResponse | null
       bars = klineRes?.bars
         ? klineRes.bars.map(b => ({
             time: typeof b.time === 'string' ? b.time : new Date(b.time as unknown as string).toISOString(),
@@ -317,4 +318,3 @@ function buildEarningsUpdate(
   ].filter(Boolean).join(' · ')
   return { headline, date: earnings.last_earnings_date, body }
 }
-

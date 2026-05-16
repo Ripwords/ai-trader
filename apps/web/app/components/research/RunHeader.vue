@@ -54,7 +54,7 @@ watch(
 const activeNode = computed(() => {
   for (let i = props.events.length - 1; i >= 0; i--) {
     const ev = props.events[i]
-    if (ev.type === 'node-start') return ev.node
+    if (ev?.type === 'node-start') return ev.node
   }
   return null
 })
@@ -62,7 +62,7 @@ const activeNode = computed(() => {
 const lastTool = computed(() => {
   for (let i = props.events.length - 1; i >= 0; i--) {
     const ev = props.events[i]
-    if (ev.type === 'tool-call' || ev.type === 'tool-result') return ev
+    if (ev?.type === 'tool-call' || ev?.type === 'tool-result') return ev
   }
   return null
 })
