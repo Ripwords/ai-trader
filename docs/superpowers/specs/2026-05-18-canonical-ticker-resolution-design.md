@@ -114,10 +114,22 @@ continues to back the autocomplete.
 
 ### 5. Algo strategies & direct APIs
 
-- Strategy create/edit: resolve symbol at the write boundary; store canonical
-  `{symbol, company_name}`. `ambiguous`/`not_found`/`error` → validation error.
-- `/quote/*` and `/api/internal/news/*`: resolve at the boundary; an
-  unresolvable input returns a structured error rather than a guess.
+- Strategy create/edit: `canonicalize_symbol_or_422()` resolves the symbol at
+  the write boundary and **rewrites `body.symbol` to the canonical moomoo
+  form**; `ambiguous`/`not_found`/`error` → HTTP 422. Implemented in
+  `app/routers/algo.py`.
+- **Implementation decision — algo does not persist `company_name`.** The
+  strategy model has no such column and no jsonb bag; adding one is a DB
+  migration out of proportion to the benefit. The canonical *symbol* is
+  itself the correctness fix (backtests/live signals now run on the right
+  instrument). Revisit only if a future feature needs the display name.
+- **Implementation decision — `/quote/*` and raw `/api/internal/news/*` are
+  NOT gated.** moomoo codes (`US.MU`) are already canonical and unambiguous at
+  the data layer — the hallucination was an LLM/news-query problem, not a
+  quote-data problem, and that path is now anchored via the toolkit's
+  company-named news query (§4). A resolve gate on these hot, real-time
+  endpoints would add latency for ~no correctness gain (YAGNI). Flagged to the
+  user for confirmation since they had selected this scope.
 
 ## Error Handling
 
