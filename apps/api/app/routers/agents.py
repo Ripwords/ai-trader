@@ -38,6 +38,7 @@ from app.services.agents import backtest as backtest_mod
 from app.services.agents import graph as graph_mod
 from app.services.agents import pricing as pricing_mod
 from app.services.agents import reflection as reflection_mod
+from app.services.agents import toolkit as toolkit_mod
 from app.services.agents.cost_cap import DailyCapExceeded, assert_under_daily_cap
 from app.services.agents.memory import PostgresMemoryProvider
 from app.services.agents.model_config import build_tradingagents_config
@@ -206,6 +207,12 @@ async def run_agents(
 
         opend = getattr(request.app.state, "opend_client", None)
         checkpointer = getattr(request.app.state, "checkpointer", None)
+        # The Nuxt proxy resolves and forwards company_name; a direct API
+        # caller may not, so resolve it here before the graph starts (fail
+        # soft — None just means ticker-only labelling).
+        company_name = body.company_name
+        if not company_name:
+            company_name = await toolkit_mod.resolve_company_name(body.symbol)
         graph = await graph_mod.build_graph_locked(
             opend,
             max_debate_rounds=body.max_debate_rounds,
@@ -214,6 +221,7 @@ async def run_agents(
             reasoning_effort=body.reasoning_effort,
             response_language=body.response_language,
             selected_analysts=body.selected_analysts,
+            company_name=company_name,
             checkpointer=checkpointer,
         )
         memory_by_role = await _recall_memory_by_role(request, x_user_id, body.symbol)

@@ -71,12 +71,28 @@ const tiles = computed(() => summary.value?.symbols ?? [])
 const queue = computed(() => intelligence.value?.queue.slice(0, 4) ?? [])
 
 const search = ref('')
+// Canonical moomoo symbol captured when the user picks from the searcher.
+// Cleared whenever the text changes so a stale pick can't ride along with
+// re-typed text. See docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
+const picked = ref<string | null>(null)
 const trimmed = computed(() => search.value.trim().toUpperCase())
 const canGo = computed(() => trimmed.value.length > 0)
 
+function onSelect(hit: { moomoo: string | null, yahoo: string }) {
+  picked.value = hit.moomoo ?? hit.yahoo
+}
+function onInput(v: string) {
+  search.value = v
+  picked.value = null
+}
+
 function go() {
   if (!canGo.value) return
-  navigateTo(`/research/${encodeURIComponent(trimmed.value)}`)
+  // Prefer the canonical symbol from an explicit pick. Free-typed text still
+  // navigates — the proxy hard-gates it server-side (422) and the per-symbol
+  // page renders a resolver picker instead of a cryptic failure.
+  const target = picked.value ?? trimmed.value
+  navigateTo(`/research/${encodeURIComponent(target)}`)
 }
 
 function ratingTone(r: string | null): 'up' | 'down' | 'neutral' {
@@ -139,8 +155,10 @@ function toIso(s: string | null): string | null {
           <label class="search__row">
             <span class="search__label">symbol</span>
             <SymbolSearchInput
-              v-model="search"
+              :model-value="search"
               placeholder="search NVDA, tencent, 600519…"
+              @update:model-value="onInput"
+              @select="onSelect"
               @submit="canGo && go()"
             />
             <button

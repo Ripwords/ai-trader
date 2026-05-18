@@ -1,4 +1,5 @@
 import YahooFinance from 'yahoo-finance2'
+import type { SymbolResolution } from '../../types/symbol'
 
 const yahoo = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
 
@@ -561,6 +562,51 @@ export async function searchSymbols(query: string, limit = 8): Promise<SymbolSea
     console.error('[yahoo] searchSymbols failed', query, err)
     return []
   }
+}
+
+export type { SymbolResolution }
+
+/**
+ * Resolve a symbol-shaped input (`MU`, `US.MU`, `us.mu`, `HK.00700`) to a
+ * single canonical listing via Yahoo. The single source of truth every
+ * service resolves through — see
+ * docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
+ *
+ * Fails closed: only an exact-ticker equity on a moomoo-supported market is
+ * `resolved`; anything else is `ambiguous`/`not_found` so callers can force a
+ * pick rather than silently guess (the `US.MU` → "Munich Re" bug).
+ */
+export async function resolveSymbol(input: string): Promise<SymbolResolution> {
+  const raw = input.trim()
+  if (!raw) return { status: 'not_found' }
+  // Search on the Yahoo-form ticker so "US.MU" finds Micron, not the literal
+  // string "US.MU".
+  const expectedYahoo = toYahooSymbol(raw.toUpperCase())
+  let results: SymbolSearchResult[]
+  try {
+    results = await fetchSymbolSearch(expectedYahoo, 10)
+  } catch (err) {
+    console.error('[yahoo] resolveSymbol failed', input, err)
+    return { status: 'error' }
+  }
+  if (results.length === 0) return { status: 'not_found' }
+  const exact = results.find(
+    r =>
+      r.yahoo.toUpperCase() === expectedYahoo.toUpperCase() &&
+      r.type.toUpperCase() === 'EQUITY' &&
+      r.moomoo != null,
+  )
+  if (exact && exact.moomoo) {
+    return {
+      status: 'resolved',
+      moomoo: exact.moomoo,
+      yahoo: exact.yahoo,
+      name: exact.name,
+      exchange: exact.exchange,
+      quoteType: exact.type,
+    }
+  }
+  return { status: 'ambiguous', candidates: results.slice(0, 8) }
 }
 
 const fetchFxRate = defineCachedFunction(

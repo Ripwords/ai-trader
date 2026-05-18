@@ -1,5 +1,6 @@
 import { ref, shallowRef } from 'vue'
 import type { AgentEvent, Rating } from '../types/agents'
+import type { SymbolResolution } from '../types/symbol'
 
 export function parseNdjsonChunk(buffer: string, chunk: string, out: AgentEvent[]): string {
   const combined = buffer + chunk
@@ -39,6 +40,11 @@ export function useAgentsRun() {
   const verdict = ref<VerdictState | null>(null)
   const runId = ref<string | null>(null)
   const error = ref<string | null>(null)
+  // Set when the proxy rejects an unresolved symbol (422). Carries the
+  // resolver verdict so the page can render a "pick the right instrument"
+  // picker instead of a cryptic failure. See
+  // docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
+  const resolution = ref<SymbolResolution | null>(null)
   // Real wall-clock start of the run, not the moment the local fetch began.
   // Sourced from agent_runs.started_at when replaying from history so a
   // refreshed page shows the cumulative elapsed time, not a re-zeroed counter.
@@ -125,6 +131,21 @@ export function useAgentsRun() {
       error.value = existingRunId
         ? `a run is already in progress (run_id ${existingRunId})`
         : 'a run is already in progress'
+      return
+    }
+
+    // 422 = the symbol could not be uniquely resolved to a canonical Yahoo
+    // listing. The proxy refuses to start the run (the "US.MU" → "Munich Re"
+    // bug); surface the resolver verdict so the page can show a picker.
+    if (res.status === 422) {
+      try {
+        const body = (await res.json()) as { data?: SymbolResolution }
+        resolution.value = body?.data ?? null
+      } catch {
+        resolution.value = null
+      }
+      status.value = 'failed'
+      error.value = 'pick the right instrument from search — this symbol is ambiguous or unknown'
       return
     }
 
@@ -331,7 +352,7 @@ export function useAgentsRun() {
   }
 
   return {
-    events, status, currentNode, verdict, runId, error,
+    events, status, currentNode, verdict, runId, error, resolution,
     startedAt,
     start, resume, cancel, loadFromHistory, reset,
   }

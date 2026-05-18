@@ -134,6 +134,77 @@ async def test_get_balance_sheet_handles_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_company_name_anchors_news_query_and_output(monkeypatch):
+    """The "US.MU" → "Munich Re" bug: agents only ever saw the ticker. When
+    the run carries a resolved company name, the news query and every tool
+    output must name the company so the LLM (and the search provider) anchor
+    on the right one."""
+    monkeypatch.setenv("WEB_INTERNAL_BASE_URL", "http://web:3000")
+    monkeypatch.setenv("INTERNAL_BEARER", "secret")
+
+    captured = {}
+
+    async def fake_get(self, url, headers=None, params=None, timeout=None, **kwargs):
+        captured["params"] = params
+
+        class R:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"results": [{"title": "x"}]}
+
+        return R()
+
+    with patch("httpx.AsyncClient.get", new=fake_get):
+        toolkit = build_toolkit(opend_client=None, company_name="Micron Technology, Inc.")
+        result = await toolkit.get_news.ainvoke(
+            {"ticker": "US.MU", "start_date": "2026-05-01", "end_date": "2026-05-10"}
+        )
+
+    # Search provider gets the company name, not a bare ambiguous ticker.
+    assert "Micron Technology, Inc." in captured["params"]["symbol"]
+    assert "US.MU" in captured["params"]["symbol"]
+    # The tool output names the company so the analyst can't drift to Munich Re.
+    assert "Micron Technology, Inc." in result
+
+
+@pytest.mark.asyncio
+async def test_get_news_without_company_name_is_unchanged(monkeypatch):
+    """No resolved name (legacy/direct callers) → preserve old behaviour:
+    query is the bare ticker, output labelled by ticker."""
+    monkeypatch.setenv("WEB_INTERNAL_BASE_URL", "http://web:3000")
+    monkeypatch.setenv("INTERNAL_BEARER", "secret")
+
+    captured = {}
+
+    async def fake_get(self, url, headers=None, params=None, timeout=None, **kwargs):
+        captured["params"] = params
+
+        class R:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"results": [{"title": "x"}]}
+
+        return R()
+
+    with patch("httpx.AsyncClient.get", new=fake_get):
+        toolkit = build_toolkit(opend_client=None)
+        result = await toolkit.get_news.ainvoke(
+            {"ticker": "NVDA", "start_date": "2026-05-01", "end_date": "2026-05-10"}
+        )
+
+    assert captured["params"]["symbol"] == "NVDA"
+    assert "News for NVDA" in result
+
+
+@pytest.mark.asyncio
 async def test_get_news_handles_search_failure(monkeypatch):
     monkeypatch.setenv("WEB_INTERNAL_BASE_URL", "http://web:3000")
     monkeypatch.setenv("INTERNAL_BEARER", "secret")

@@ -72,6 +72,34 @@ async def _internal_get(path: str, params: dict[str, Any]) -> dict:
         return r.json()
 
 
+async def resolve_symbol(symbol: str) -> dict:
+    """Resolve ``symbol`` via the web's single-source-of-truth resolver and
+    return the full verdict dict (``status`` ∈ resolved/ambiguous/not_found/
+    error). A resolver outage maps to ``{"status": "error"}`` so callers
+    decide how strict to be (the agents fail soft; algo create fails closed).
+    See docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
+    """
+    try:
+        return await _internal_get("/api/internal/symbol/resolve", {"q": symbol})
+    except Exception:  # noqa: BLE001 — resolver outage is a status, not a crash
+        return {"status": "error"}
+
+
+async def resolve_company_name(symbol: str) -> str | None:
+    """Resolve ``symbol`` to its canonical company name via the web's
+    single-source-of-truth resolver. Used as the API-side fallback when a
+    caller hit ``/agents/run`` directly without a pre-resolved name (the Nuxt
+    proxy resolves first; direct callers don't). Returns ``None`` on
+    ambiguous/not-found/error so the run still proceeds ticker-only rather
+    than crashing — fail soft here, the Nuxt hard gate is the strict path.
+    See docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
+    """
+    data = await resolve_symbol(symbol)
+    if data.get("status") == "resolved":
+        return data.get("name") or None
+    return None
+
+
 @dataclass
 class AgentToolkit:
     get_stock_data: Any
@@ -100,7 +128,10 @@ def _normalize_moomoo_symbol(symbol: str) -> str:
     return symbol if "." in symbol else f"US.{symbol}"
 
 
-def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
+def build_toolkit(
+    opend_client: OpenDClient | None,
+    company_name: str | None = None,
+) -> AgentToolkit:
     """Build the 9-tool toolkit. ``opend_client`` may be None in tests; the
     market-data tools then short-circuit with a friendly placeholder.
 
@@ -108,7 +139,18 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
     signatures) so the analyst prompts can call our shim without param-name
     drift; the LLM was burning ~3 tool calls per run guessing ``ticker`` vs
     ``symbol`` before this rename.
+
+    ``company_name`` (optional) — the Yahoo-resolved company for this run. When
+    set, every tool output is labelled with it and the news query is anchored
+    on it, so the analysts (and the search provider) can't drift to a
+    different company sharing the ticker (the "US.MU" → "Munich Re" bug). See
+    docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
     """
+
+    def _label(ticker: str) -> str:
+        """Human label for tool output: ``Micron Technology, Inc. (US.MU)``
+        when resolved, else the bare ticker (legacy/direct callers)."""
+        return f"{company_name} ({ticker})" if company_name else ticker
 
     # ─── Tool signatures match TradingAgents' bundled tools verbatim ───
     # The analyst prompts are trained on the upstream signatures; any drift
@@ -132,8 +174,8 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         data = await _internal_get("/api/internal/yahoo/balance-sheet", {"symbol": ticker})
         bs = data.get("balance_sheet")
         if not bs:
-            return f"No balance sheet available for {ticker}."
-        return f"Balance Sheet for {ticker}:\n```json\n{json.dumps(bs, indent=2)}\n```"
+            return f"No balance sheet available for {_label(ticker)}."
+        return f"Balance Sheet for {_label(ticker)}:\n```json\n{json.dumps(bs, indent=2)}\n```"
 
     @tool
     async def get_cashflow(
@@ -146,8 +188,8 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         data = await _internal_get("/api/internal/yahoo/cashflow", {"symbol": ticker})
         cf = data.get("cashflow")
         if not cf:
-            return f"No cashflow available for {ticker}."
-        return f"Cashflow for {ticker}:\n```json\n{json.dumps(cf, indent=2)}\n```"
+            return f"No cashflow available for {_label(ticker)}."
+        return f"Cashflow for {_label(ticker)}:\n```json\n{json.dumps(cf, indent=2)}\n```"
 
     @tool
     async def get_income_statement(
@@ -160,15 +202,15 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         data = await _internal_get("/api/internal/yahoo/income-statement", {"symbol": ticker})
         is_ = data.get("income_statement")
         if not is_:
-            return f"No income statement available for {ticker}."
-        return f"Income Statement for {ticker}:\n```json\n{json.dumps(is_, indent=2)}\n```"
+            return f"No income statement available for {_label(ticker)}."
+        return f"Income Statement for {_label(ticker)}:\n```json\n{json.dumps(is_, indent=2)}\n```"
 
     @tool
     async def get_fundamentals(ticker: str, curr_date: str) -> str:
         """Retrieve comprehensive fundamental data for a given ticker symbol."""
         del curr_date
         data = await _internal_get("/api/internal/yahoo/fundamentals", {"symbol": ticker})
-        return f"Fundamentals for {ticker}:\n```json\n{json.dumps(data, indent=2)}\n```"
+        return f"Fundamentals for {_label(ticker)}:\n```json\n{json.dumps(data, indent=2)}\n```"
 
     @tool
     async def get_insider_transactions(
@@ -182,19 +224,22 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         )
         rows = data.get("transactions") or []
         if not rows:
-            return f"No insider transactions in the last 90 days for {ticker}."
-        return f"Insider Transactions for {ticker}:\n```json\n{json.dumps(rows, indent=2)}\n```"
+            return f"No insider transactions in the last 90 days for {_label(ticker)}."
+        return f"Insider Transactions for {_label(ticker)}:\n```json\n{json.dumps(rows, indent=2)}\n```"
 
     @tool
     async def get_news(ticker: str, start_date: str, end_date: str) -> str:
         """Retrieve news data for a given ticker symbol over a date range."""
         del start_date, end_date  # Tavily/Brave search returns recent news regardless
+        # Anchor the search query on the resolved company so Brave/Tavily
+        # return the right company's news, not a same-ticker namesake.
+        query = f"{company_name} {ticker}" if company_name else ticker
         data = await _internal_get(
-            "/api/internal/news/symbol", {"symbol": ticker, "max_results": 10}
+            "/api/internal/news/symbol", {"symbol": query, "max_results": 10}
         )
         if data.get("error") and not data.get("results"):
             return "News search not configured. Skipping news analysis."
-        return f"News for {ticker}:\n```json\n{json.dumps(data.get('results', []), indent=2)}\n```"
+        return f"News for {_label(ticker)}:\n```json\n{json.dumps(data.get('results', []), indent=2)}\n```"
 
     @tool
     async def get_global_news(
@@ -216,7 +261,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
     async def get_stock_data(symbol: str, start_date: str, end_date: str) -> str:
         """Daily OHLCV bars for the given symbol in the date range."""
         if opend_client is None:
-            return f"Market data unavailable for {symbol}."
+            return f"Market data unavailable for {_label(symbol)}."
         moomoo_code = _normalize_moomoo_symbol(symbol)
         bars = await _kline_bars(opend_client, moomoo_code, ktype="K_DAY", num=252)
         # ``time_key`` is a datetime object on the production Bar model; the
@@ -236,7 +281,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
             for b in bars
         ]
         return (
-            f"Daily bars for {symbol} ({start_date}..{end_date}):\n"
+            f"Daily bars for {_label(symbol)} ({start_date}..{end_date}):\n"
             f"```json\n{json.dumps(bars[-60:], indent=2, default=str)}\n```"
         )
 
@@ -256,7 +301,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
         single name, a list, or a comma-separated string.
         """
         if opend_client is None:
-            return f"Market data unavailable for {symbol}."
+            return f"Market data unavailable for {_label(symbol)}."
 
         if isinstance(indicator, list):
             indicators = [str(s).strip() for s in indicator if str(s).strip()]
@@ -301,7 +346,7 @@ def build_toolkit(opend_client: OpenDClient | None) -> AgentToolkit:
             else:
                 sections.append(f"{ind.upper()}: {series}")
         body = "\n".join(sections)
-        return f"Indicators for {symbol} as of {curr_date} (look_back={look_back_days}d):\n{body}"
+        return f"Indicators for {_label(symbol)} as of {curr_date} (look_back={look_back_days}d):\n{body}"
 
     return AgentToolkit(
         get_stock_data=get_stock_data,

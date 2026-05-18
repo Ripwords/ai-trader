@@ -39,6 +39,29 @@ describe('useAgentsRun.start — concurrent-run guard', () => {
   })
 })
 
+describe('useAgentsRun.start — canonical-resolution gate (422)', () => {
+  it('surfaces ambiguous candidates and does NOT enter running state', async () => {
+    ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(async () => ({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        data: {
+          status: 'ambiguous',
+          candidates: [
+            { moomoo: 'US.MU', yahoo: 'MU', name: 'Micron Technology, Inc.', exchange: 'NASDAQ', type: 'Equity' },
+          ],
+        },
+      }),
+    }))
+    const run = useAgentsRun()
+    await run.start('MU')
+    expect(run.status.value).toBe('failed')
+    expect(run.events.value).toEqual([])
+    expect(run.resolution.value).toMatchObject({ status: 'ambiguous' })
+    expect(run.error.value?.toLowerCase()).toContain('pick')
+  })
+})
+
 describe('useAgentsRun.loadFromHistory — refresh-survival', () => {
   it('rehydrates events + status + startedAt from /api/research/agent-messages', async () => {
     ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(async () => ({

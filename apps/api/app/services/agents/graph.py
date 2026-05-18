@@ -138,6 +138,7 @@ def build_graph(
     reasoning_effort: str = "medium",
     response_language: str = "en-US",
     selected_analysts: list[str] | None = None,
+    company_name: str | None = None,
     results_dir: Path | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> TradingAgentsGraph:
@@ -175,7 +176,7 @@ def build_graph(
         max_recur_limit=100,
         results_dir=results_dir or Path("./results"),
     )
-    toolkit = build_toolkit(opend_client)
+    toolkit = build_toolkit(opend_client, company_name=company_name)
     _install_toolkit(toolkit)
     # ``selected_analysts`` is forwarded to ``GraphSetup`` via the kwarg of
     # the same name; defaults are TradingAgents' four analysts.
@@ -204,6 +205,7 @@ async def build_graph_locked(
     reasoning_effort: str = "medium",
     response_language: str = "en-US",
     selected_analysts: list[str] | None = None,
+    company_name: str | None = None,
     results_dir: Path | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> TradingAgentsGraph:
@@ -231,6 +233,7 @@ async def build_graph_locked(
             reasoning_effort=reasoning_effort,
             response_language=response_language,
             selected_analysts=selected_analysts,
+            company_name=company_name,
             results_dir=results_dir,
             checkpointer=checkpointer,
         )

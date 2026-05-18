@@ -78,6 +78,11 @@ class RunRequest(BaseModel):
     """
 
     symbol: str = Field(..., min_length=1, max_length=20)
+    # Yahoo-resolved company name. The Nuxt proxy resolves and forwards it so
+    # the agents anchor on the right company (the "US.MU" → "Munich Re" bug).
+    # Optional: direct API callers may omit it; the router then resolves it
+    # itself before the graph starts.
+    company_name: str | None = Field(default=None, max_length=200)
     trade_date: date | None = None
     max_debate_rounds: int = Field(1, ge=1, le=3)
     max_risk_discuss_rounds: int = Field(1, ge=1, le=3)

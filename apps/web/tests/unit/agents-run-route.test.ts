@@ -18,6 +18,16 @@ vi.mock('../../server/db/repo', () => ({
   getOwnerId: vi.fn().mockResolvedValue('owner-id'),
 }))
 
+// The proxy now hard-gates on canonical resolution before any DB/upstream
+// work. Default: NVDA resolves cleanly so the existing assertions still hold.
+const resolveSymbol = vi.fn().mockResolvedValue({
+  status: 'resolved', moomoo: 'NVDA', yahoo: 'NVDA',
+  name: 'NVIDIA Corporation', exchange: 'NASDAQ', quoteType: 'Equity',
+})
+vi.mock('../../server/lib/yahoo', () => ({
+  resolveSymbol: (...a: unknown[]) => resolveSymbol(...a),
+}))
+
 vi.mock('h3', async () => {
   const actual = await vi.importActual<typeof import('h3')>('h3')
   return {
@@ -32,6 +42,7 @@ let handler: PostHandler
 beforeEach(async () => {
   vi.resetModules()
   insertReturning.mockReset()
+  resolveSymbol.mockClear()
   updateSet.mockReset()
   updateWhere.mockReset()
   selectLimit.mockReset()

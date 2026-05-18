@@ -31,9 +31,16 @@ const queryRunId = computed(() => {
 useHead({ title: () => `research · ${symbol.value}` })
 
 const {
-  events, status, verdict, runId, error, startedAt,
+  events, status, verdict, runId, error, resolution, startedAt,
   start, resume, cancel, loadFromHistory, reset,
 } = useAgentsRun()
+
+// Candidates to offer when the symbol couldn't be uniquely resolved (422).
+// Navigating to a candidate's canonical moomoo symbol re-enters this page
+// with a symbol the proxy will accept.
+const resolutionCandidates = computed(() =>
+  resolution.value?.status === 'ambiguous' ? resolution.value.candidates : [],
+)
 const router = useRouter()
 
 const { data: runHistory, refresh: refreshHistory } = await useFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs', {
@@ -354,9 +361,24 @@ watch(
             role="alert"
           >
             <header class="error-card__head">
-              <span class="error-card__eyebrow">transmission failed</span>
+              <span class="error-card__eyebrow">
+                {{ resolution ? 'symbol not resolved' : 'transmission failed' }}
+              </span>
             </header>
             <p class="error-card__body" data-mono>{{ error }}</p>
+            <ul v-if="resolutionCandidates.length > 0" class="resolve-picker">
+              <li v-for="c in resolutionCandidates" :key="c.yahoo">
+                <NuxtLink
+                  v-if="c.moomoo"
+                  :to="`/research/${encodeURIComponent(c.moomoo)}`"
+                  class="resolve-picker__hit"
+                >
+                  <span class="resolve-picker__sym" data-mono>{{ c.moomoo }}</span>
+                  <span class="resolve-picker__name">{{ c.name }}</span>
+                  <span class="resolve-picker__meta" data-mono>{{ c.exchange }}</span>
+                </NuxtLink>
+              </li>
+            </ul>
           </section>
         </div>
 
@@ -670,5 +692,41 @@ watch(
   color: var(--paper-1);
   line-height: 1.55;
   word-break: break-word;
+}
+.resolve-picker {
+  list-style: none;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.resolve-picker__hit {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) 1fr auto;
+  gap: 0.85rem;
+  align-items: baseline;
+  padding: 0.55rem 0.75rem;
+  text-decoration: none;
+  background: var(--ink-2);
+  border: 1px solid var(--ink-line);
+  border-radius: 3px;
+  transition: border-color 140ms ease;
+}
+.resolve-picker__hit:hover { border-color: var(--accent); }
+.resolve-picker__sym { color: var(--paper-0); font-size: 0.82rem; }
+.resolve-picker__name {
+  color: var(--paper-2);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.resolve-picker__meta {
+  color: var(--paper-3);
+  font-size: 0.6rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 </style>

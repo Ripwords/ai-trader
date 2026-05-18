@@ -3,6 +3,7 @@ import { and, eq, gte, sql } from 'drizzle-orm'
 import { getDb } from '../../../db/client'
 import { agentRuns } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
+import { resolveSymbol } from '../../lib/yahoo'
 import { AgentRunTee } from '../../utils/agents-tee'
 import type { AgentEvent } from '../../../types/agents'
 
@@ -27,6 +28,22 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<AgentsRunBody>(event)
   if (!body?.symbol) throw createError({ statusCode: 400, statusMessage: 'symbol required' })
 
+  // Hard gate: never run on a raw, unresolved symbol. Resolve to a canonical
+  // Yahoo listing first so the agents can't hallucinate the company (the
+  // "US.MU" → "Munich Re" bug). Defense in depth — the UI also gates this,
+  // but a direct POST or a stale deep link must not slip past.
+  // See docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
+  const resolution = await resolveSymbol(body.symbol)
+  if (resolution.status !== 'resolved') {
+    throw createError({
+      statusCode: 422,
+      statusMessage: 'symbol could not be uniquely resolved — pick from search',
+      data: resolution,
+    })
+  }
+  const symbol = resolution.moomoo
+  const companyName = resolution.name
+
   const tradeDate = body.trade_date ?? new Date().toISOString().slice(0, 10)
   const db = getDb()
 
@@ -41,7 +58,7 @@ export default defineEventHandler(async (event) => {
     .where(
       and(
         eq(agentRuns.userId, userId),
-        eq(agentRuns.symbol, body.symbol),
+        eq(agentRuns.symbol, symbol),
         eq(agentRuns.status, 'running'),
         gte(agentRuns.startedAt, cutoff),
       ),
@@ -62,7 +79,7 @@ export default defineEventHandler(async (event) => {
     .where(
       and(
         eq(agentRuns.userId, userId),
-        eq(agentRuns.symbol, body.symbol),
+        eq(agentRuns.symbol, symbol),
         eq(agentRuns.status, 'running'),
         sql`${agentRuns.startedAt} < ${cutoff}`,
       ),
@@ -72,10 +89,11 @@ export default defineEventHandler(async (event) => {
     .insert(agentRuns)
     .values({
       userId,
-      symbol: body.symbol,
+      symbol,
       tradeDate,
       status: 'running',
       config: {
+        company_name: companyName,
         max_debate_rounds: body.max_debate_rounds ?? 1,
         max_risk_discuss_rounds: body.max_risk_discuss_rounds ?? 1,
         deep_thinking: body.deep_thinking ?? true,
@@ -99,7 +117,8 @@ export default defineEventHandler(async (event) => {
       'x-user-id': userId,
     },
     body: JSON.stringify({
-      symbol: body.symbol,
+      symbol,
+      company_name: companyName,
       trade_date: tradeDate,
       max_debate_rounds: body.max_debate_rounds ?? 1,
       max_risk_discuss_rounds: body.max_risk_discuss_rounds ?? 1,

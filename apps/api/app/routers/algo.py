@@ -16,9 +16,29 @@ from app.schemas.algo import (
     ValidateCodeRequest,
     ValidateCodeResult,
 )
+from app.services.agents.toolkit import resolve_symbol
 from app.services.algo import repo
 from app.services.algo.backtester import run_backtest
 from app.services.opend import OpendAdapter, OpendError
+
+
+async def canonicalize_symbol_or_422(symbol: str) -> str:
+    """Resolve ``symbol`` to its canonical moomoo form before it's persisted
+    on a strategy. Algo fails closed: a backtest/live signal on the wrong
+    instrument (the "US.MU" → "Munich Re" bug) is silently money-losing, so
+    anything not uniquely resolved is rejected at the write boundary.
+    See docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
+    """
+    verdict = await resolve_symbol(symbol)
+    if verdict.get("status") == "resolved" and verdict.get("moomoo"):
+        return verdict["moomoo"]
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=(
+            f"symbol {symbol!r} could not be uniquely resolved "
+            f"({verdict.get('status')}) — pick a specific listing"
+        ),
+    )
 
 router = APIRouter(
     prefix="/algo",
@@ -52,6 +72,7 @@ async def create_strategy(body: StrategyCreate) -> Strategy:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
         )
 
+    body.symbol = await canonicalize_symbol_or_422(body.symbol)
     return await repo.create_strategy(body)
 
 
@@ -72,6 +93,8 @@ async def update_strategy(strategy_id: str, body: StrategyUpdate) -> Strategy:
             validate(body.code)
         except ValidationError as e:
             raise HTTPException(status_code=422, detail=str(e))
+    if body.symbol is not None:
+        body.symbol = await canonicalize_symbol_or_422(body.symbol)
     s = await repo.update_strategy(strategy_id, body)
     if not s:
         raise HTTPException(status_code=404, detail="strategy not found")
