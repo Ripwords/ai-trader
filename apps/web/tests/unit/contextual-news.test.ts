@@ -48,7 +48,7 @@ describe('getContextualNews — ticker + macro', () => {
       Array.from({ length: 10 }, (_, i) => news(`m${i}`, `https://m/${i}`)),
     )
     const res = await getContextualNews({ symbol: 'NVDA', maxResults: 5 })
-    expect(res.macro.length).toBeLessThanOrEqual(4)
+    expect(res.macro.length).toBe(4)
   })
 
   it('survives a failing search group', async () => {

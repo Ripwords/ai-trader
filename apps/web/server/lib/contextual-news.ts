@@ -69,7 +69,24 @@ export async function getContextualNews(
   }
 }
 
+// Round-robin merge: takes index 0 of each group, then index 1, etc.,
+// skipping exhausted groups. This keeps every group fairly represented
+// once a downstream cap is applied.
+function interleave<T>(groups: T[][]): T[] {
+  const out: T[] = []
+  const max = Math.max(0, ...groups.map(g => g.length))
+  for (let i = 0; i < max; i++) {
+    for (const g of groups) {
+      if (i < g.length) out.push(g[i])
+    }
+  }
+  return out
+}
+
 async function fetchMacro(): Promise<NewsResult[]> {
   const groups = await Promise.all(MACRO_QUERIES.map(q => safeSearch(q, MACRO_CAP)))
-  return groups.flat()
+  // Interleave so both macro categories (rates + broad market) appear
+  // after getContextualNews applies the MACRO_CAP, instead of the first
+  // query monopolizing the cap.
+  return interleave(groups)
 }
