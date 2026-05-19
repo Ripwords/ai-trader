@@ -22,7 +22,12 @@ const SYSTEM_PROMPT = [
   'company. Return 2-4 concise queries (3-7 words each).',
 ].join(' ')
 
-export async function deriveAngles(args: DeriveAnglesArgs): Promise<string[]> {
+export interface DeriveAnglesResult {
+  queries: string[]
+  failed: boolean
+}
+
+export async function deriveAngles(args: DeriveAnglesArgs): Promise<DeriveAnglesResult> {
   const who = [args.companyName, `(${args.symbol})`, args.sector ? `sector: ${args.sector}` : '']
     .filter(Boolean)
     .join(' ')
@@ -41,11 +46,14 @@ export async function deriveAngles(args: DeriveAnglesArgs): Promise<string[]> {
         outputTokens: usage.outputTokens ?? 0,
       })
     }
-    return object.queries
-      .map(q => q.trim())
-      .filter(q => q.length > 0)
-      .slice(0, 4)
+    return {
+      queries: object.queries
+        .map(q => q.trim())
+        .filter(q => q.length > 0)
+        .slice(0, 4),
+      failed: false,
+    }
   } catch {
-    return []
+    return { queries: [], failed: true }
   }
 }

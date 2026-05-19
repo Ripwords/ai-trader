@@ -13,7 +13,7 @@ beforeEach(async () => {
   vi.resetModules()
   searchMock.mockReset()
   deriveMock.mockReset()
-  deriveMock.mockResolvedValue([]) // no contextual queries in this task
+  deriveMock.mockResolvedValue({ queries: [], failed: false }) // no contextual queries in this task
   ;({ getContextualNews } = await import('../../server/lib/contextual-news'))
 })
 
@@ -59,6 +59,22 @@ describe('getContextualNews — ticker + macro', () => {
     const res = await getContextualNews({ symbol: 'NVDA', maxResults: 5 })
     expect(res.ticker).toHaveLength(1)
     expect(res.macro).toEqual([])
+    expect(res.error).toContain('macro')
+  })
+
+  it('sets error when angle derivation fails', async () => {
+    searchMock.mockResolvedValue([news('ok', 'https://a/1')])
+    deriveMock.mockResolvedValue({ queries: [], failed: true })
+    const res = await getContextualNews({ symbol: 'NVDA', maxResults: 5 })
+    expect(res.contextual).toEqual([])
+    expect(res.error).toContain('angle derivation failed')
+  })
+
+  it('omits error when everything succeeds', async () => {
+    searchMock.mockResolvedValue([news('ok', 'https://a/1')])
+    deriveMock.mockResolvedValue({ queries: ['x'], failed: false })
+    const res = await getContextualNews({ symbol: 'NVDA', maxResults: 5 })
+    expect(res.error).toBeUndefined()
   })
 
   it('serves macro from cache within TTL (no repeat provider calls)', async () => {

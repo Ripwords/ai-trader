@@ -6,6 +6,7 @@ export interface ContextualNews {
   ticker: NewsResult[]
   macro: NewsResult[]
   contextual: NewsResult[]
+  error?: string
 }
 
 export interface GetContextualNewsArgs {
@@ -23,11 +24,17 @@ const MACRO_QUERIES = [
 const MACRO_CAP = 4
 const CONTEXTUAL_CAP = 6
 
-async function safeSearch(query: string, max: number): Promise<NewsResult[]> {
+interface SafeSearchResult {
+  results: NewsResult[]
+  failed: boolean
+}
+
+async function safeSearch(query: string, max: number): Promise<SafeSearchResult> {
   try {
-    return await searchWithFallback('news', query, max)
+    const results = await searchWithFallback('news', query, max)
+    return { results, failed: false }
   } catch {
-    return []
+    return { results: [], failed: true }
   }
 }
 
@@ -39,15 +46,15 @@ export async function getContextualNews(
     ? `${args.companyName} ${args.symbol}`
     : args.symbol
 
-  const [tickerRaw, macroRaw, angleQueries] = await Promise.all([
+  const [tickerRes, macroRes, angleRes] = await Promise.all([
     safeSearch(tickerQuery, maxResults),
     fetchMacro(),
     deriveAngles({ symbol: args.symbol, companyName: args.companyName }),
   ])
 
-  const contextualRaw = (
-    await Promise.all(angleQueries.map(q => safeSearch(q, 4)))
-  ).flat()
+  const contextualResults = await Promise.all(angleRes.queries.map(q => safeSearch(q, 4)))
+  const contextualRaw = contextualResults.flatMap(r => r.results)
+  const contextualFailed = contextualResults.some(r => r.failed)
 
   const seen = new Set<string>()
   const take = (items: NewsResult[], cap: number): NewsResult[] => {
@@ -61,12 +68,24 @@ export async function getContextualNews(
     return out
   }
 
+  const failures: string[] = []
+  if (tickerRes.failed) failures.push('ticker news search failed')
+  if (macroRes.failed) failures.push('macro news search failed')
+  if (angleRes.failed) failures.push('angle derivation failed')
+  else if (contextualFailed) failures.push('sector/peer news search failed')
+
   // Ticker wins URL ties, then macro, then contextual.
-  return {
-    ticker: take(tickerRaw, maxResults),
-    macro: take(macroRaw, MACRO_CAP),
+  const result: ContextualNews = {
+    ticker: take(tickerRes.results, maxResults),
+    macro: take(macroRes.results, MACRO_CAP),
     contextual: take(contextualRaw, CONTEXTUAL_CAP),
   }
+
+  if (failures.length) {
+    result.error = failures.join('; ')
+  }
+
+  return result
 }
 
 // Round-robin merge: takes index 0 of each group, then index 1, etc.,
@@ -84,15 +103,23 @@ function interleave<T>(groups: T[][]): T[] {
   return out
 }
 
+interface MacroFetchResult {
+  results: NewsResult[]
+  failed: boolean
+}
+
 const MACRO_TTL_MS = 10 * 60 * 1000
 let macroCache: { at: number; data: NewsResult[] } | null = null
 
-async function fetchMacro(): Promise<NewsResult[]> {
+async function fetchMacro(): Promise<MacroFetchResult> {
   if (macroCache && Date.now() - macroCache.at < MACRO_TTL_MS) {
-    return macroCache.data
+    return { results: macroCache.data, failed: false }
   }
   const groups = await Promise.all(MACRO_QUERIES.map(q => safeSearch(q, MACRO_CAP)))
-  const data = interleave(groups)
-  macroCache = { at: Date.now(), data }
-  return data
+  const failed = groups.some(g => g.failed)
+  const results = interleave(groups.map(g => g.results))
+  if (!failed) {
+    macroCache = { at: Date.now(), data: results }
+  }
+  return { results, failed }
 }

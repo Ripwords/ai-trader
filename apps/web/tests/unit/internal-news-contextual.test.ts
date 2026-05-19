@@ -62,4 +62,16 @@ describe('/internal/news/contextual', () => {
     expect(res.contextual).toEqual([])
     expect(res.error).toBe('boom')
   })
+
+  it('passes through error from the helper', async () => {
+    getContextualNewsMock.mockResolvedValue({
+      ticker: [{ title: 't', url: 'u1', content: 'c' }],
+      macro: [], contextual: [], error: 'macro news search failed',
+    })
+    const res = (await handler(
+      makeEvent({ authorization: 'Bearer test-bearer' }, { symbol: 'NVDA' }),
+    )) as { ticker: unknown[]; error?: string }
+    expect(res.ticker).toHaveLength(1)
+    expect(res.error).toBe('macro news search failed')
+  })
 })

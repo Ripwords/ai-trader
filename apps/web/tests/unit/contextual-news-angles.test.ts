@@ -21,7 +21,7 @@ describe('deriveAngles', () => {
       usage: { inputTokens: 10, outputTokens: 5 },
     })
     const out = await deriveAngles({ symbol: 'NVDA', companyName: 'NVIDIA Corp' })
-    expect(out).toEqual(['semis export controls', 'AMD AI demand', 'q3', 'q4'])
+    expect(out).toEqual({ queries: ['semis export controls', 'AMD AI demand', 'q3', 'q4'], failed: false })
   })
 
   it('drops empty/whitespace queries', async () => {
@@ -30,12 +30,12 @@ describe('deriveAngles', () => {
       usage: undefined,
     })
     const out = await deriveAngles({ symbol: 'NVDA' })
-    expect(out).toEqual(['real query'])
+    expect(out).toEqual({ queries: ['real query'], failed: false })
   })
 
-  it('returns [] when the model call throws', async () => {
+  it('returns failed:true when the model call throws', async () => {
     generateObjectMock.mockRejectedValue(new Error('llm down'))
     const out = await deriveAngles({ symbol: 'NVDA' })
-    expect(out).toEqual([])
+    expect(out).toEqual({ queries: [], failed: true })
   })
 })
