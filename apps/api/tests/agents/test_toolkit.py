@@ -238,4 +238,44 @@ async def test_get_news_handles_search_failure(monkeypatch):
     with patch("httpx.AsyncClient.get", new=fake_get):
         toolkit = build_toolkit(opend_client=None)
         result = await toolkit.get_news.ainvoke({"ticker": "NVDA", "start_date": "2026-05-01", "end_date": "2026-05-10"})
-    assert "News search not configured" in result or "no key" in result.lower()
+    assert result == "News search not configured. Skipping news analysis."
+
+
+@pytest.mark.asyncio
+async def test_get_news_renders_partial_data_with_error_note(monkeypatch):
+    """When the API returns some news sections alongside an error (partial
+    failure), the tool must render the available sections AND append the
+    partial-failure note — it must NOT fall back to the 'not configured'
+    short-circuit."""
+    monkeypatch.setenv("WEB_INTERNAL_BASE_URL", "http://web:3000")
+    monkeypatch.setenv("INTERNAL_BEARER", "secret")
+
+    async def fake_get(self, url, headers=None, params=None, timeout=None, **kwargs):
+        class R:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "symbol": "NVDA",
+                    "ticker": [{"title": "nv earnings", "url": "u1", "content": "c"}],
+                    "macro": [],
+                    "contextual": [],
+                    "error": "angle LLM failed",
+                }
+
+        return R()
+
+    with patch("httpx.AsyncClient.get", new=fake_get):
+        toolkit = build_toolkit(opend_client=None)
+        result = await toolkit.get_news.ainvoke(
+            {"ticker": "NVDA", "start_date": "2026-05-01", "end_date": "2026-05-10"}
+        )
+
+    assert "### Ticker" in result
+    assert "nv earnings" in result
+    assert "News for NVDA" in result
+    assert "partially failed" in result and "angle LLM failed" in result
+    assert "News search not configured" not in result

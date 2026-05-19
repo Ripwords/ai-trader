@@ -237,12 +237,13 @@ def build_toolkit(
         if company_name:
             params["company"] = company_name
         data = await _internal_get("/api/internal/news/contextual", params)
-        if data.get("error") and not (
+        error_msg = data.get("error")
+        if error_msg and not (
             data.get("ticker") or data.get("macro") or data.get("contextual")
         ):
             return "News search not configured. Skipping news analysis."
 
-        def _section(title: str, items: list) -> str:
+        def _section(title: str, items: list[dict]) -> str:
             if not items:
                 return ""
             return f"### {title}\n```json\n{json.dumps(items, indent=2)}\n```\n"
@@ -252,6 +253,8 @@ def build_toolkit(
             + _section("Macro", data.get("macro", []))
             + _section("Sector & Peers", data.get("contextual", []))
         ) or "No news found."
+        if error_msg:
+            body += f"\n_(Note: news retrieval partially failed — {error_msg})_"
         return f"News for {_label(ticker)}:\n{body}"
 
     @tool
