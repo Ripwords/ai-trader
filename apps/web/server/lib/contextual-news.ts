@@ -77,7 +77,8 @@ function interleave<T>(groups: T[][]): T[] {
   const max = Math.max(0, ...groups.map(g => g.length))
   for (let i = 0; i < max; i++) {
     for (const g of groups) {
-      if (i < g.length) out.push(g[i])
+      const item = g[i]
+      if (item !== undefined) out.push(item)
     }
   }
   return out
