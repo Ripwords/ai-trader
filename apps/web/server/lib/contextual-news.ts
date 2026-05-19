@@ -83,10 +83,15 @@ function interleave<T>(groups: T[][]): T[] {
   return out
 }
 
+const MACRO_TTL_MS = 10 * 60 * 1000
+let macroCache: { at: number; data: NewsResult[] } | null = null
+
 async function fetchMacro(): Promise<NewsResult[]> {
+  if (macroCache && Date.now() - macroCache.at < MACRO_TTL_MS) {
+    return macroCache.data
+  }
   const groups = await Promise.all(MACRO_QUERIES.map(q => safeSearch(q, MACRO_CAP)))
-  // Interleave so both macro categories (rates + broad market) appear
-  // after getContextualNews applies the MACRO_CAP, instead of the first
-  // query monopolizing the cap.
-  return interleave(groups)
+  const data = interleave(groups)
+  macroCache = { at: Date.now(), data }
+  return data
 }

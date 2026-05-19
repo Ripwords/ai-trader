@@ -60,4 +60,20 @@ describe('getContextualNews — ticker + macro', () => {
     expect(res.ticker).toHaveLength(1)
     expect(res.macro).toEqual([])
   })
+
+  it('serves macro from cache within TTL (no repeat provider calls)', async () => {
+    searchMock.mockImplementation(async (_k: string, q: string) => {
+      if (q.includes('NVDA') || q.includes('TSLA')) return [news('t', 'https://t/1')]
+      return [news('macro', `https://m/${Math.random()}`)]
+    })
+
+    await getContextualNews({ symbol: 'NVDA', maxResults: 5 })
+    const callsAfterFirst = searchMock.mock.calls.filter(c => c[1].includes('Federal Reserve')).length
+
+    await getContextualNews({ symbol: 'TSLA', maxResults: 5 })
+    const callsAfterSecond = searchMock.mock.calls.filter(c => c[1].includes('Federal Reserve')).length
+
+    expect(callsAfterFirst).toBe(1)
+    expect(callsAfterSecond).toBe(1) // second call reused the cache
+  })
 })
