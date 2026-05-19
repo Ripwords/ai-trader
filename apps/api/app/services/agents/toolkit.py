@@ -229,17 +229,30 @@ def build_toolkit(
 
     @tool
     async def get_news(ticker: str, start_date: str, end_date: str) -> str:
-        """Retrieve news data for a given ticker symbol over a date range."""
-        del start_date, end_date  # Tavily/Brave search returns recent news regardless
-        # Anchor the search query on the resolved company so Brave/Tavily
-        # return the right company's news, not a same-ticker namesake.
-        query = f"{company_name} {ticker}" if company_name else ticker
-        data = await _internal_get(
-            "/api/internal/news/symbol", {"symbol": query, "max_results": 10}
-        )
-        if data.get("error") and not data.get("results"):
+        """Retrieve news for a ticker PLUS the macro, sector, and peer news
+        that explains why it moved (rates/Fed, market-wide moves,
+        competitors, geopolitics)."""
+        del start_date, end_date  # search returns recent news regardless
+        params: dict[str, Any] = {"symbol": ticker, "max_results": 10}
+        if company_name:
+            params["company"] = company_name
+        data = await _internal_get("/api/internal/news/contextual", params)
+        if data.get("error") and not (
+            data.get("ticker") or data.get("macro") or data.get("contextual")
+        ):
             return "News search not configured. Skipping news analysis."
-        return f"News for {_label(ticker)}:\n```json\n{json.dumps(data.get('results', []), indent=2)}\n```"
+
+        def _section(title: str, items: list) -> str:
+            if not items:
+                return ""
+            return f"### {title}\n```json\n{json.dumps(items, indent=2)}\n```\n"
+
+        body = (
+            _section("Ticker", data.get("ticker", []))
+            + _section("Macro", data.get("macro", []))
+            + _section("Sector & Peers", data.get("contextual", []))
+        ) or "No news found."
+        return f"News for {_label(ticker)}:\n{body}"
 
     @tool
     async def get_global_news(
