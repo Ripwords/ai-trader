@@ -71,10 +71,15 @@ describe('getContextualNews — ticker + macro', () => {
   })
 
   it('omits error when everything succeeds', async () => {
-    searchMock.mockResolvedValue([news('ok', 'https://a/1')])
+    // Use distinct URLs per query so contextual results are not deduped away
+    // (ticker claims 'https://a/1'; contextual angle query 'x' gets 'https://ctx/1').
+    searchMock.mockImplementation(async (_k: string, q: string) =>
+      [news('ok', q.includes('x') ? 'https://ctx/1' : 'https://a/1')],
+    )
     deriveMock.mockResolvedValue({ queries: ['x'], failed: false })
     const res = await getContextualNews({ symbol: 'NVDA', maxResults: 5 })
     expect(res.error).toBeUndefined()
+    expect(res.contextual.length).toBeGreaterThan(0)
   })
 
   it('serves macro from cache within TTL (no repeat provider calls)', async () => {

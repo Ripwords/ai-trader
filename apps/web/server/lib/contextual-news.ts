@@ -116,10 +116,13 @@ async function fetchMacro(): Promise<MacroFetchResult> {
     return { results: macroCache.data, failed: false }
   }
   const groups = await Promise.all(MACRO_QUERIES.map(q => safeSearch(q, MACRO_CAP)))
-  const failed = groups.some(g => g.failed)
+  const anyFailed = groups.some(g => g.failed)
   const results = interleave(groups.map(g => g.results))
-  if (!failed) {
+  // Never cache a partial/failed fetch — retry next call even if we got some results.
+  if (!anyFailed) {
     macroCache = { at: Date.now(), data: results }
   }
-  return { results, failed }
+  // Partial macro outage that still returns data is not surfaced as a failure;
+  // cache is still skipped so it retries next call.
+  return { results, failed: anyFailed && results.length === 0 }
 }
