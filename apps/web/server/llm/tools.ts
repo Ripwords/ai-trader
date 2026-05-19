@@ -3,6 +3,7 @@ import { getCookie, type H3Event } from 'h3'
 import { z } from 'zod'
 import type { ApiClient } from './http'
 import { searchWithFallback } from '../lib/search'
+import { getContextualNews } from '../lib/contextual-news'
 
 interface MakeToolsOptions {
   event?: H3Event
@@ -156,6 +157,22 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         maxResults: z.number().int().min(1).max(20).default(5),
       }),
       execute: async ({ query, maxResults }) => ({ results: await searchWithFallback('news', query, maxResults) }),
+    }),
+
+    'ticker_news_context': tool({
+      description:
+        'News for a STOCK plus the macro, sector, and peer/geopolitical news '
+        + 'that explains WHY it moved (Fed/rates, market-wide selloffs, '
+        + 'competitors, supply-chain, commodities). Prefer this over '
+        + 'search_news for any stock question — especially "why did X drop/'
+        + 'rise". Returns three groups: ticker, macro, contextual.',
+      inputSchema: z.object({
+        symbol: z.string(),
+        companyName: z.string().optional(),
+        maxResults: z.number().int().min(1).max(20).default(10),
+      }),
+      execute: async ({ symbol, companyName, maxResults }) =>
+        getContextualNews({ symbol, companyName, maxResults }),
     }),
 
     'trade_accounts': tool({

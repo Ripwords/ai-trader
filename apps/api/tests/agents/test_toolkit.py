@@ -145,6 +145,7 @@ async def test_company_name_anchors_news_query_and_output(monkeypatch):
     captured = {}
 
     async def fake_get(self, url, headers=None, params=None, timeout=None, **kwargs):
+        captured["url"] = url
         captured["params"] = params
 
         class R:
@@ -154,7 +155,12 @@ async def test_company_name_anchors_news_query_and_output(monkeypatch):
                 pass
 
             def json(self):
-                return {"results": [{"title": "x"}]}
+                return {
+                    "symbol": "US.MU",
+                    "ticker": [{"title": "micron earnings", "url": "u1", "content": "c"}],
+                    "macro": [{"title": "fed holds", "url": "u2", "content": "c"}],
+                    "contextual": [{"title": "DRAM prices", "url": "u3", "content": "c"}],
+                }
 
         return R()
 
@@ -164,11 +170,11 @@ async def test_company_name_anchors_news_query_and_output(monkeypatch):
             {"ticker": "US.MU", "start_date": "2026-05-01", "end_date": "2026-05-10"}
         )
 
-    # Search provider gets the company name, not a bare ambiguous ticker.
-    assert "Micron Technology, Inc." in captured["params"]["symbol"]
-    assert "US.MU" in captured["params"]["symbol"]
-    # The tool output names the company so the analyst can't drift to Munich Re.
+    assert captured["url"].endswith("/api/internal/news/contextual")
+    assert "Micron Technology, Inc." in captured["params"]["company"]
+    assert captured["params"]["symbol"] == "US.MU"
     assert "Micron Technology, Inc." in result
+    assert "Macro" in result and "fed holds" in result
 
 
 @pytest.mark.asyncio
@@ -181,6 +187,7 @@ async def test_get_news_without_company_name_is_unchanged(monkeypatch):
     captured = {}
 
     async def fake_get(self, url, headers=None, params=None, timeout=None, **kwargs):
+        captured["url"] = url
         captured["params"] = params
 
         class R:
@@ -190,7 +197,12 @@ async def test_get_news_without_company_name_is_unchanged(monkeypatch):
                 pass
 
             def json(self):
-                return {"results": [{"title": "x"}]}
+                return {
+                    "symbol": "NVDA",
+                    "ticker": [{"title": "x", "url": "u1", "content": "c"}],
+                    "macro": [],
+                    "contextual": [],
+                }
 
         return R()
 
@@ -200,7 +212,9 @@ async def test_get_news_without_company_name_is_unchanged(monkeypatch):
             {"ticker": "NVDA", "start_date": "2026-05-01", "end_date": "2026-05-10"}
         )
 
+    assert captured["url"].endswith("/api/internal/news/contextual")
     assert captured["params"]["symbol"] == "NVDA"
+    assert "company" not in captured["params"] or not captured["params"]["company"]
     assert "News for NVDA" in result
 
 
@@ -217,11 +231,51 @@ async def test_get_news_handles_search_failure(monkeypatch):
                 pass
 
             def json(self):
-                return {"symbol": "NVDA", "results": [], "error": "no key"}
+                return {"symbol": "NVDA", "ticker": [], "macro": [], "contextual": [], "error": "no key"}
 
         return R()
 
     with patch("httpx.AsyncClient.get", new=fake_get):
         toolkit = build_toolkit(opend_client=None)
         result = await toolkit.get_news.ainvoke({"ticker": "NVDA", "start_date": "2026-05-01", "end_date": "2026-05-10"})
-    assert "News search not configured" in result or "no key" in result.lower()
+    assert result == "News search not configured. Skipping news analysis."
+
+
+@pytest.mark.asyncio
+async def test_get_news_renders_partial_data_with_error_note(monkeypatch):
+    """When the API returns some news sections alongside an error (partial
+    failure), the tool must render the available sections AND append the
+    partial-failure note — it must NOT fall back to the 'not configured'
+    short-circuit."""
+    monkeypatch.setenv("WEB_INTERNAL_BASE_URL", "http://web:3000")
+    monkeypatch.setenv("INTERNAL_BEARER", "secret")
+
+    async def fake_get(self, url, headers=None, params=None, timeout=None, **kwargs):
+        class R:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "symbol": "NVDA",
+                    "ticker": [{"title": "nv earnings", "url": "u1", "content": "c"}],
+                    "macro": [],
+                    "contextual": [],
+                    "error": "angle LLM failed",
+                }
+
+        return R()
+
+    with patch("httpx.AsyncClient.get", new=fake_get):
+        toolkit = build_toolkit(opend_client=None)
+        result = await toolkit.get_news.ainvoke(
+            {"ticker": "NVDA", "start_date": "2026-05-01", "end_date": "2026-05-10"}
+        )
+
+    assert "### Ticker" in result
+    assert "nv earnings" in result
+    assert "News for NVDA" in result
+    assert "partially failed" in result and "angle LLM failed" in result
+    assert "News search not configured" not in result
