@@ -39,6 +39,7 @@ describe('tool catalogue', () => {
       'market_snapshot',
       'search_news',
       'search_web',
+      'ticker_news_context',
       'trade_account_overview',
       'trade_accounts',
       'trade_cancel_order',
