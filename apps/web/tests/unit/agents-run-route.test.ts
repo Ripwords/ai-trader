@@ -2,13 +2,14 @@ import type { H3Event } from 'h3'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const insertReturning = vi.fn()
+const insertValues = vi.fn()
 const updateSet = vi.fn()
 const updateWhere = vi.fn()
 const selectLimit = vi.fn()
 
 vi.mock('../../db/client', () => ({
   getDb: () => ({
-    insert: () => ({ values: () => ({ returning: insertReturning }) }),
+    insert: () => ({ values: insertValues }),
     update: () => ({ set: updateSet }),
     select: () => ({ from: () => ({ where: () => ({ limit: selectLimit }) }) }),
   }),
@@ -21,7 +22,7 @@ vi.mock('../../server/db/repo', () => ({
 // The proxy now hard-gates on canonical resolution before any DB/upstream
 // work. Default: NVDA resolves cleanly so the existing assertions still hold.
 const resolveSymbol = vi.fn().mockResolvedValue({
-  status: 'resolved', moomoo: 'NVDA', yahoo: 'NVDA',
+  status: 'resolved', symbol: 'NVDA', moomoo: 'NVDA', yahoo: 'NVDA',
   name: 'NVIDIA Corporation', exchange: 'NASDAQ', quoteType: 'Equity',
 })
 vi.mock('../../server/lib/yahoo', () => ({
@@ -42,11 +43,13 @@ let handler: PostHandler
 beforeEach(async () => {
   vi.resetModules()
   insertReturning.mockReset()
+  insertValues.mockReset()
   resolveSymbol.mockClear()
   updateSet.mockReset()
   updateWhere.mockReset()
   selectLimit.mockReset()
 
+  insertValues.mockReturnValue({ returning: insertReturning })
   insertReturning.mockResolvedValue([
     { id: 'run-1', symbol: 'NVDA', tradeDate: '2026-05-10' },
   ])
@@ -111,5 +114,34 @@ describe('POST /api/research/agents-run', () => {
     })
     // No new row should have been inserted when a run is already in-flight.
     expect(insertReturning).not.toHaveBeenCalled()
+  })
+
+  it('starts research runs for exact Yahoo-only equities that have no moomoo code', async () => {
+    resolveSymbol.mockResolvedValueOnce({
+      status: 'resolved',
+      symbol: '0097.KL',
+      moomoo: null,
+      yahoo: '0097.KL',
+      name: 'ViTrox Corporation Berhad',
+      exchange: 'Kuala Lumpur',
+      quoteType: 'Equity',
+    })
+    const event = makeEvent({ symbol: '0097.KL' })
+
+    await handler(event)
+
+    expect(insertReturning).toHaveBeenCalledTimes(1)
+    const values = insertValues.mock.calls[0]?.[0]
+    expect(values).toMatchObject({
+      symbol: '0097.KL',
+      config: expect.objectContaining({ company_name: 'ViTrox Corporation Berhad' }),
+    })
+    const upstreamBody = JSON.parse(
+      ((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { body: string }).body,
+    )
+    expect(upstreamBody).toMatchObject({
+      symbol: '0097.KL',
+      company_name: 'ViTrox Corporation Berhad',
+    })
   })
 })

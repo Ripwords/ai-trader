@@ -36,8 +36,7 @@ const {
 } = useAgentsRun()
 
 // Candidates to offer when the symbol couldn't be uniquely resolved (422).
-// Navigating to a candidate's canonical moomoo symbol re-enters this page
-// with a symbol the proxy will accept.
+// Prefer a moomoo code when one exists; otherwise use the Yahoo ticker.
 const resolutionCandidates = computed(() =>
   resolution.value?.status === 'ambiguous' ? resolution.value.candidates : [],
 )
@@ -369,11 +368,10 @@ watch(
             <ul v-if="resolutionCandidates.length > 0" class="resolve-picker">
               <li v-for="c in resolutionCandidates" :key="c.yahoo">
                 <NuxtLink
-                  v-if="c.moomoo"
-                  :to="`/research/${encodeURIComponent(c.moomoo)}`"
+                  :to="`/research/${encodeURIComponent(c.moomoo ?? c.yahoo)}`"
                   class="resolve-picker__hit"
                 >
-                  <span class="resolve-picker__sym" data-mono>{{ c.moomoo }}</span>
+                  <span class="resolve-picker__sym" data-mono>{{ c.moomoo ?? c.yahoo }}</span>
                   <span class="resolve-picker__name">{{ c.name }}</span>
                   <span class="resolve-picker__meta" data-mono>{{ c.exchange }}</span>
                 </NuxtLink>

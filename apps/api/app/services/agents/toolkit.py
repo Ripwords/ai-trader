@@ -72,6 +72,13 @@ async def _internal_get(path: str, params: dict[str, Any]) -> dict:
         return r.json()
 
 
+async def _internal_get_safe(path: str, params: dict[str, Any]) -> dict:
+    try:
+        return await _internal_get(path, params)
+    except Exception:  # noqa: BLE001 - data-source fallback should fail soft
+        return {}
+
+
 async def resolve_symbol(symbol: str) -> dict:
     """Resolve ``symbol`` via the web's single-source-of-truth resolver and
     return the full verdict dict (``status`` ∈ resolved/ambiguous/not_found/
@@ -126,6 +133,33 @@ def _normalize_moomoo_symbol(symbol: str) -> str:
     so non-US tickers reach moomoo intact.
     """
     return symbol if "." in symbol else f"US.{symbol}"
+
+
+def _is_moomoo_supported_symbol(symbol: str) -> bool:
+    upper = symbol.upper()
+    if "." not in upper:
+        return True
+    return upper.startswith(("US.", "HK.", "SH.", "SZ."))
+
+
+async def _yahoo_daily_bars(symbol: str, num: int) -> list[dict]:
+    data = await _internal_get_safe(
+        "/api/internal/yahoo/daily-bars",
+        {"symbol": symbol, "limit": num},
+    )
+    rows = data.get("bars") if isinstance(data, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
+async def _market_bars(opend: Any, symbol: str, *, ktype: str, num: int) -> list[dict]:
+    if opend is not None and _is_moomoo_supported_symbol(symbol):
+        try:
+            return await _kline_bars(
+                opend, _normalize_moomoo_symbol(symbol), ktype=ktype, num=num
+            )
+        except Exception:  # noqa: BLE001 - fall through to Yahoo bars
+            pass
+    return await _yahoo_daily_bars(symbol, num)
 
 
 def build_toolkit(
@@ -276,10 +310,9 @@ def build_toolkit(
     @tool
     async def get_stock_data(symbol: str, start_date: str, end_date: str) -> str:
         """Daily OHLCV bars for the given symbol in the date range."""
-        if opend_client is None:
+        bars = await _market_bars(opend_client, symbol, ktype="K_DAY", num=252)
+        if not bars:
             return f"Market data unavailable for {_label(symbol)}."
-        moomoo_code = _normalize_moomoo_symbol(symbol)
-        bars = await _kline_bars(opend_client, moomoo_code, ktype="K_DAY", num=252)
         # ``time_key`` is a datetime object on the production Bar model; the
         # JSON encoder doesn't know how to serialise it, so coerce to ISO
         # strings before dumping.
@@ -316,9 +349,6 @@ def build_toolkit(
         or ``["macd", "rsi"]``) hit the right path. ``indicator`` accepts a
         single name, a list, or a comma-separated string.
         """
-        if opend_client is None:
-            return f"Market data unavailable for {_label(symbol)}."
-
         if isinstance(indicator, list):
             indicators = [str(s).strip() for s in indicator if str(s).strip()]
         else:
@@ -326,12 +356,13 @@ def build_toolkit(
         if not indicators:
             return "No indicators requested."
 
-        moomoo_code = _normalize_moomoo_symbol(symbol)
         # Daily bars; ``look_back_days`` plus a small buffer so multi-period
         # indicators like SMA-50 / MACD have warm-up data on the front end.
-        bars = await _kline_bars(
-            opend_client, moomoo_code, ktype="K_DAY", num=max(look_back_days + 60, 120)
+        bars = await _market_bars(
+            opend_client, symbol, ktype="K_DAY", num=max(look_back_days + 60, 120)
         )
+        if not bars:
+            return f"Market data unavailable for {_label(symbol)}."
         df = pd.DataFrame(bars)
         sdf = stockstats.StockDataFrame.retype(df)
 

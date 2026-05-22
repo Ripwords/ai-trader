@@ -82,6 +82,15 @@ export interface NewsItem {
   sentiment: 'positive' | 'negative' | 'neutral' | null
 }
 
+export interface DailyBar {
+  time: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
 export interface EarningsInfo {
   next_earnings_date: string | null
   days_until_earnings: number | null
@@ -335,6 +344,48 @@ export async function getCompanyNews(symbol: string, limit = 10): Promise<NewsIt
   }
 }
 
+const fetchDailyBars = defineCachedFunction(
+  async (symbol: string, limit: number): Promise<DailyBar[]> => {
+    const yfSym = toYahooSymbol(symbol)
+    const days = Math.max(limit * 2, limit + 30, 90)
+    const period1 = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    const chart = await yahoo.chart(yfSym, { period1, interval: '1d' })
+    return (chart.quotes ?? [])
+      .filter(q =>
+        q.open !== null &&
+        q.high !== null &&
+        q.low !== null &&
+        q.close !== null &&
+        q.volume !== null,
+      )
+      .slice(-limit)
+      .map(q => ({
+        time: q.date.toISOString().slice(0, 10),
+        open: q.open as number,
+        high: q.high as number,
+        low: q.low as number,
+        close: q.close as number,
+        volume: q.volume as number,
+      }))
+  },
+  {
+    name: 'yahoo',
+    group: 'daily-bars',
+    maxAge: 60 * 60 * 6,
+    swr: true,
+    getKey: (symbol: string, limit: number) => `${symbol}:${limit}`,
+  },
+)
+
+export async function getDailyBars(symbol: string, limit = 252): Promise<DailyBar[]> {
+  try {
+    return await fetchDailyBars(symbol, limit)
+  } catch (err) {
+    console.error('[yahoo] getDailyBars failed', symbol, err)
+    return []
+  }
+}
+
 export async function getFundamentalsBundle(symbol: string): Promise<FundamentalsBundle> {
   const [metrics, history] = await Promise.all([
     getFinancialMetrics(symbol),
@@ -572,9 +623,10 @@ export type { SymbolResolution }
  * service resolves through — see
  * docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
  *
- * Fails closed: only an exact-ticker equity on a moomoo-supported market is
- * `resolved`; anything else is `ambiguous`/`not_found` so callers can force a
- * pick rather than silently guess (the `US.MU` → "Munich Re" bug).
+ * Fails closed: only an exact-ticker Yahoo equity is `resolved`; anything else
+ * is `ambiguous`/`not_found` so callers can force a pick rather than silently
+ * guess (the `US.MU` → "Munich Re" bug). `moomoo` is populated only when the
+ * exact Yahoo listing maps to a moomoo-supported market.
  */
 export async function resolveSymbol(input: string): Promise<SymbolResolution> {
   const raw = input.trim()
@@ -593,12 +645,12 @@ export async function resolveSymbol(input: string): Promise<SymbolResolution> {
   const exact = results.find(
     r =>
       r.yahoo.toUpperCase() === expectedYahoo.toUpperCase() &&
-      r.type.toUpperCase() === 'EQUITY' &&
-      r.moomoo != null,
+      r.type.toUpperCase() === 'EQUITY',
   )
-  if (exact && exact.moomoo) {
+  if (exact) {
     return {
       status: 'resolved',
+      symbol: exact.moomoo ?? exact.yahoo,
       moomoo: exact.moomoo,
       yahoo: exact.yahoo,
       name: exact.name,

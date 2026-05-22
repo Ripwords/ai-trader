@@ -33,6 +33,7 @@ describe('resolveSymbol', () => {
 
     expect(r).toEqual({
       status: 'resolved',
+      symbol: 'US.MU',
       moomoo: 'US.MU',
       yahoo: 'MU',
       name: 'Micron Technology, Inc.',
@@ -41,6 +42,28 @@ describe('resolveSymbol', () => {
     })
     // Search runs on the Yahoo-form ticker, not the literal "US.MU" string.
     expect(search).toHaveBeenCalledWith('MU', expect.anything())
+  })
+
+  it('resolves an exact Yahoo equity even when it is not on a moomoo-supported market', async () => {
+    search.mockResolvedValue({
+      quotes: [
+        { symbol: '0097.KL', shortname: 'ViTrox Corporation Berhad', exchDisp: 'Kuala Lumpur', typeDisp: 'Equity' },
+        { symbol: '0097.KL-R', shortname: 'ViTrox Rights', exchDisp: 'Kuala Lumpur', typeDisp: 'Equity' },
+      ],
+    })
+
+    const r = await resolveSymbol('0097.KL')
+
+    expect(r).toEqual({
+      status: 'resolved',
+      symbol: '0097.KL',
+      moomoo: null,
+      yahoo: '0097.KL',
+      name: 'ViTrox Corporation Berhad',
+      exchange: 'Kuala Lumpur',
+      quoteType: 'Equity',
+    })
+    expect(search).toHaveBeenCalledWith('0097.KL', expect.anything())
   })
 
   it('returns ambiguous when no candidate exactly matches the ticker', async () => {

@@ -135,7 +135,7 @@ onBeforeUnmount(() => {
             :key="`${h.yahoo}-${i}`"
             type="button"
             class="sym-row"
-            :class="{ 'is-cursor': cursor === i, 'is-untradable': !h.moomoo }"
+            :class="{ 'is-cursor': cursor === i }"
             role="option"
             :aria-selected="cursor === i"
             @mousedown.prevent="pick(h)"
@@ -235,7 +235,6 @@ onBeforeUnmount(() => {
 }
 .sym-row:last-of-type { border-bottom: none; }
 .sym-row.is-cursor { background: var(--ink-2); }
-.sym-row.is-untradable { opacity: 0.55; }
 
 .sym-row-sym {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -244,7 +243,6 @@ onBeforeUnmount(() => {
   color: var(--paper-0);
   font-weight: 500;
 }
-.sym-row.is-untradable .sym-row-sym { color: var(--paper-3); }
 .sym-row.is-cursor .sym-row-sym { color: var(--accent); }
 
 .sym-row-name {

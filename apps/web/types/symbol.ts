@@ -13,7 +13,7 @@ export interface SymbolCandidate {
 }
 
 export type SymbolResolution =
-  | { status: 'resolved'; moomoo: string; yahoo: string; name: string; exchange: string; quoteType: string }
+  | { status: 'resolved'; symbol: string; moomoo: string | null; yahoo: string; name: string; exchange: string; quoteType: string }
   | { status: 'ambiguous'; candidates: SymbolCandidate[] }
   | { status: 'not_found' }
   | { status: 'error' }

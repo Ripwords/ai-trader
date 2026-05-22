@@ -36,7 +36,7 @@ describe('/internal/symbol/resolve', () => {
 
   it('returns the resolved union', async () => {
     resolveSymbol.mockResolvedValue({
-      status: 'resolved', moomoo: 'US.MU', yahoo: 'MU',
+      status: 'resolved', symbol: 'US.MU', moomoo: 'US.MU', yahoo: 'MU',
       name: 'Micron Technology, Inc.', exchange: 'NASDAQ', quoteType: 'Equity',
     })
     const r = await handler(makeEvent(bearer, { q: 'US.MU' }))

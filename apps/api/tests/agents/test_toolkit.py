@@ -78,6 +78,60 @@ async def test_get_indicators_handles_multi_column_indicator():
 
 
 @pytest.mark.asyncio
+async def test_get_stock_data_uses_yahoo_bars_for_non_moomoo_yahoo_ticker(monkeypatch):
+    monkeypatch.setenv("WEB_INTERNAL_BASE_URL", "http://web:3000")
+    monkeypatch.setenv("INTERNAL_BEARER", "secret")
+
+    class FakeOpend:
+        async def get_kline(self, symbol, ktype, num):
+            raise AssertionError(f"moomoo should not be called for {symbol}")
+
+    captured = {}
+
+    async def fake_get(self, url, headers=None, params=None, timeout=None, **kwargs):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["params"] = params
+
+        class R:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "symbol": "0097.KL",
+                    "bars": [
+                        {
+                            "time": "2026-05-20",
+                            "open": 3.1,
+                            "high": 3.2,
+                            "low": 3.0,
+                            "close": 3.15,
+                            "volume": 1000000,
+                        }
+                    ],
+                }
+
+        return R()
+
+    with patch("httpx.AsyncClient.get", new=fake_get):
+        toolkit = build_toolkit(opend_client=FakeOpend())
+        result = await toolkit.get_stock_data.ainvoke({
+            "symbol": "0097.KL",
+            "start_date": "2026-05-01",
+            "end_date": "2026-05-20",
+        })
+
+    assert captured["url"].endswith("/api/internal/yahoo/daily-bars")
+    assert captured["headers"]["authorization"] == "Bearer secret"
+    assert captured["params"] == {"symbol": "0097.KL", "limit": 252}
+    assert "Daily bars for 0097.KL" in result
+    assert "3.15" in result
+
+
+@pytest.mark.asyncio
 async def test_get_balance_sheet_calls_internal(monkeypatch):
     monkeypatch.setenv("WEB_INTERNAL_BASE_URL", "http://web:3000")
     monkeypatch.setenv("INTERNAL_BEARER", "secret")

@@ -16,6 +16,25 @@ async def test_returns_canonical_moomoo_when_resolved():
 
 
 @pytest.mark.asyncio
+async def test_rejects_yahoo_only_symbols_without_moomoo_code():
+    with patch(
+        "app.routers.algo.resolve_symbol",
+        new=AsyncMock(
+            return_value={
+                "status": "resolved",
+                "symbol": "0097.KL",
+                "moomoo": None,
+                "yahoo": "0097.KL",
+                "name": "ViTrox Corporation Berhad",
+            }
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await canonicalize_symbol_or_422("0097.KL")
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("verdict", [
     {"status": "ambiguous", "candidates": []},
     {"status": "not_found"},

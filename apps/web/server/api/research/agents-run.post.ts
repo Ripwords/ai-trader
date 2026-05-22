@@ -41,7 +41,7 @@ export default defineEventHandler(async (event) => {
       data: resolution,
     })
   }
-  const symbol = resolution.moomoo
+  const symbol = resolution.symbol
   const companyName = resolution.name
 
   const tradeDate = body.trade_date ?? new Date().toISOString().slice(0, 10)
