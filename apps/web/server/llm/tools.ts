@@ -211,6 +211,27 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'portfolio_mpt_analysis': tool({
+      description:
+        'Read-only Modern Portfolio Theory analysis of the user\'s aggregate portfolio. Use for portfolio expected return, volatility/risk, Sharpe ratio, efficient frontier, max-Sharpe/min-risk samples, and correlation heatmaps. The tool can return a compact heatmap subset instead of the full matrix: pass symbols when the user names tickers, or choose subset=top_weight/lowest_correlation/highest_correlation with maxSymbols for a focused view.',
+      inputSchema: z.object({
+        view: z.enum(['summary', 'frontier', 'heatmap', 'full']).default('summary'),
+        symbols: z.array(z.string()).optional().describe('Optional ticker subset for the heatmap, e.g. ["NVDA", "TLT"]. Use when the user asks about specific tickers.'),
+        subset: z.enum(['top_weight', 'requested', 'lowest_correlation', 'highest_correlation', 'all']).default('top_weight').describe('How to choose a heatmap subset when symbols are omitted.'),
+        maxSymbols: z.number().int().min(2).max(24).default(10).describe('Maximum tickers to include in the rendered heatmap subset.'),
+        sampleLimit: z.number().int().min(0).max(160).default(80).describe('Maximum simulated portfolio points to include for chat frontier rendering.'),
+        force: z.boolean().default(false).describe('Force-refresh the cached portfolio and price analysis. Use sparingly.'),
+      }),
+      execute: async ({ view, symbols, subset, maxSymbols, sampleLimit, force }) => {
+        const [{ getPortfolioCorrelationCached }, { projectPortfolioMptAnalysis }] = await Promise.all([
+          import('../lib/portfolio-correlation'),
+          import('../lib/portfolio-mpt-analysis'),
+        ])
+        const result = await getPortfolioCorrelationCached({ force })
+        return projectPortfolioMptAnalysis(result, { view, symbols, subset, maxSymbols, sampleLimit })
+      },
+    }),
+
     'trade_portfolio': tool({
       description: 'Get positions and cash for an account. Read-only. Defaults to REAL.',
       inputSchema: z.object({

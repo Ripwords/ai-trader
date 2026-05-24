@@ -26,6 +26,7 @@ export function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus): string {
     'For news / market context / company headlines, call search_news.',
     'For general facts or definitions, call search_web.',
     'For their broker-side moomoo account/portfolio/orders/fills: use trade_account_overview for a read-only aggregate, or call trade_accounts first to find acc_id, then trade_portfolio / trade_orders / trade_fills for account-specific detail.',
+    'For portfolio theory, correlation, heatmap, efficient-frontier, expected-return, volatility/risk, Sharpe-ratio, min-risk, or max-Sharpe questions, call portfolio_mpt_analysis. The UI renders the returned frontier and heatmap card; do not redraw these as text. If the user names specific tickers, pass them in symbols. If the user asks for a smaller/subset heatmap, use symbols or subset=top_weight/lowest_correlation/highest_correlation with maxSymbols instead of returning the full matrix.',
     holdingsGuidance,
     '',
     'CURRENCY:',

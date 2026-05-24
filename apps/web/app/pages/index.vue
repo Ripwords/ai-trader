@@ -353,6 +353,10 @@ function agentsVerdict(output: unknown) {
                 :total_assets="(getToolOutput(part) as any).total_assets"
                 :positions="(getToolOutput(part) as any).positions"
               />
+              <PortfolioMptCard
+                v-else-if="hasOutput(part) && getToolName(part) === 'portfolio_mpt_analysis'"
+                :analysis="getToolOutput(part) as any"
+              />
               <OrderCard
                 v-else-if="hasOutput(part) && getToolName(part) === 'trade_place_order' && (getToolOutput(part) as { order_id?: string })?.order_id"
                 :result="getToolOutput(part) as any"

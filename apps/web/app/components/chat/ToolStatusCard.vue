@@ -16,6 +16,7 @@ const labels: Record<string, string> = {
   search_web: 'Searching web',
   search_news: 'Searching news',
   trade_accounts: 'Checking accounts',
+  portfolio_mpt_analysis: 'Loading MPT analysis',
   trade_portfolio: 'Loading broker portfolio',
   trade_orders: 'Loading orders',
   trade_fills: 'Loading fills',

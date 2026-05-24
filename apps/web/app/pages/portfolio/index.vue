@@ -3,6 +3,7 @@
 definePageMeta({ section: 'portfolio' })
 import { computed, ref, watch } from 'vue'
 import type { FullPortfolio, FullPortfolioPosition } from '../../../server/lib/holdings'
+import type { PortfolioCorrelationResult } from '../../../server/lib/portfolio-correlation-core'
 import type {
   AllocationRow,
   PlanningCashflowKind,
@@ -19,6 +20,15 @@ useHead({ title: 'portfolio' })
 const force = ref(0)
 const refreshQuery = computed(() => (force.value ? { force: '1', _t: force.value } : {}))
 const { data, pending, error, refresh: refreshPortfolio } = useLazyFetch<FullPortfolio>('/api/portfolio', {
+  server: true,
+  query: refreshQuery,
+})
+const {
+  data: correlation,
+  pending: correlationPending,
+  error: correlationError,
+  refresh: refreshCorrelation,
+} = useLazyFetch<PortfolioCorrelationResult>('/api/portfolio/correlation', {
   server: true,
   query: refreshQuery,
 })
@@ -66,6 +76,7 @@ watch(
 function hardRefresh() {
   force.value = Date.now()
   refreshPortfolio()
+  refreshCorrelation()
   refreshPlanning()
   refreshSettings()
   refreshHistory()
@@ -175,6 +186,7 @@ const recentPlanningSnapshots = computed<PlanningSnapshot[]>(() => [...(planning
 const ghostfolioFailing = computed(() => data.value?.ghostfolio_status === 'failing')
 const ghostfolioMissing = computed(() => data.value?.ghostfolio_status === 'not_configured')
 const onlyMoomoo = computed(() => ghostfolioFailing.value || ghostfolioMissing.value)
+const correlationErrorMessage = computed(() => correlationError.value?.message ?? '')
 
 const fmtCurrency = (n: number | null | undefined, ccy: string) => {
   if (n == null || !Number.isFinite(n)) return '—'
@@ -386,6 +398,12 @@ async function capturePlanningSnapshot() {
               <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">since cost basis</div>
               </div>
           </section>
+
+          <PortfolioCorrelationMatrix
+            :correlation="correlation ?? null"
+            :pending="correlationPending"
+            :error-message="correlationErrorMessage"
+          />
 
           <!-- Planning dashboard -->
           <section class="surface-1 p-6">

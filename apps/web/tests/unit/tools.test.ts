@@ -2,6 +2,45 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ApiClient } from '../../server/llm/http'
 import { makeTools } from '../../server/llm/tools'
 
+const portfolioCorrelationMock = vi.hoisted(() => ({
+  getPortfolioCorrelationCached: vi.fn(async () => ({
+    analysis_basis: 'modern_portfolio_theory',
+    generated_at: '2026-05-24T00:00:00.000Z',
+    lookback_days: 252,
+    min_returns: 20,
+    risk_free_rate: 0.02,
+    symbols: ['NVDA', 'TLT'],
+    assets: [
+      { symbol: 'NVDA', name: 'NVIDIA Corporation', observations: 120, weight: 0.7, expected_return_annual: 0.2, volatility_annual: 0.3 },
+      { symbol: 'TLT', name: 'iShares 20+ Year Treasury Bond ETF', observations: 120, weight: 0.3, expected_return_annual: 0.04, volatility_annual: 0.12 },
+    ],
+    matrix: [
+      [1, -0.4],
+      [-0.4, 1],
+    ],
+    covariance_matrix: [
+      [0.09, -0.01],
+      [-0.01, 0.04],
+    ],
+    current_portfolio: {
+      label: 'current',
+      expected_return_annual: 0.15,
+      volatility_annual: 0.22,
+      sharpe_ratio: 0.59,
+      weights: { NVDA: 0.7, TLT: 0.3 },
+    },
+    min_variance_portfolio: null,
+    max_sharpe_portfolio: null,
+    efficient_frontier: [],
+    simulations: [],
+    excluded: [],
+  })),
+}))
+
+vi.mock('../../server/lib/portfolio-correlation', () => ({
+  getPortfolioCorrelationCached: portfolioCorrelationMock.getPortfolioCorrelationCached,
+}))
+
 // Stand-in for ApiClient — only the methods our tools call.
 function fakeClient() {
   return {
@@ -37,6 +76,7 @@ describe('tool catalogue', () => {
       'market_kline',
       'market_order_book',
       'market_snapshot',
+      'portfolio_mpt_analysis',
       'search_news',
       'search_web',
       'ticker_news_context',
@@ -94,6 +134,38 @@ describe('tool catalogue', () => {
       trd_env: 'REAL',
       totals: { cash: 10000, market_val: 5000, total_assets: 15000 },
       skipped: [{ acc_id: '2', reason: 'IPO account' }],
+    })
+  })
+
+  it('portfolio_mpt_analysis returns a compact subset heatmap for chat', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['portfolio_mpt_analysis'] as { execute: (args: {
+      view: 'heatmap'
+      symbols: string[]
+      maxSymbols: number
+      subset: 'top_weight'
+      sampleLimit: number
+      force: boolean
+    }) => Promise<unknown> }).execute({
+      view: 'heatmap',
+      symbols: ['TLT', 'NVDA'],
+      maxSymbols: 2,
+      subset: 'top_weight',
+      sampleLimit: 20,
+      force: true,
+    })
+
+    expect(portfolioCorrelationMock.getPortfolioCorrelationCached).toHaveBeenCalledWith({ force: true })
+    expect(out).toMatchObject({
+      view: 'heatmap',
+      heatmap: {
+        subset_reason: 'requested symbols',
+        assets: [{ symbol: 'TLT' }, { symbol: 'NVDA' }],
+        matrix: [
+          [1, -0.4],
+          [-0.4, 1],
+        ],
+      },
     })
   })
 
