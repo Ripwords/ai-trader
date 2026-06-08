@@ -9,7 +9,9 @@ vi.mock('yahoo-finance2', () => ({
 }))
 
 type Resolve = typeof import('../../server/lib/yahoo')['resolveSymbol']
+type SearchSymbols = typeof import('../../server/lib/yahoo')['searchSymbols']
 let resolveSymbol: Resolve
+let searchSymbols: SearchSymbols
 
 beforeEach(async () => {
   vi.resetModules()
@@ -18,6 +20,7 @@ beforeEach(async () => {
   vi.stubGlobal('defineCachedFunction', (fn: unknown) => fn)
   const mod = await import('../../server/lib/yahoo')
   resolveSymbol = mod.resolveSymbol
+  searchSymbols = mod.searchSymbols
 })
 
 describe('resolveSymbol', () => {
@@ -41,7 +44,11 @@ describe('resolveSymbol', () => {
       quoteType: 'Equity',
     })
     // Search runs on the Yahoo-form ticker, not the literal "US.MU" string.
-    expect(search).toHaveBeenCalledWith('MU', expect.anything())
+    expect(search).toHaveBeenCalledWith(
+      'MU',
+      { quotesCount: 10, newsCount: 0 },
+      { validateResult: false },
+    )
   })
 
   it('resolves an exact Yahoo equity even when it is not on a moomoo-supported market', async () => {
@@ -63,7 +70,11 @@ describe('resolveSymbol', () => {
       exchange: 'Kuala Lumpur',
       quoteType: 'Equity',
     })
-    expect(search).toHaveBeenCalledWith('0097.KL', expect.anything())
+    expect(search).toHaveBeenCalledWith(
+      '0097.KL',
+      { quotesCount: 10, newsCount: 0 },
+      { validateResult: false },
+    )
   })
 
   it('returns ambiguous when no candidate exactly matches the ticker', async () => {
@@ -96,5 +107,33 @@ describe('resolveSymbol', () => {
   it('returns error when Yahoo is unreachable', async () => {
     search.mockRejectedValue(new Error('ENOTFOUND query2.finance.yahoo.com'))
     expect(await resolveSymbol('US.MU')).toEqual({ status: 'error' })
+  })
+
+  it('searches symbols with result validation disabled for Yahoo response drift', async () => {
+    search.mockImplementation((_query, _queryOptions, moduleOptions?: { validateResult?: boolean }) => {
+      if (moduleOptions?.validateResult !== false) {
+        throw new Error('Failed Yahoo Schema validation')
+      }
+      return Promise.resolve({
+        quotes: [
+          { symbol: 'NVDA', shortname: 'NVIDIA Corporation', exchDisp: 'NASDAQ', typeDisp: 'Equity' },
+        ],
+      })
+    })
+
+    expect(await searchSymbols('NVDA')).toEqual([
+      {
+        moomoo: 'US.NVDA',
+        yahoo: 'NVDA',
+        name: 'NVIDIA Corporation',
+        exchange: 'NASDAQ',
+        type: 'Equity',
+      },
+    ])
+    expect(search).toHaveBeenCalledWith(
+      'NVDA',
+      { quotesCount: 8, newsCount: 0 },
+      { validateResult: false },
+    )
   })
 })

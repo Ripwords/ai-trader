@@ -579,7 +579,11 @@ function fromYahooSymbol(yfSym: string, exchange: string): string | null {
 
 const fetchSymbolSearch = defineCachedFunction(
   async (query: string, limit: number): Promise<SymbolSearchResult[]> => {
-    const r = await yahoo.search(query, { quotesCount: limit, newsCount: 0 })
+    const r = await yahoo.search(
+      query,
+      { quotesCount: limit, newsCount: 0 },
+      { validateResult: false },
+    ) as { quotes?: unknown[] }
     const out: SymbolSearchResult[] = []
     for (const item of r.quotes ?? []) {
       const q = item as { symbol?: string; shortname?: string; longname?: string; exchDisp?: string; typeDisp?: string }
