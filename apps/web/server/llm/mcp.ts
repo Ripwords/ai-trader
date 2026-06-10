@@ -42,11 +42,10 @@ async function getClient(): Promise<Client | null> {
  */
 export async function getGhostfolioTools(): Promise<Record<string, McpTool>> {
   if (_toolsCache) return _toolsCache
-  const client = await getClient()
-  if (!client) return {}
+  if (!(await getClient())) return {}
 
   try {
-    const list = await client.listTools()
+    const list = await withSessionRetry(c => c.listTools())
     const out: Record<string, McpTool> = {}
     for (const t of list.tools) {
       const safeName = `ghostfolio_${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`
@@ -57,7 +56,9 @@ export async function getGhostfolioTools(): Promise<Record<string, McpTool>> {
         description: t.description || `Ghostfolio: ${t.name}`,
         inputSchema: z.record(z.string(), z.unknown()),
         execute: async (args: Record<string, unknown>) => {
-          const result = await client.callTool({ name: t.name, arguments: args })
+          // Resolve the client per-call (not the one captured at build time)
+          // so a reconnect after a dropped session is picked up transparently.
+          const result = await withSessionRetry(c => c.callTool({ name: t.name, arguments: args }))
           // MCP returns content blocks; prefer text, otherwise stringified JSON
           const blocks = result.content as Array<{ type: string; text?: string; data?: unknown }>
           const text = blocks
@@ -85,6 +86,44 @@ export function resetMcp() {
   _toolsCache = null
 }
 
+/**
+ * Detects the one error worth transparently retrying: the remote server
+ * dropped our session (restart / idle timeout). The StreamableHTTP transport
+ * surfaces this as a 404 whose body is `{"message":"Session not found"}` and
+ * does NOT clear its dead session id, so without intervention every later call
+ * fails forever. Auth failures (401/403) and ordinary tool errors are left to
+ * propagate — retrying those would be pointless or, for writes, unsafe.
+ */
+function isSessionLost(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (/session not found/i.test(msg)) return true
+  if (typeof err === 'object' && err !== null && 'code' in err) {
+    return (err as { code: unknown }).code === 404
+  }
+  return false
+}
+
+/**
+ * Runs an MCP operation against the live client, resolving the client fresh
+ * each attempt (never capturing a possibly-dead reference). If the server
+ * dropped our session, resets the cached singleton and reconnects once. A
+ * 404 means the request was rejected before processing, so retrying a write
+ * is safe.
+ */
+async function withSessionRetry<T>(op: (client: Client) => Promise<T>): Promise<T> {
+  const client = await getClient()
+  if (!client) throw new Error('ghostfolio MCP unavailable')
+  try {
+    return await op(client)
+  } catch (err) {
+    if (!isSessionLost(err)) throw err
+    resetMcp()
+    const fresh = await getClient()
+    if (!fresh) throw new Error('ghostfolio MCP unavailable')
+    return await op(fresh)
+  }
+}
+
 export type GhostfolioStatus = 'ok' | 'failing' | 'not_configured'
 
 /**
@@ -105,9 +144,7 @@ export async function getGhostfolioStatus(): Promise<GhostfolioStatus> {
  * catch and downgrade to a `failing` status.
  */
 export async function callGhostfolioTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-  const client = await getClient()
-  if (!client) throw new Error('ghostfolio MCP unavailable')
-  const result = await client.callTool({ name, arguments: args })
+  const result = await withSessionRetry(c => c.callTool({ name, arguments: args }))
   const blocks = result.content as Array<{ type: string; text?: string; data?: unknown }>
   const text = blocks
     .filter(b => b.type === 'text' && b.text)
