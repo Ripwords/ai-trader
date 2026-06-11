@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { Rating } from '../../../types/agents'
+import { parseVerdictReport } from '../../lib/verdictReport'
 import MarkdownText from './MarkdownText.vue'
 
 interface Props {
   rating: Rating
-  confidence: number
+  // null when the model gave no confidence number — we show a qualitative
+  // state rather than fabricating a percentage.
+  confidence: number | null
   rationale: string
   runId: string | null
 }
@@ -21,7 +24,14 @@ const tone = computed(() => {
 })
 
 const ratingDisplay = computed(() => props.rating.replace(/-/g, ' '))
-const clampedConfidence = computed(() => Math.max(0, Math.min(100, Math.round(props.confidence))))
+
+// The model is not prompted for a confidence number, so it's frequently
+// absent. When present we render the ring + band; when null we say so plainly
+// instead of anchoring on a meaningless 50%.
+const hasConfidence = computed(() => props.confidence !== null)
+const clampedConfidence = computed(() =>
+  Math.max(0, Math.min(100, Math.round(props.confidence ?? 0))),
+)
 
 // Conviction word: a single descriptor for the confidence band, kept short
 // so it pairs typographically with the percentage. We don't need a 5-step
@@ -33,6 +43,10 @@ const convictionWord = computed(() => {
   if (c >= 25) return 'tentative'
   return 'low'
 })
+
+// Structured report: split the rationale into titled sections so the verdict
+// reads like a research note rather than one undifferentiated block.
+const sections = computed(() => parseVerdictReport(props.rationale))
 
 // Confidence ring: SVG dasharray over a quarter-circle so it pairs visually
 // with the rating chip without needing a full-circle gauge that screams
@@ -58,14 +72,18 @@ const ringDash = computed(() => {
       <!-- Rating slab: rating in big mono, conviction band underneath. -->
       <div class="verdict__rating-block">
         <span class="verdict__rating" data-mono>{{ ratingDisplay }}</span>
-        <span class="verdict__conviction" data-mono>
+        <span v-if="hasConfidence" class="verdict__conviction" data-mono>
           <span class="verdict__conviction-word">{{ convictionWord }}</span>
           conviction
         </span>
+        <span v-else class="verdict__conviction verdict__conviction--unstated" data-mono>
+          conviction unstated
+        </span>
       </div>
 
-      <!-- Confidence ring: quarter-arc that fills to the score. -->
-      <div class="verdict__ring" data-testid="verdict-rating">
+      <!-- Confidence ring: quarter-arc that fills to the score. Only shown
+           when the model actually reported a number. -->
+      <div v-if="hasConfidence" class="verdict__ring" data-testid="verdict-rating">
         <svg viewBox="0 0 80 80" width="80" height="80" aria-hidden="true">
           <circle
             class="verdict__ring-bg"
@@ -102,16 +120,19 @@ const ringDash = computed(() => {
       <span class="verdict__toggle-glyph" data-mono>{{ expanded ? '−' : '+' }}</span>
     </button>
 
-    <div v-if="expanded" class="verdict__rationale-wrap">
-      <MarkdownText :content="rationale" class="verdict__rationale" />
+    <div v-if="expanded" class="verdict__report">
+      <article
+        v-for="(section, i) in sections"
+        :key="i"
+        class="verdict__section"
+        :class="{ 'verdict__section--titled': section.title }"
+      >
+        <h3 v-if="section.title" class="verdict__section-title" data-mono>
+          {{ section.title }}
+        </h3>
+        <MarkdownText :content="section.body" flush class="verdict__section-body" />
+      </article>
     </div>
-
-    <footer class="verdict__foot">
-      <button type="button" class="verdict__action" disabled title="coming soon">
-        <span data-mono>send to paper</span>
-        <span class="verdict__action-aside" data-mono>v2</span>
-      </button>
-    </footer>
   </section>
 </template>
 
@@ -215,6 +236,13 @@ const ringDash = computed(() => {
   text-transform: lowercase;
   font-style: italic;
 }
+.verdict__conviction--unstated {
+  color: var(--paper-3);
+  font-style: italic;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
 
 .verdict__ring {
   position: relative;
@@ -297,46 +325,34 @@ const ringDash = computed(() => {
   line-height: 1;
 }
 
-.verdict__rationale-wrap {
+/* ─── Structured report: one block per parsed section ─── */
+.verdict__report {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+.verdict__section {
   border-left: 2px solid var(--ink-line-strong);
   padding-left: 1rem;
 }
-.verdict[data-tone="up"]      .verdict__rationale-wrap { border-left-color: color-mix(in srgb, var(--tape-up) 30%, transparent); }
-.verdict[data-tone="down"]    .verdict__rationale-wrap { border-left-color: color-mix(in srgb, var(--tape-down) 30%, transparent); }
-.verdict[data-tone="neutral"] .verdict__rationale-wrap { border-left-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.verdict[data-tone="up"]      .verdict__section { border-left-color: color-mix(in srgb, var(--tape-up) 30%, transparent); }
+.verdict[data-tone="down"]    .verdict__section { border-left-color: color-mix(in srgb, var(--tape-down) 30%, transparent); }
+.verdict[data-tone="neutral"] .verdict__section { border-left-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 
-/* MarkdownText supplies its own styling; no overrides needed here. */
-
-/* ─── Footer ─── */
-.verdict__foot {
-  display: flex;
-  gap: 0.5rem;
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--ink-line);
-}
-.verdict__action {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
+/* Section heading: small-caps mono eyebrow above the body, accented per tone
+   so the report scans like a wire-service note. */
+.verdict__section-title {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.18em;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
-  padding: 0.45rem 0.9rem;
-  border-radius: 3px;
-  border: 1px solid var(--ink-line-strong);
-  background: transparent;
-  color: var(--paper-3);
-  cursor: not-allowed;
-  opacity: 0.7;
+  color: var(--paper-2);
+  margin: 0 0 0.55rem;
 }
-.verdict__action-aside {
-  font-size: 0.6rem;
-  color: var(--paper-3);
-  letter-spacing: 0.22em;
-  padding: 0.05rem 0.3rem;
-  border: 1px solid var(--ink-line);
-  border-radius: 2px;
-  opacity: 0.7;
-}
+.verdict[data-tone="up"]      .verdict__section-title { color: var(--tape-up); }
+.verdict[data-tone="down"]    .verdict__section-title { color: var(--tape-down); }
+.verdict[data-tone="neutral"] .verdict__section-title { color: var(--accent); }
+
+/* MarkdownText supplies its own prose styling; no overrides needed here. */
 </style>

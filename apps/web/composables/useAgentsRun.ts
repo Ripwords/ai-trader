@@ -20,7 +20,7 @@ export function parseNdjsonChunk(buffer: string, chunk: string, out: AgentEvent[
 
 interface VerdictState {
   rating: Rating
-  confidence: number
+  confidence: number | null
   rationale: string
 }
 

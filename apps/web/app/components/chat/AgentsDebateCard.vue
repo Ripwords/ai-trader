@@ -6,7 +6,7 @@ import type { AgentEvent, Rating } from '~~/types/agents'
 // a preliminary tool-output frame; the chat page binds the latest snapshot
 // here so the timeline + verdict update in real time.
 
-interface Verdict { rating: Rating; confidence: number; rationale: string }
+interface Verdict { rating: Rating; confidence: number | null; rationale: string }
 
 const props = defineProps<{
   events: AgentEvent[]
@@ -75,7 +75,7 @@ const latestNode = computed(() => nodeStarts.value[nodeStarts.value.length - 1] 
       <span :class="['inline-flex items-center px-2 py-1 rounded font-mono text-xs uppercase tracking-[0.15em]', ratingClass[verdict.rating]]">
         {{ verdict.rating }}
       </span>
-      <span class="font-mono text-xs text-[var(--paper-3)]">conf {{ verdict.confidence }}</span>
+      <span v-if="verdict.confidence !== null" class="font-mono text-xs text-[var(--paper-3)]">conf {{ verdict.confidence }}</span>
       <p class="text-sm text-[var(--paper-1)] flex-1">{{ verdict.rationale }}</p>
     </div>
     <div v-else-if="error" class="px-5 py-4 text-sm text-[var(--tape-down)]">
