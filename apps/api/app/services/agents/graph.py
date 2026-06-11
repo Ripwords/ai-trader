@@ -506,71 +506,115 @@ _RATING_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("hold", re.compile(r"\bhold\b", re.IGNORECASE)),
 )
 
-# Confidence is sometimes reported as ``confidence: 85`` or ``confidence 72%``
-# — accept both. The unsigned regex naturally drops a leading ``-`` (so
-# ``-5`` is read as ``5``).
-_CONFIDENCE_PATTERN = re.compile(
-    r"confidence[:\s]+(\d{1,3})", re.IGNORECASE
+# Confidence/conviction is reported in several shapes — ``confidence: 85``,
+# ``confidence 72%``, ``conviction of 60%``, or ``80% conviction``. Accept the
+# number on either side of the keyword. The unsigned ``\d`` naturally drops a
+# leading ``-`` (so ``-5`` is read as ``5``, then clamped to 0).
+_CONFIDENCE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?:confidence|conviction)\b[^\d%]{0,12}(\d{1,3})\s*%?", re.IGNORECASE),
+    re.compile(r"(\d{1,3})\s*%\s*(?:confidence|conviction)", re.IGNORECASE),
 )
 
-# ``confidence`` is ``integer NOT NULL`` in agent_decisions; we must hand
-# the tee writer a real int even when the LLM doesn't volunteer a number.
-# Mid-confidence (50) is the least-bad default — high enough that a
-# reasonable rating doesn't look anchored at zero, low enough that a UI
-# treating confidence as a weight doesn't over-trust the run.
-_DEFAULT_CONFIDENCE = 50
+# Explicit verdict markers other than the canonical ``FINAL TRANSACTION
+# PROPOSAL`` line — the Risk Manager / synthesis often *leads* with one
+# (e.g. ``Final Recommendation: HOLD``). We anchor on the marker and read the
+# verdict token that immediately follows it, so an incidental ``sell`` buried
+# elsewhere in the rationale body can't override the stated decision.
+_VERDICT_MARKER_PATTERN = re.compile(
+    r"(?:final\s+recommendation|recommendation|final\s+decision|"
+    r"final\s+verdict|verdict|final\s+rating|final\s+call|conclusion|final)"
+    r"\s*[:\-–—]+\s*\*{0,2}\s*"
+    r"(strong[\W_]*buy|strong[\W_]*sell|reduce|buy|sell|hold)\b",
+    re.IGNORECASE,
+)
 
 
-def _parse_rating(text: str) -> str:
-    """Return the wire rating for ``text``. Defaults to ``hold`` when none match.
+def _regex_rating(text: str) -> str | None:
+    """First matching 5-bucket rating from the priority-ordered regex, or None.
 
-    Two-stage resolution: try TradingAgents' deterministic
-    :func:`tradingagents.graph.signal_processing.extract_trade_signal`
-    first — it understands the explicit ``FINAL TRANSACTION PROPOSAL: <X>``
-    marker the Risk Manager emits and rejects ambiguous text. When it
-    returns a clean BUY/SELL/HOLD we use that, but only as a *coarse*
-    signal: our 5-rating taxonomy still benefits from the regex pass
-    (it's the only thing that distinguishes ``strong-buy`` from ``buy``
-    or recognises ``reduce``). So:
-
-    1. Run our regex first (richer taxonomy, finds 5 buckets)
-    2. If the regex didn't find ``strong-buy``/``reduce`` (i.e. it landed
-       on the catch-all hold or a generic buy/sell), fall back to
-       TradingAgents' extractor as a tiebreaker — its FINAL-marker logic
-       can catch BUY/SELL signals our regex missed when the text uses
-       formal proposal language without the bare verb.
-
-    The exception path is silent — TA's extractor raises ValueError on
-    ambiguous text, which we treat as "no signal" and stick with our
-    regex's verdict.
+    This is a whole-text scan, so it is only a *fallback* — a long rationale
+    that merely discusses selling will match ``sell`` here even when the verdict
+    is HOLD. Callers must consult the authoritative markers first (see
+    :func:`_parse_rating`) and reach for this only when no marker is present.
     """
-    # Stage 1: our 5-rating regex.
     for label, pattern in _RATING_PATTERNS:
         if pattern.search(text):
             return label
+    return None
 
-    # Stage 2: TradingAgents' deterministic FINAL-marker extractor.
+
+def _canonical_signal(text: str) -> str | None:
+    """Coarse ``buy``/``sell``/``hold`` from TradingAgents' deterministic
+    extractor, or None when it can't decide.
+
+    The extractor prioritises the canonical ``FINAL TRANSACTION PROPOSAL: <X>``
+    marker the Risk Manager is prompted to emit and rejects ambiguous text
+    (raising ``ValueError``), which we treat as "no authoritative signal".
+    """
     try:
         from tradingagents.graph.signal_processing import extract_trade_signal
-        ta_signal = extract_trade_signal(text).lower()
-        if ta_signal in {"buy", "sell", "hold"}:
-            return ta_signal
+        signal = extract_trade_signal(text).lower()
+        return signal if signal in {"buy", "sell", "hold"} else None
     except (ValueError, ImportError):
-        pass
-
-    return "hold"
+        return None
 
 
-def _parse_confidence(text: str) -> int:
-    """Extract an integer confidence in [0, 100], else :data:`_DEFAULT_CONFIDENCE`."""
-    m = _CONFIDENCE_PATTERN.search(text)
-    if not m:
-        return _DEFAULT_CONFIDENCE
-    try:
-        value = int(m.group(1))
-    except ValueError:
-        return _DEFAULT_CONFIDENCE
-    return max(0, min(100, value))
+def _parse_rating(text: str) -> str:
+    """Return the wire rating for ``text`` (defaults to ``hold``).
+
+    The decision text is a full multi-paragraph report that *discusses* the
+    bull and bear cases before landing on a verdict. The author's actual
+    verdict is stated explicitly — either as the canonical
+    ``FINAL TRANSACTION PROPOSAL: **X**`` line or a leading
+    ``Final Recommendation: X`` header. Those markers are AUTHORITATIVE and
+    must outrank any incidental ``buy``/``sell`` mention in the body; resolving
+    by a bare whole-text regex (the old behaviour) misread balanced HOLD
+    writeups as SELL because ``sell`` outranks ``hold`` and matches first.
+
+    Resolution order:
+
+    1. **Canonical marker** (``extract_trade_signal``) — coarse buy/sell/hold.
+       Refine ``buy`` → ``strong-buy`` when the prose says so, since the marker
+       only carries three buckets but our taxonomy has five.
+    2. **Verdict header** (``Final Recommendation: …``) — read the 5-bucket
+       rating from the token right after the marker.
+    3. **Whole-text regex** — last-resort fallback when no marker exists.
+    4. ``hold`` — nothing matched.
+    """
+    regex = _regex_rating(text)
+
+    # 1. Canonical FINAL TRANSACTION PROPOSAL marker — authoritative.
+    coarse = _canonical_signal(text)
+    if coarse is not None:
+        if coarse == "buy" and regex == "strong-buy":
+            return "strong-buy"
+        return coarse
+
+    # 2. Explicit verdict header (e.g. "Final Recommendation: HOLD").
+    marker = _VERDICT_MARKER_PATTERN.search(text)
+    if marker:
+        header_rating = _regex_rating(marker.group(1))
+        if header_rating is not None:
+            return header_rating
+
+    # 3/4. Fall back to the noisy whole-text scan, then hold.
+    return regex or "hold"
+
+
+def _parse_confidence(text: str) -> int | None:
+    """Extract an integer confidence in [0, 100], or ``None`` when absent.
+
+    The Risk Manager is never *prompted* for a confidence number, so most
+    runs won't contain one. Returning ``None`` (rather than a fabricated
+    default) lets the UI show a qualitative conviction band instead of a
+    misleading flat ``50%``. The persistence boundary (the web tee writer)
+    coerces ``None`` to the neutral 50 to satisfy the ``NOT NULL`` column.
+    """
+    for pattern in _CONFIDENCE_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return max(0, min(100, int(m.group(1))))
+    return None
 
 
 def _extract_decision(prev: dict, curr: dict) -> dict | None:
@@ -581,10 +625,14 @@ def _extract_decision(prev: dict, curr: dict) -> dict | None:
     the decision text. Returns ``None`` when nothing changed (or the field
     is empty), letting the caller skip emitting a ``decision`` event.
 
-    ``confidence`` is always an integer (defaults to 50 when not parseable)
-    because the downstream ``agent_decisions.confidence`` column is
-    ``NOT NULL``; the tee writer would silently lose the row if we passed
-    ``None`` here.
+    ``confidence`` is ``int | None`` — ``None`` when the model gave no number.
+    The tee writer coerces ``None`` to the neutral 50 at the ``NOT NULL``
+    ``agent_decisions.confidence`` boundary; the streamed event keeps ``None``
+    so the UI can show a qualitative band rather than a fabricated percentage.
+
+    ``rationale`` is the full decision text — the UI renders it as a structured
+    report, so we must not clip it (the ``rationale`` column is unlimited
+    ``text``).
     """
     pdec = prev.get("final_trade_decision") or ""
     cdec = curr.get("final_trade_decision") or ""
@@ -593,7 +641,7 @@ def _extract_decision(prev: dict, curr: dict) -> dict | None:
     return {
         "rating": _parse_rating(cdec),
         "confidence": _parse_confidence(cdec),
-        "rationale": cdec[:500],
+        "rationale": cdec,
     }
 
 

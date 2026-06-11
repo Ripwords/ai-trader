@@ -89,7 +89,10 @@ async def _consume_decision(events_iter: Any) -> tuple[str, int, str]:
         d = values.get("decision")
         if d:
             rating = d.get("rating", "hold")
-            confidence = int(d.get("confidence", 50))
+            # ``confidence`` is now ``int | None`` (None when the model gave no
+            # number); coerce to the neutral 50 for the int-typed result.
+            raw_conf = d.get("confidence")
+            confidence = int(raw_conf) if raw_conf is not None else 50
             rationale = d.get("rationale", "")
     return rating, confidence, rationale
 

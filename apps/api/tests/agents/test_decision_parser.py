@@ -90,13 +90,15 @@ def test_reduce_does_not_get_clobbered_by_buy_in_other_words() -> None:
     assert out["rating"] == "reduce"
 
 
-# ---- Confidence default --------------------------------------------------
+# ---- Confidence: real number or None (never a fabricated default) -------
 
 
-def test_confidence_defaults_to_50_when_absent() -> None:
+def test_confidence_is_none_when_no_number_present() -> None:
+    """The model is not prompted for a confidence number, so when it doesn't
+    volunteer one we must NOT invent a fake default — return None so the UI
+    can show a qualitative band instead of a misleading percentage."""
     out = _decision_for("BUY")
-    assert out["confidence"] == 50
-    assert isinstance(out["confidence"], int)
+    assert out["confidence"] is None
 
 
 def test_confidence_parses_numeric_when_present() -> None:
@@ -109,6 +111,16 @@ def test_confidence_parses_with_pct_sign() -> None:
     assert out["confidence"] == 72
 
 
+def test_confidence_parses_conviction_phrasing() -> None:
+    out = _decision_for("HOLD with conviction of 60%")
+    assert out["confidence"] == 60
+
+
+def test_confidence_parses_percent_before_keyword() -> None:
+    out = _decision_for("SELL — 80% conviction in the bear case")
+    assert out["confidence"] == 80
+
+
 def test_confidence_clamps_to_0_100() -> None:
     out_low = _decision_for("BUY confidence: -5")
     out_high = _decision_for("BUY confidence: 200")
@@ -117,13 +129,52 @@ def test_confidence_clamps_to_0_100() -> None:
     assert out_high["confidence"] == 100
 
 
-# ---- Rationale --------------------------------------------------
+# ---- Rationale: full text, never truncated ------------------------------
 
 
-def test_rationale_truncates_to_500_chars() -> None:
+def test_rationale_is_not_truncated() -> None:
+    """The rationale is the full risk-manager report — the UI renders it as a
+    structured section, so we must not clip it (the DB column is unlimited
+    ``text``)."""
     text = "BUY " + ("x" * 1000)
     out = _decision_for(text)
-    assert len(out["rationale"]) == 500
+    assert out["rationale"] == text
+
+
+# ---- Rating: explicit verdict wins over incidental body mentions --------
+
+
+def test_canonical_final_marker_beats_body_sell_mentions() -> None:
+    """The headline bug: a HOLD writeup whose body merely *discusses* selling
+    was misread as SELL because the regex matched the first ``sell`` anywhere.
+    The canonical FINAL TRANSACTION PROPOSAL marker must win."""
+    text = (
+        "Final Recommendation: HOLD\n\n"
+        "The aggressive analyst argues insider selling is pre-planned and we "
+        "should buy aggressively into the dip. The conservative analyst would "
+        "rather sell into strength than hold a falling knife.\n\n"
+        "On balance the risks cancel out.\n\n"
+        "FINAL TRANSACTION PROPOSAL: **HOLD**"
+    )
+    assert _decision_for(text)["rating"] == "hold"
+
+
+def test_recommendation_header_beats_body_when_no_canonical_marker() -> None:
+    """Even without the canonical marker, an explicit ``Final Recommendation:``
+    header is authoritative over incidental buy/sell mentions in the body."""
+    text = (
+        "Final Recommendation: HOLD\n\n"
+        "Bulls want to buy; bears want to sell. We stay neutral."
+    )
+    assert _decision_for(text)["rating"] == "hold"
+
+
+def test_canonical_buy_marker_beats_body_hold_mentions() -> None:
+    text = (
+        "We considered whether to hold, but the setup is compelling.\n"
+        "FINAL TRANSACTION PROPOSAL: **BUY**"
+    )
+    assert _decision_for(text)["rating"] == "buy"
 
 
 # ---- DB compatibility (NOT NULL) --------------------------------------------------
@@ -133,7 +184,10 @@ def test_rationale_truncates_to_500_chars() -> None:
 async def test_agent_decisions_insert_succeeds_with_default_confidence(
     pg_pool,
 ) -> None:
-    """The default confidence (int 50) must satisfy the NOT NULL constraint."""
+    """``agent_decisions.confidence`` is ``NOT NULL``. The parser now returns
+    ``None`` when the model gives no number, so the persistence boundary (the
+    web tee writer) supplies the neutral 50 default; this test mirrors that
+    coercion to prove the NOT NULL path still holds."""
     user_id = "00000000-0000-0000-0000-000000000099"
     async with pg_pool.acquire() as conn:
         await conn.execute(
@@ -148,6 +202,9 @@ async def test_agent_decisions_insert_succeeds_with_default_confidence(
             user_id,
         )
         out = _decision_for("Recommendation: REDUCE exposure")
+        # No confidence number in the text -> parser returns None; the tee
+        # writer coerces to the neutral 50 to satisfy NOT NULL.
+        confidence = out["confidence"] if out["confidence"] is not None else 50
         await conn.execute(
             "INSERT INTO agent_decisions"
             "(run_id, user_id, symbol, trade_date, rating, confidence, rationale) "
@@ -155,7 +212,7 @@ async def test_agent_decisions_insert_succeeds_with_default_confidence(
             run_id,
             user_id,
             out["rating"],
-            out["confidence"],
+            confidence,
             out["rationale"],
         )
         row = await conn.fetchrow(
