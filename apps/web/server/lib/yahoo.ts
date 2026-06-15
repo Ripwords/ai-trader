@@ -627,10 +627,11 @@ export type { SymbolResolution }
  * service resolves through — see
  * docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
  *
- * Fails closed: only an exact-ticker Yahoo equity is `resolved`; anything else
+ * Fails closed: only an exact-ticker Yahoo hit is `resolved`; anything else
  * is `ambiguous`/`not_found` so callers can force a pick rather than silently
- * guess (the `US.MU` → "Munich Re" bug). `moomoo` is populated only when the
- * exact Yahoo listing maps to a moomoo-supported market.
+ * guess (the `US.MU` → "Munich Re" bug). The exact-ticker match works across
+ * asset classes (equity, ETF, future, index, FX, crypto). `moomoo` is
+ * populated only when the exact Yahoo listing maps to a moomoo-supported market.
  */
 export async function resolveSymbol(input: string): Promise<SymbolResolution> {
   const raw = input.trim()
@@ -646,10 +647,13 @@ export async function resolveSymbol(input: string): Promise<SymbolResolution> {
     return { status: 'error' }
   }
   if (results.length === 0) return { status: 'not_found' }
+  // An exact case-insensitive Yahoo-ticker hit is the confident-match signal —
+  // it's what disambiguates "US.MU" → Micron from fuzzy literal-string results.
+  // Accept it across asset classes (equity, ETF, future like GC=F, index, FX,
+  // crypto): the exact ticker IS the instrument, so an equity-only filter here
+  // only produces false negatives for legitimate non-equity tickers.
   const exact = results.find(
-    r =>
-      r.yahoo.toUpperCase() === expectedYahoo.toUpperCase() &&
-      r.type.toUpperCase() === 'EQUITY',
+    r => r.yahoo.toUpperCase() === expectedYahoo.toUpperCase(),
   )
   if (exact) {
     return {

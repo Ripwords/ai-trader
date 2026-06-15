@@ -77,6 +77,43 @@ describe('resolveSymbol', () => {
     )
   })
 
+  it('resolves a futures contract whose Yahoo ticker matches exactly (GC=F)', async () => {
+    search.mockResolvedValue({
+      quotes: [
+        { symbol: 'GC=F', shortname: 'Gold Aug 26', exchDisp: 'NY Commodity Exchange', typeDisp: 'Future' },
+        { symbol: 'GCM.AX', shortname: 'GCMCORP FPO [GCM]', exchDisp: 'Australian', typeDisp: 'Equity' },
+      ],
+    })
+
+    const r = await resolveSymbol('GC=F')
+
+    expect(r).toEqual({
+      status: 'resolved',
+      symbol: 'GC=F',
+      moomoo: null,
+      yahoo: 'GC=F',
+      name: 'Gold Aug 26',
+      exchange: 'NY Commodity Exchange',
+      quoteType: 'Future',
+    })
+  })
+
+  it('resolves an ETF whose Yahoo ticker matches exactly (SPY)', async () => {
+    search.mockResolvedValue({
+      quotes: [
+        { symbol: 'SPY', shortname: 'SPDR S&P 500 ETF Trust', exchDisp: 'NYSEArca', typeDisp: 'ETF' },
+      ],
+    })
+
+    const r = await resolveSymbol('SPY')
+
+    expect(r.status).toBe('resolved')
+    if (r.status === 'resolved') {
+      expect(r.yahoo).toBe('SPY')
+      expect(r.quoteType).toBe('ETF')
+    }
+  })
+
   it('returns ambiguous when no candidate exactly matches the ticker', async () => {
     search.mockResolvedValue({
       quotes: [
