@@ -56,6 +56,14 @@ services:
       WEB_INTERNAL_BASE_URL: http://web:3000
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # External DNS pinned to public resolvers. The Docker default forwards to
+    # the host's nameserver, which here is Tailscale's 100.100.100.100 — that
+    # address isn't routable from inside Docker Desktop's VM, so when Tailscale
+    # hiccups every external lookup fails at once (EAI_AGAIN: GitHub/LiteLLM,
+    # ghostfolio MCP). Inter-service names still resolve via Docker's 127.0.0.11.
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,6 +102,11 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     ports:
       - "${WEB_PORT:-3000}:3000"
+    # See api service: pin external DNS off the flaky Tailscale resolver so
+    # Yahoo (yahoo-finance2) and search providers resolve reliably.
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       api:
         condition: service_started
