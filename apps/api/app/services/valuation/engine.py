@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from decimal import ROUND_HALF_EVEN, Decimal, getcontext
 
+from app.services.valuation.models import HistoryPeriod, Metrics, Multiples
+
 getcontext().prec = 28
 
 _TWO = Decimal("2")
@@ -76,3 +78,55 @@ def reverse_dcf(
         else:
             hi = mid
     return ((lo + hi) / _TWO).quantize(Decimal("0.000001"), ROUND_HALF_EVEN)
+
+
+def _median(values: list[Decimal]) -> Decimal | None:
+    """Compute median of a list of Decimal values, ignoring None."""
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    if len(vals) % 2 == 1:
+        return vals[mid]
+    return (vals[mid - 1] + vals[mid]) / Decimal("2")
+
+
+def current_multiples(metrics: Metrics, price: Decimal) -> Multiples:
+    """Extract current multiples from Metrics and compute P/FCF.
+
+    Passes through pe, pb, ps from metrics and calculates p_fcf as
+    market_cap / free_cash_flow when both are available and fcf != 0.
+    """
+    p_fcf = None
+    if metrics.market_cap and metrics.free_cash_flow and metrics.free_cash_flow != 0:
+        p_fcf = metrics.market_cap / metrics.free_cash_flow
+    return Multiples(
+        pe=metrics.pe_ratio,
+        pb=metrics.pb_ratio,
+        ps=metrics.ps_ratio,
+        p_fcf=p_fcf,
+    )
+
+
+def historical_self_multiples(
+    history: list[HistoryPeriod],
+    shares: Decimal,
+    avg_price_by_period: dict[str, Decimal],
+) -> Multiples:
+    """Median P/E and P/S the company itself traded at, period by period.
+
+    Uses current ``shares`` as a proxy market-cap base (period-exact share
+    counts aren't in the Yahoo bundle) — good enough for a self-relative band.
+    """
+    pes: list[Decimal] = []
+    pss: list[Decimal] = []
+    for h in history:
+        price = avg_price_by_period.get(h.period)
+        if price is None or shares <= 0:
+            continue
+        mcap = price * shares
+        if h.revenue and h.revenue != 0:
+            pss.append(mcap / h.revenue)
+        if h.net_income and h.net_income != 0:
+            pes.append(mcap / h.net_income)
+    return Multiples(pe=_median(pes), ps=_median(pss))
