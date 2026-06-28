@@ -47,4 +47,14 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/news-pulse 腾讯')!.command.tool).toBe('news_pulse')
     expect(parseSlashCommand('/thesis-tracker 拼多多')!.command.tool).toBe('thesis_tracker')
   })
+  it('last arg soaks up all remaining tokens (multi-word remainder)', () => {
+    // single last arg: all 3 tokens become the symbol
+    const p1 = parseSlashCommand('/investment-research Alibaba Group Holding')!
+    expect(p1.args.symbol).toBe('Alibaba Group Holding')
+
+    // two args: first takes one token, last soaks the remaining two
+    const p2 = parseSlashCommand('/management-deep-dive 王兴 美团 Holdings')!
+    expect(p2.args.person).toBe('王兴')
+    expect(p2.args.symbol).toBe('美团 Holdings')
+  })
 })
