@@ -232,6 +232,27 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'value_stock': tool({
+      description:
+        'Compute a deterministic DCF valuation for a stock: fair value, margin of safety, '
+        + '3 scenarios (optimistic/neutral/pessimistic), reverse-DCF implied growth, and multiples. '
+        + 'Use when the user asks whether a stock is cheap/expensive or what it is worth.',
+      inputSchema: z.object({ symbol: z.string() }),
+      execute: async ({ symbol }) => {
+        const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+        const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
+        const res = await fetch(`${baseUrl}/api/research/valuation?symbol=${encodeURIComponent(symbol)}`, {
+          headers: {
+            ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}),
+          },
+        })
+        if (!res.ok) {
+          return { error: `valuation failed: ${res.status}` }
+        }
+        return await res.json()
+      },
+    }),
+
     'trade_portfolio': tool({
       description: 'Get positions and cash for an account. Read-only. Defaults to REAL.',
       inputSchema: z.object({

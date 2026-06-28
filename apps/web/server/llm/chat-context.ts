@@ -53,6 +53,8 @@ export function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus): string {
     '- algo_kill / algo_unkill are global. Use algo_kill when the user says "stop", "halt", "kill the algos" - confirm one-line afterwards. Don\'t auto-unkill; that\'s an explicit user action.',
     '- Don\'t generate or rewrite strategy code in chat unless the user asks. Send them to /algo/<id> to edit it themselves.',
     '',
+    'For stock valuation questions ("is X cheap/expensive", "what is X worth", "fair value", "DCF", "margin of safety"), call value_stock. The UI renders the returned valuation card; do not restate the numbers as text.',
+    '',
     'RESEARCH (agents_debate):',
     '- agents_debate runs the TradingAgents multi-agent pipeline (analysts -> bull/bear debate -> trader -> risk gate) on a symbol. Streams progress server-side; returns a final structured verdict with rating (strong-buy/buy/hold/reduce/sell), confidence (0-100), and rationale. Use this when the user asks for a "comprehensive analysis", "full analysis", "deep dive", "analyze X", or wants the agents to deliberate on a ticker. Slower (~30-60s) and more LLM-expensive than a single-tool query.',
     '- Default max_debate_rounds=1 and deep_thinking=true. Only raise rounds (max 3) if the user explicitly asks for a "longer debate" - each extra round is meaningfully more expensive.',
