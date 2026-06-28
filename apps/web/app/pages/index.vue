@@ -10,12 +10,25 @@ import {
 } from 'ai'
 import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
 import { requestRunNotificationPermission } from '../lib/notify'
+import { filterCommandPalette, type PaletteItem } from '../lib/slash'
 
 definePageMeta({ title: 'chat' })
 
 const input = ref('')
 const route = useRoute()
 const router = useRouter()
+
+const slashCommands = ref<PaletteItem[]>([])
+const slashSuggestions = computed(() => filterCommandPalette(input.value, slashCommands.value))
+async function ensureCommands() {
+  if (slashCommands.value.length) return
+  try {
+    const r = await $fetch<{ commands: PaletteItem[] }>('/api/chat/commands')
+    slashCommands.value = r.commands ?? []
+  } catch { /* palette is optional */ }
+}
+function applySlash(name: string) { input.value = `/${name} ` }
+watch(input, (v) => { if (v.startsWith('/')) void ensureCommands() })
 
 const chatId = ref<string | null>(typeof route.query.c === 'string' ? route.query.c : null)
 const conversationsList = ref<{ refresh: () => Promise<void> } | null>(null)
@@ -473,6 +486,18 @@ function agentsVerdict(output: unknown) {
             </div>
           </div>
         </div>
+        <div v-if="slashSuggestions.length" class="slash-palette">
+          <button
+            v-for="s in slashSuggestions"
+            :key="s.name"
+            type="button"
+            class="slash-item"
+            @click="applySlash(s.name)"
+          >
+            <span class="slash-name">/{{ s.name }}</span>
+            <span class="slash-desc">{{ s.description }}</span>
+          </button>
+        </div>
         <UChatPrompt
           v-model="input"
           :error="chat.error"
@@ -524,5 +549,45 @@ function agentsVerdict(output: unknown) {
   min-width: 0;
   position: relative;
   z-index: 10;
+}
+
+.slash-palette {
+  border: 1px solid var(--hairline, rgba(255,255,255,0.06));
+  border-radius: 6px;
+  background: var(--ink-1, #111);
+  margin-bottom: 4px;
+  overflow: hidden;
+}
+
+.slash-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 6px 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.slash-item:hover {
+  background: var(--ink-2, #1a1a1a);
+}
+
+.slash-name {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--accent, #d4a96a);
+  white-space: nowrap;
+}
+
+.slash-desc {
+  font-size: 0.75rem;
+  color: var(--paper-3, rgba(255,255,255,0.4));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
