@@ -368,6 +368,10 @@ function agentsVerdict(output: unknown) {
                 :error="(getToolOutput(part) as { error?: string })?.error ?? null"
                 :running="isToolStreaming(part) && !agentsVerdict(getToolOutput(part))"
               />
+              <ValuationCard
+                v-else-if="hasOutput(part) && getToolName(part) === 'value_stock'"
+                :result="getToolOutput(part) as any"
+              />
               <ToolStatusCard
                 v-else
                 :tool-name="getToolName(part)"
