@@ -53,13 +53,13 @@ describe('ValuationCard', () => {
     // value_stock returns { error: '...' } on proxy failure; card must not crash
     expect(() => {
       mount(ValuationCard, {
-        props: { result: { error: 'valuation failed: 422' } as any },
+        props: { result: { error: 'valuation failed: 422' } },
       })
     }).not.toThrow()
     const wrapper = mount(ValuationCard, {
-      props: { result: { error: 'valuation failed: 422' } as any },
+      props: { result: { error: 'valuation failed: 422' } },
     })
-    // Should render some fallback text (either the error message or generic label)
-    expect(wrapper.text()).toBeTruthy()
+    // Should render the error message
+    expect(wrapper.text()).toContain('valuation failed: 422')
   })
 })

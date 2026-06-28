@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
 interface MultiplesBlock {
   pe: string | number | null
   pb: string | number | null
@@ -38,7 +40,21 @@ interface ValuationResult {
   warnings: string[]
 }
 
-const props = defineProps<{ result: ValuationResult }>()
+const props = defineProps<{ result: ValuationResult | { error: string } }>()
+
+const errorText = computed(() => {
+  if ('error' in props.result) {
+    return props.result.error
+  }
+  return 'valuation unavailable'
+})
+
+const valuationData = computed<ValuationResult | null>(() => {
+  if ('veto' in props.result) {
+    return props.result
+  }
+  return null
+})
 
 function toNum(v: string | number | null | undefined): number | null {
   if (v === null || v === undefined) return null
@@ -74,56 +90,56 @@ function mosClass(v: string | number | null | undefined): string {
 <template>
   <div class="surface-1 rounded-md overflow-hidden val-card">
     <!-- Veto Banner (prominent, shown when triggered) -->
-    <div v-if="result?.veto?.triggered" class="veto-banner" role="alert">
+    <div v-if="valuationData?.veto?.triggered" class="veto-banner" role="alert">
       <span class="veto-label">veto</span>
-      <span class="veto-reason">{{ result.veto.reason }}</span>
-      <span v-if="result.veto.rating_cap" class="veto-cap">cap: {{ result.veto.rating_cap }}</span>
+      <span class="veto-reason">{{ valuationData.veto.reason }}</span>
+      <span v-if="valuationData.veto.rating_cap" class="veto-cap">cap: {{ valuationData.veto.rating_cap }}</span>
     </div>
 
     <!-- Error / malformed shape fallback -->
-    <div v-if="!result?.veto" class="val-body">
-      <p class="val-empty-label">{{ (result as any)?.error ?? 'valuation unavailable' }}</p>
+    <div v-if="!valuationData" class="val-body">
+      <p class="val-empty-label">{{ errorText }}</p>
     </div>
 
     <!-- Header -->
-    <header v-if="result?.veto" class="val-head">
-      <div class="val-symbol">{{ result.symbol }}</div>
-      <span class="val-badge" :class="`badge-${result.data_quality}`">{{ result.data_quality }}</span>
+    <header v-if="valuationData" class="val-head">
+      <div class="val-symbol">{{ valuationData.symbol }}</div>
+      <span class="val-badge" :class="`badge-${valuationData.data_quality}`">{{ valuationData.data_quality }}</span>
     </header>
 
-    <div v-if="result?.veto" class="val-body">
+    <div v-if="valuationData" class="val-body">
       <!-- Unavailable / partial state -->
-      <div v-if="result.data_quality === 'unavailable'" class="val-empty">
+      <div v-if="valuationData.data_quality === 'unavailable'" class="val-empty">
         <p class="val-empty-label">data quality: unavailable</p>
-        <ul v-if="result.warnings.length" class="val-warnings">
-          <li v-for="(w, i) in result.warnings" :key="i">{{ w }}</li>
+        <ul v-if="valuationData.warnings.length" class="val-warnings">
+          <li v-for="(w, i) in valuationData.warnings" :key="i">{{ w }}</li>
         </ul>
       </div>
 
       <!-- Fair value vs price block -->
-      <div v-if="result.data_quality !== 'unavailable'" class="val-prices">
+      <div v-if="valuationData.data_quality !== 'unavailable'" class="val-prices">
         <div class="val-stat">
           <span>current price</span>
-          <strong>${{ fmtPrice(result.current_price) }}</strong>
+          <strong>${{ fmtPrice(valuationData.current_price) }}</strong>
         </div>
         <div class="val-stat">
           <span>fair value</span>
-          <strong>{{ result.fair_value !== null ? '$' + fmtPrice(result.fair_value) : '--' }}</strong>
+          <strong>{{ valuationData.fair_value !== null ? '$' + fmtPrice(valuationData.fair_value) : '--' }}</strong>
         </div>
         <div class="val-stat">
           <span>margin of safety</span>
-          <strong :class="mosClass(result.margin_of_safety_pct)">
-            {{ fmtPct(result.margin_of_safety_pct) }}
+          <strong :class="mosClass(valuationData.margin_of_safety_pct)">
+            {{ fmtPct(valuationData.margin_of_safety_pct) }}
           </strong>
         </div>
-        <div v-if="result.reverse_dcf_implied_growth !== null" class="val-stat">
+        <div v-if="valuationData.reverse_dcf_implied_growth !== null" class="val-stat">
           <span>implied growth (rev. DCF)</span>
-          <strong>{{ fmtPct(result.reverse_dcf_implied_growth) }}</strong>
+          <strong>{{ fmtPct(valuationData.reverse_dcf_implied_growth) }}</strong>
         </div>
       </div>
 
       <!-- Scenarios table -->
-      <div v-if="result.scenarios.length" class="val-section">
+      <div v-if="valuationData.scenarios.length" class="val-section">
         <div class="val-section-title">scenarios</div>
         <table class="val-table">
           <thead>
@@ -135,7 +151,7 @@ function mosClass(v: string | number | null | undefined): string {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(s, i) in result.scenarios" :key="i">
+            <tr v-for="(s, i) in valuationData.scenarios" :key="i">
               <td>{{ s.name }}</td>
               <td>{{ fmtPct(s.growth) }}</td>
               <td>${{ fmtPrice(s.fair_value) }}</td>
@@ -146,42 +162,42 @@ function mosClass(v: string | number | null | undefined): string {
       </div>
 
       <!-- Multiples block -->
-      <div v-if="result.multiples" class="val-section">
+      <div v-if="valuationData.multiples" class="val-section">
         <div class="val-section-title">multiples</div>
         <div class="val-mults">
-          <div v-if="result.multiples.pe !== null" class="val-mult">
-            <span>P/E</span><strong>{{ fmtMult(result.multiples.pe) }}</strong>
+          <div v-if="valuationData.multiples.pe !== null" class="val-mult">
+            <span>P/E</span><strong>{{ fmtMult(valuationData.multiples.pe) }}</strong>
           </div>
-          <div v-if="result.multiples.pb !== null" class="val-mult">
-            <span>P/B</span><strong>{{ fmtMult(result.multiples.pb) }}</strong>
+          <div v-if="valuationData.multiples.pb !== null" class="val-mult">
+            <span>P/B</span><strong>{{ fmtMult(valuationData.multiples.pb) }}</strong>
           </div>
-          <div v-if="result.multiples.ps !== null" class="val-mult">
-            <span>P/S</span><strong>{{ fmtMult(result.multiples.ps) }}</strong>
+          <div v-if="valuationData.multiples.ps !== null" class="val-mult">
+            <span>P/S</span><strong>{{ fmtMult(valuationData.multiples.ps) }}</strong>
           </div>
-          <div v-if="result.multiples.p_fcf !== null" class="val-mult">
-            <span>P/FCF</span><strong>{{ fmtMult(result.multiples.p_fcf) }}</strong>
+          <div v-if="valuationData.multiples.p_fcf !== null" class="val-mult">
+            <span>P/FCF</span><strong>{{ fmtMult(valuationData.multiples.p_fcf) }}</strong>
           </div>
         </div>
-        <div v-if="result.historical_multiples" class="val-hist-mults">
+        <div v-if="valuationData.historical_multiples" class="val-hist-mults">
           <span class="val-mult-label">historical avg —</span>
-          <span v-if="result.historical_multiples.pe !== null">P/E {{ fmtMult(result.historical_multiples.pe) }}</span>
-          <span v-if="result.historical_multiples.pb !== null">P/B {{ fmtMult(result.historical_multiples.pb) }}</span>
-          <span v-if="result.historical_multiples.ps !== null">P/S {{ fmtMult(result.historical_multiples.ps) }}</span>
-          <span v-if="result.historical_multiples.p_fcf !== null">P/FCF {{ fmtMult(result.historical_multiples.p_fcf) }}</span>
+          <span v-if="valuationData.historical_multiples.pe !== null">P/E {{ fmtMult(valuationData.historical_multiples.pe) }}</span>
+          <span v-if="valuationData.historical_multiples.pb !== null">P/B {{ fmtMult(valuationData.historical_multiples.pb) }}</span>
+          <span v-if="valuationData.historical_multiples.ps !== null">P/S {{ fmtMult(valuationData.historical_multiples.ps) }}</span>
+          <span v-if="valuationData.historical_multiples.p_fcf !== null">P/FCF {{ fmtMult(valuationData.historical_multiples.p_fcf) }}</span>
         </div>
       </div>
 
       <!-- Assumptions -->
-      <div v-if="result.assumptions_used" class="val-section val-assumptions">
+      <div v-if="valuationData.assumptions_used" class="val-section val-assumptions">
         <div class="val-section-title">assumptions</div>
-        <span>discount {{ fmtPct(result.assumptions_used.discount_rate) }}</span>
-        <span>terminal {{ fmtPct(result.assumptions_used.terminal_growth) }}</span>
-        <span>growth rates {{ result.assumptions_used.growth_rates.map(r => fmtPct(r)).join(' / ') }}</span>
+        <span>discount {{ fmtPct(valuationData.assumptions_used.discount_rate) }}</span>
+        <span>terminal {{ fmtPct(valuationData.assumptions_used.terminal_growth) }}</span>
+        <span>growth rates {{ valuationData.assumptions_used.growth_rates.map(r => fmtPct(r)).join(' / ') }}</span>
       </div>
 
       <!-- Warnings (non-unavailable) -->
-      <ul v-if="result.warnings.length && result.data_quality !== 'unavailable'" class="val-warnings">
-        <li v-for="(w, i) in result.warnings" :key="i">{{ w }}</li>
+      <ul v-if="valuationData.warnings.length && valuationData.data_quality !== 'unavailable'" class="val-warnings">
+        <li v-for="(w, i) in valuationData.warnings" :key="i">{{ w }}</li>
       </ul>
     </div>
   </div>
