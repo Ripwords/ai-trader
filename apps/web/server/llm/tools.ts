@@ -477,6 +477,31 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'research_get': tool({
+      description:
+        "Fetch the assessment from a completed research run so you can cite the agents' actual verdict. Pass runId if you have it (e.g. from an auto-injected recent-run hint or research_start), otherwise pass symbol to get that ticker's latest completed run. Returns rating, confidence, and rationale. Use this whenever the user references a ticker that has a recent run — do NOT re-run research_start if a recent assessment already exists.",
+      inputSchema: z.object({
+        runId: z.string().optional(),
+        symbol: z.string().optional(),
+      }),
+      execute: async ({ runId, symbol }) => {
+        const { getOwnerId } = await import('../db/repo')
+        const { getRunAssessment, getLatestRunForSymbol } = await import('../lib/agents/runs-query')
+        const userId = await getOwnerId()
+        if (runId) {
+          const a = await getRunAssessment(userId, runId)
+          return a ?? { error: 'run not found', runId }
+        }
+        if (symbol) {
+          const latest = await getLatestRunForSymbol(userId, symbol)
+          if (!latest) return { error: 'no research run found for symbol', symbol }
+          const a = await getRunAssessment(userId, latest.runId)
+          return a ?? { error: 'run not found', runId: latest.runId }
+        }
+        return { error: 'pass runId or symbol' }
+      },
+    }),
+
     'agents_debate': tool({
       description:
         'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker.',

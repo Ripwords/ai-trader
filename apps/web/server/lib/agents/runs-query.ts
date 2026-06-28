@@ -63,3 +63,60 @@ export async function getActiveRuns(userId: string, finishedSinceMs: number): Pr
 
   return shapeActiveRuns(activeRows, finishedRows)
 }
+
+export interface LatestRunSummary {
+  runId: string; symbol: string; status: string; finishedAt: string | null
+  rating: string | null; confidence: number | null
+}
+export interface RunAssessment extends LatestRunSummary { rationale: string | null }
+
+interface RunDecisionRow {
+  id: string; symbol: string; status: string; finishedAt: Date | null
+  rating: string | null; confidence: number | null
+}
+
+/** Pure shaper for a joined run+decision row. */
+export function summarizeRunRow(row: RunDecisionRow): LatestRunSummary {
+  return {
+    runId: row.id,
+    symbol: row.symbol,
+    status: row.status,
+    finishedAt: row.finishedAt ? row.finishedAt.toISOString() : null,
+    rating: row.rating,
+    confidence: row.confidence,
+  }
+}
+
+/** Latest non-running run for (user, symbol), or null. Symbol matched case-insensitively-ish by exact stored value. */
+export async function getLatestRunForSymbol(userId: string, symbol: string): Promise<LatestRunSummary | null> {
+  const db = getDb()
+  const rows = await db
+    .select({
+      id: agentRuns.id, symbol: agentRuns.symbol, status: agentRuns.status,
+      finishedAt: agentRuns.finishedAt, rating: agentDecisions.rating, confidence: agentDecisions.confidence,
+    })
+    .from(agentRuns)
+    .leftJoin(agentDecisions, eq(agentDecisions.runId, agentRuns.id))
+    .where(and(eq(agentRuns.userId, userId), eq(agentRuns.symbol, symbol), ne(agentRuns.status, 'running')))
+    .orderBy(desc(agentRuns.startedAt))
+    .limit(1)
+  return rows[0] ? summarizeRunRow(rows[0]) : null
+}
+
+/** Full assessment for a runId (owner-scoped). Null if missing or not owned. */
+export async function getRunAssessment(userId: string, runId: string): Promise<RunAssessment | null> {
+  const db = getDb()
+  const rows = await db
+    .select({
+      id: agentRuns.id, symbol: agentRuns.symbol, status: agentRuns.status, userId: agentRuns.userId,
+      finishedAt: agentRuns.finishedAt,
+      rating: agentDecisions.rating, confidence: agentDecisions.confidence, rationale: agentDecisions.rationale,
+    })
+    .from(agentRuns)
+    .leftJoin(agentDecisions, eq(agentDecisions.runId, agentRuns.id))
+    .where(eq(agentRuns.id, runId))
+    .limit(1)
+  const row = rows[0]
+  if (!row || row.userId !== userId) return null
+  return { ...summarizeRunRow(row), rationale: row.rationale }
+}
