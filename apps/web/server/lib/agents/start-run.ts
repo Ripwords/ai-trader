@@ -126,3 +126,34 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
 
   return { run, userId, upstream }
 }
+
+import { AgentRunTee } from '../../utils/agents-tee'
+import { splitNdjson } from '../../utils/ndjson'
+
+/**
+ * Consume the upstream NDJSON stream entirely into a fresh AgentRunTee. Used by
+ * the fire-and-forget endpoint: it is started with ``void`` so it outlives the
+ * HTTP response. Safe because the app runs under a long-lived Node process
+ * (Docker, not serverless); the server-side reader keeps the stream alive so
+ * the api's client-disconnect kill does not trigger. The tee finalizes the
+ * agent_runs row (complete/failed) exactly as the inline path does.
+ */
+export async function drainIntoTee(upstream: Response, runId: string, userId: string): Promise<void> {
+  const tee = new AgentRunTee(runId, userId)
+  const reader = upstream.body!.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      const { events, rest } = splitNdjson(buf, decoder.decode(value, { stream: true }))
+      buf = rest
+      for (const ev of events) tee.push(ev)
+    }
+    const tail = splitNdjson(buf, '\n')
+    for (const ev of tail.events) tee.push(ev)
+  } catch (e: unknown) {
+    console.error('[agents-async] drain failed', (e as Error)?.message)
+  }
+}

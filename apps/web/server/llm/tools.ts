@@ -427,6 +427,56 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     // --- Research (TradingAgents multi-agent debate) ---------------------
 
+    'research_start': tool({
+      description:
+        'Start a research run (the multi-agent analyst → debate → trader → risk pipeline) on a symbol ASYNCHRONOUSLY. Returns immediately with a runId; the run finishes in the background (~30-90s) and the user gets a browser notification. Use this when the user asks to "research X", "kick off analysis on X", or wants to keep chatting while it runs. Use agents_debate instead only when the user explicitly wants to watch the debate stream inline now.',
+      inputSchema: z.object({
+        symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
+        max_debate_rounds: z.number().int().min(1).max(3).default(1),
+        deep_thinking: z.boolean().default(true),
+      }),
+      execute: async (args) => {
+        const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+        const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
+        const res = await fetch(`${baseUrl}/api/research/agents-run-async`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}),
+          },
+          body: JSON.stringify(args),
+        })
+        if (res.status === 409) {
+          const body = await res.json().catch(() => ({})) as { data?: { run_id?: string } }
+          return { status: 'already_running', runId: body?.data?.run_id ?? null, symbol: args.symbol }
+        }
+        if (!res.ok) {
+          return { status: 'error', error: `research start failed: ${res.status}`, symbol: args.symbol }
+        }
+        const body = await res.json() as { runId: string; status: string; symbol: string }
+        return {
+          ...body,
+          message: `Research started for ${body.symbol}. You'll get a browser notification when it's done; I can pull the assessment with research_get once it completes.`,
+        }
+      },
+    }),
+
+    'research_status': tool({
+      description:
+        'Check the current status of a research run by its runId (running / complete / failed). Use after research_start if the user asks "is it done yet".',
+      inputSchema: z.object({ runId: z.string() }),
+      execute: async ({ runId }) => {
+        const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+        const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
+        const res = await fetch(`${baseUrl}/api/research/agent-messages?run_id=${encodeURIComponent(runId)}&since=999999`, {
+          headers: { ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}) },
+        })
+        if (!res.ok) return { runId, status: 'unknown', error: `status check failed: ${res.status}` }
+        const body = await res.json() as { runId: string; status: string }
+        return { runId: body.runId, status: body.status }
+      },
+    }),
+
     'agents_debate': tool({
       description:
         'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker.',
