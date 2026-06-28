@@ -502,6 +502,29 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'investment_research': tool({
+      description:
+        'Produce a deep-research MEMO on a company by aggregating valuation, fundamentals, contextual news, insider activity, and the latest agents verdict. preset controls emphasis: research=standard 7-section memo; team=bull/bear/quant/macro lenses; series=long-form (optional part); management=founder/capital-allocation focus + web bio (pass person). Fast — reuses existing data, does NOT start a fresh agents run. Use for "deep dive / research report / full analysis on X".',
+      inputSchema: z.object({
+        symbol: z.string().describe('Ticker or company name, e.g. NVDA, US.NVDA, 腾讯'),
+        preset: z.enum(['research', 'team', 'series', 'management']).default('research'),
+        person: z.string().optional().describe('For preset=management: the executive/founder to focus on'),
+        part: z.number().int().min(1).optional().describe('For preset=series: which part to continue'),
+      }),
+      execute: async ({ symbol, preset, person, part }) => {
+        const { getOwnerId } = await import('../db/repo')
+        const { buildResearchDossier } = await import('./research/dossier')
+        const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+        const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
+        const userId = await getOwnerId()
+        const dossier = await buildResearchDossier(symbol, {
+          preset, person, part, userId, baseUrl,
+          sessionCookie: sessionCookie ? `session=${sessionCookie}` : undefined,
+        })
+        return dossier
+      },
+    }),
+
     'agents_debate': tool({
       description:
         'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker.',

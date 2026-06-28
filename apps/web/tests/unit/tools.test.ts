@@ -73,6 +73,7 @@ describe('tool catalogue', () => {
       'algo_unkill',
       'convert_fx',
       'holdings_context',
+      'investment_research',
       'market_kline',
       'market_order_book',
       'market_snapshot',
