@@ -118,6 +118,15 @@ async def translate_chunks(
                 "confidence": decision.get("confidence"),
                 "rationale": decision.get("rationale", ""),
             }
+        veto = values.get("valuation_veto")
+        if veto:
+            yield {
+                "type": "valuation-veto",
+                "original_rating": veto.get("original_rating"),
+                "effective_rating": veto.get("effective_rating"),
+                "reason": veto.get("reason"),
+                "rating_cap": veto.get("rating_cap"),
+            }
         final_state = values.get("final_state")
         if final_state:
             # Forwarded to the proxy tee which persists it on

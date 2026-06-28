@@ -76,7 +76,7 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 from .model_config import build_tradingagents_config
 from .toolkit import AgentToolkit, OpenDClient, build_toolkit
-from app.services.valuation.compose import value
+from app.services.valuation.compose import apply_veto, value
 from app.services.valuation.fetch import fetch_valuation_input
 from app.services.valuation.models import ValuationResult
 from app.services.valuation.summary import format_valuation_for_agents
@@ -621,7 +621,11 @@ def _parse_confidence(text: str) -> int | None:
     return None
 
 
-def _extract_decision(prev: dict, curr: dict) -> dict | None:
+def _extract_decision(
+    prev: dict,
+    curr: dict,
+    valuation: "ValuationResult | None" = None,
+) -> dict | None:
     """Surface ``final_trade_decision`` as a structured decision event.
 
     Recognises all five wire ratings (``strong-buy``, ``buy``, ``hold``,
@@ -637,16 +641,28 @@ def _extract_decision(prev: dict, curr: dict) -> dict | None:
     ``rationale`` is the full decision text — the UI renders it as a structured
     report, so we must not clip it (the ``rationale`` column is unlimited
     ``text``).
+
+    When ``valuation`` has a triggered veto, the agent's raw rating is capped
+    to the veto's ``rating_cap``. The original rating is preserved under
+    ``original_rating`` and the veto metadata is included under ``veto``.
     """
     pdec = prev.get("final_trade_decision") or ""
     cdec = curr.get("final_trade_decision") or ""
     if not cdec or cdec == pdec:
         return None
-    return {
-        "rating": _parse_rating(cdec),
+    rating = _parse_rating(cdec)
+    decision: dict = {
+        "rating": rating,
         "confidence": _parse_confidence(cdec),
         "rationale": cdec,
     }
+    if valuation is not None and valuation.veto.triggered:
+        effective, veto = apply_veto(rating, valuation)
+        if effective != rating:
+            decision["original_rating"] = rating
+            decision["rating"] = effective
+            decision["veto"] = {"reason": veto.reason, "rating_cap": veto.rating_cap}
+    return decision
 
 
 def _state_snapshot(state: Any) -> dict:
@@ -913,9 +929,15 @@ async def run_graph(
         synthesis = _extract_synthesis(prev, curr)
         if synthesis:
             values["synthesis"] = synthesis
-        decision = _extract_decision(prev, curr)
+        decision = _extract_decision(prev, curr, valuation=run_valuation)
         if decision:
             values["decision"] = decision
+            if decision.get("veto"):
+                values["valuation_veto"] = {
+                    "original_rating": decision["original_rating"],
+                    "effective_rating": decision["rating"],
+                    **decision["veto"],
+                }
 
         finished = bool(finished_node and (calls or results or debate or decision or reports))
         if values or node:
