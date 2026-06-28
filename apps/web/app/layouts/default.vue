@@ -10,6 +10,7 @@ const drawerOpen = useState('shell.drawerOpen', () => false)
       :drawer-open="drawerOpen"
       @toggle-drawer="drawerOpen = !drawerOpen"
     />
+    <ActiveRunsWatcher />
 
     <div class="app-body">
       <slot />
