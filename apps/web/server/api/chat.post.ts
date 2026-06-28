@@ -72,12 +72,19 @@ export default defineEventHandler(async (event) => {
     body.messages as Parameters<typeof convertToModelMessages>[0],
   )
 
+  const { slashDispatch } = await import('../llm/research/dispatch')
+  const dispatch = slashDispatch(newestUserText)
+  const systemPrompt = dispatch
+    ? `${buildSystemPrompt(ghostfolioStatus, recallContext)}\n\n${dispatch.directive}`
+    : buildSystemPrompt(ghostfolioStatus, recallContext)
+
   const result = streamText({
     model: buildModel(),
-    system: buildSystemPrompt(ghostfolioStatus, recallContext),
+    system: systemPrompt,
     messages: modelMessages,
     tools,
     stopWhen: stepCountIs(8),
+    ...(dispatch ? { toolChoice: { type: 'tool' as const, toolName: dispatch.toolName as Extract<keyof typeof tools, string> } } : {}),
   })
 
   // The chat-id round-trip: tell the client which thread we wrote to so it can
