@@ -550,6 +550,21 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'dyp_ask': tool({
+      description:
+        'Answer a pointed investment question with first-principles reasoning, grounded in the app\'s data when a ticker is referenced. Use for sharp analytical questions like "where is PDD\'s moat really?" or "is this priced in?". Returns the question plus a light context bundle; compose a structured reasoned answer.',
+      inputSchema: z.object({
+        question: z.string().describe('The investment question to reason about'),
+        symbol: z.string().optional().describe('Optional explicit ticker if the question is about one'),
+      }),
+      execute: async ({ question, symbol }) => {
+        const { gatherDypContext } = await import('./research/dyp')
+        const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+        const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
+        return gatherDypContext({ question, symbol, baseUrl, sessionCookie: sessionCookie ? `session=${sessionCookie}` : undefined })
+      },
+    }),
+
     'agents_debate': tool({
       description:
         'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker.',

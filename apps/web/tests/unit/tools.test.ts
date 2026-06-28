@@ -72,6 +72,7 @@ describe('tool catalogue', () => {
       'algo_state',
       'algo_unkill',
       'convert_fx',
+      'dyp_ask',
       'holdings_context',
       'investment_research',
       'market_kline',
