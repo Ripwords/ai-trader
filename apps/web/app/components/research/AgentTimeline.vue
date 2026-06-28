@@ -39,11 +39,19 @@ interface SynthesisRecord {
   content: string
 }
 
+interface ValuationVetoRecord {
+  original_rating: string
+  effective_rating: string
+  reason: string
+  rating_cap: string
+}
+
 type RenderItem =
   | ({ kind: 'node' } & NodeRecord)
   | ({ kind: 'debate' } & DebateRecord)
   | { kind: 'risk-debate'; turns: RiskTurn[] }
   | ({ kind: 'synthesis' } & SynthesisRecord)
+  | ({ kind: 'valuation-veto' } & ValuationVetoRecord)
 
 // Aggregate the wire stream into renderable timeline items. Order is
 // preserved by the *first* event that touches each item — node-start /
@@ -65,7 +73,9 @@ const items = computed<RenderItem[]>(() => {
     | { kind: 'debate'; round: number }
     | { kind: 'risk-debate' }
     | { kind: 'synthesis'; stage: SynthesisStage }
+    | { kind: 'valuation-veto'; idx: number }
   > = []
+  const vetoRecords: ValuationVetoRecord[] = []
 
   for (const ev of props.events) {
     if (ev.type === 'node-start') {
@@ -142,6 +152,16 @@ const items = computed<RenderItem[]>(() => {
         order.push({ kind: 'synthesis', stage: ev.stage })
       }
     }
+    else if (ev.type === 'valuation-veto') {
+      const idx = vetoRecords.length
+      vetoRecords.push({
+        original_rating: ev.original_rating,
+        effective_rating: ev.effective_rating,
+        reason: ev.reason,
+        rating_cap: ev.rating_cap,
+      })
+      order.push({ kind: 'valuation-veto', idx })
+    }
     else if (ev.type === 'error') {
       if (ev.node) {
         const n = nodes.get(ev.node)
@@ -151,9 +171,10 @@ const items = computed<RenderItem[]>(() => {
   }
 
   return order.map((o): RenderItem => {
-    if (o.kind === 'node')        return { kind: 'node', ...nodes.get(o.node)! }
-    if (o.kind === 'debate')      return { kind: 'debate', ...debates.get(o.round)! }
-    if (o.kind === 'risk-debate') return { kind: 'risk-debate', turns: riskTurns ?? [] }
+    if (o.kind === 'node')           return { kind: 'node', ...nodes.get(o.node)! }
+    if (o.kind === 'debate')         return { kind: 'debate', ...debates.get(o.round)! }
+    if (o.kind === 'risk-debate')    return { kind: 'risk-debate', turns: riskTurns ?? [] }
+    if (o.kind === 'valuation-veto') return { kind: 'valuation-veto', ...vetoRecords[o.idx]! }
     return { kind: 'synthesis', ...synth.get(o.stage)! }
   })
 })
@@ -178,6 +199,19 @@ const items = computed<RenderItem[]>(() => {
         :node="item.node"
         :content="item.content"
       />
+      <div
+        v-else-if="item.kind === 'valuation-veto'"
+        class="valuation-veto-banner"
+        role="alert"
+      >
+        <span class="veto-icon">⚠</span>
+        <span class="veto-text">
+          <strong>Valuation veto applied</strong> — rating capped from
+          <span class="veto-rating">{{ item.original_rating }}</span> to
+          <span class="veto-rating">{{ item.effective_rating }}</span>:
+          {{ item.reason }}
+        </span>
+      </div>
       <AgentStepCard
         v-else
         :node="item.node"
@@ -195,5 +229,31 @@ const items = computed<RenderItem[]>(() => {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
+}
+
+.valuation-veto-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background-color: #fff3cd;
+  border: 1px solid #ffc107;
+  color: #664d03;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.veto-icon {
+  flex-shrink: 0;
+  font-size: 1.1rem;
+  margin-top: 0.05rem;
+}
+
+.veto-rating {
+  font-family: monospace;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 </style>

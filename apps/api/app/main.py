@@ -14,6 +14,7 @@ from app.routers import (
     health,
     quote,
     trade,
+    valuation,
     watchlist,
 )
 from app.services.algo import repo as algo_repo
@@ -259,6 +260,7 @@ def create_app() -> FastAPI:
     app.include_router(trade.router)
     app.include_router(algo.router)
     app.include_router(agents.router)
+    app.include_router(valuation.router)
 
     @app.get("/_internal/whoami", dependencies=[Depends(require_internal_bearer)])
     async def whoami() -> dict[str, str]:
