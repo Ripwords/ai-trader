@@ -525,6 +525,31 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'news_pulse': tool({
+      description:
+        'A grouped news digest for a symbol: ticker-specific + macro + sector/peer context. Use for "what\'s the news on X", "news pulse", "latest on X". Summarize the result; do not dump every headline.',
+      inputSchema: z.object({ symbol: z.string(), companyName: z.string().optional() }),
+      execute: async ({ symbol, companyName }) => {
+        const { getContextualNews } = await import('../lib/contextual-news')
+        return getContextualNews({ symbol, companyName, maxResults: 12 })
+      },
+    }),
+
+    'thesis_tracker': tool({
+      description:
+        "Read-only research history for a symbol: latest agents verdict, run history, confidence trend, staleness (stale after 21 days), and realized alpha. Use for \"how's my thesis on X\", \"thesis tracker\", \"has my research on X aged\". Does not start a run.",
+      inputSchema: z.object({ symbol: z.string() }),
+      execute: async ({ symbol }) => {
+        const { getOwnerId } = await import('../db/repo')
+        const { resolveSymbol } = await import('../lib/yahoo')
+        const { buildThesisSummary } = await import('./research/thesis')
+        const resolution = await resolveSymbol(symbol)
+        const sym = resolution.status === 'resolved' ? resolution.symbol : symbol
+        const userId = await getOwnerId()
+        return buildThesisSummary(userId, sym)
+      },
+    }),
+
     'agents_debate': tool({
       description:
         'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker.',
