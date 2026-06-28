@@ -51,13 +51,27 @@ export default defineEventHandler(async (event) => {
     getGhostfolioStatus(),
   ])
   const tools = { ...makeTools(client, { event, latestUserText: newestUserText }), ...ghostfolioTools }
+
+  // Auto-hint: surface recent research runs for tickers in the user's latest
+  // message so the model references the agents' prior assessment instead of
+  // being blind to it. Best-effort — never block the chat on it.
+  let recallContext = ''
+  try {
+    const { buildRecallContext } = await import('../llm/recall')
+    const watch = await client.listWatchlist({ group: 'All' }).catch(() => [] as Array<{ code?: string }>)
+    const watchSymbols = (Array.isArray(watch) ? watch : []).map(w => String(w?.code ?? '')).filter(Boolean)
+    recallContext = await buildRecallContext({ userId: ownerId, text: newestUserText, watchlist: watchSymbols })
+  } catch (err) {
+    console.error('[chat] recall build failed', err)
+  }
+
   const modelMessages = await convertToModelMessages(
     body.messages as Parameters<typeof convertToModelMessages>[0],
   )
 
   const result = streamText({
     model: buildModel(),
-    system: buildSystemPrompt(ghostfolioStatus),
+    system: buildSystemPrompt(ghostfolioStatus, recallContext),
     messages: modelMessages,
     tools,
     stopWhen: stepCountIs(8),

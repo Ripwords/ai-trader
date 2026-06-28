@@ -1,7 +1,7 @@
 import type { GhostfolioStatus } from './mcp'
 import { MOOMOO_RULES } from './moomoo-context'
 
-export function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus): string {
+export function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus, recallContext?: string): string {
   const ghostfolioIntro =
     ghostfolioStatus === 'ok'
       ? 'Ghostfolio is a portfolio tracker / reconciliation source (exposed via ghostfolio_* MCP tools). It is NOT a broker account and must not be added to moomoo as if it were independent.'
@@ -60,7 +60,14 @@ export function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus): string {
     '- Default max_debate_rounds=1 and deep_thinking=true. Only raise rounds (max 3) if the user explicitly asks for a "longer debate" - each extra round is meaningfully more expensive.',
     '- holdings_context returns broker_quantity (moomoo live), paper_quantity (moomoo paper), and tracker_quantity (Ghostfolio). Call it when the user asks "what\'s my X exposure", "how many X shares do I have", or before suggesting a trade size. Answer from broker_quantity / owned_quantity for actual holdings and mention tracker_quantity only as a tracker cross-check. Never add tracker_quantity to broker_quantity.',
     '',
+    'RESEARCH RECALL & ASYNC RUNS:',
+    '- research_start kicks off a research run asynchronously and returns a runId; the user is notified in-browser when it finishes. Prefer it over agents_debate when the user says "research X" and is happy to keep chatting. Use research_status to check progress, research_get to fetch a finished run\'s rating/confidence/rationale.',
+    '- If the RECENT RESEARCH RUNS block below lists a run for a ticker the user is asking about, call research_get with that runId and cite the agents\' actual assessment instead of starting a new run.',
+    '',
     'Never invent symbols - ask if unsure. The lookup table below is authoritative for common names.',
+    ...(recallContext
+      ? ['', 'RECENT RESEARCH RUNS (for tickers in the latest message):', recallContext]
+      : []),
     '',
     MOOMOO_RULES,
   ].join('\n')
