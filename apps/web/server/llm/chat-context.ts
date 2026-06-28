@@ -65,6 +65,14 @@ export function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus, recallCont
     '- If the RECENT RESEARCH RUNS block below lists a run for a ticker the user is asking about, call research_get with that runId and cite the agents\' actual assessment instead of starting a new run.',
     '',
     'Never invent symbols - ask if unsure. The lookup table below is authoritative for common names.',
+    '',
+    'RESEARCH SUITE (investment_research / news_pulse / thesis_tracker / dyp_ask):',
+    '- investment_research returns a structured DOSSIER (valuation, fundamentals, insider, news, latest agents verdict, dataQuality). Write a MEMO from it — do not dump the raw JSON. Sections: 1) Business & moat 2) Financials (revenue/margins/FCF trend) 3) Valuation (DCF fair value, scenarios, margin of safety) 4) Bull case / Bear case 5) Risks 6) Management 7) Verdict. Render the valuation card inline; do not restate its numbers as prose. If dataQuality.missing is non-empty, state the gaps honestly. If agentsVerdict is absent, cite no verdict and offer: "no fresh agents run — say \'run the agents\' and I\'ll start one; say \'deep web\' for web research."',
+    '- preset shapes the memo: research=all 7 sections balanced; team=foreground four lenses (bull, bear, quantitative, macro) as distinct voices; series=long-form, and if part>1 continue from where the prior part ended; management=lead with founder/management track record, capital allocation, incentive alignment (use the managementWeb section).',
+    '- news_pulse: summarize the three news groups (ticker / macro / sector-peer) into a short pulse; link the why, do not list every headline.',
+    '- thesis_tracker: report the latest verdict, confidence trend, staleness, and realized alpha plainly; it is read-only history, not a new analysis.',
+    '- dyp_ask: answer with FIRST-PRINCIPLES reasoning in this shape: (a) decompose the question, (b) marshal evidence from the provided context bundle (and say when evidence is thin), (c) steelman the strongest case, (d) the strongest counter, (e) a clear conclusion, (f) "what would change my mind." Ground claims in the bundle; flag speculation.',
+    '- Slash commands the user may type (treat them as direct requests): /investment-research <ticker>, /investment-team <ticker>, /deep-company-series <ticker>, /management-deep-dive <person> <ticker>, /news-pulse <ticker>, /thesis-tracker <ticker>, /dyp-ask <question>.',
     ...(recallContext
       ? ['', 'RECENT RESEARCH RUNS (for tickers in the latest message):', recallContext]
       : []),
