@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useAgentsRun } from '../../../composables/useAgentsRun'
+import { requestRunNotificationPermission } from '../../lib/notify'
 
 definePageMeta({ section: 'research' })
 
@@ -152,6 +153,7 @@ async function onCancelInFlight(targetRunId: string) {
 }
 
 function onStart(opts: StartOpts) {
+  void requestRunNotificationPermission()
   void start(symbol.value, opts).then(() => {
     void refreshHistory()
   })

@@ -142,17 +142,31 @@ export async function drainIntoTee(upstream: Response, runId: string, userId: st
   const reader = upstream.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''
+  let finalizeReason: string | null = 'stream ended without terminal event'
   try {
     while (true) {
       const { value, done } = await reader.read()
       if (done) break
       const { events, rest } = splitNdjson(buf, decoder.decode(value, { stream: true }))
       buf = rest
-      for (const ev of events) tee.push(ev)
+      for (const ev of events) {
+        if (ev.type === 'run-end' || ev.type === 'error') finalizeReason = null
+        tee.push(ev)
+      }
     }
     const tail = splitNdjson(buf, '\n')
-    for (const ev of tail.events) tee.push(ev)
+    for (const ev of tail.events) {
+      if (ev.type === 'run-end' || ev.type === 'error') finalizeReason = null
+      tee.push(ev)
+    }
   } catch (e: unknown) {
     console.error('[agents-async] drain failed', (e as Error)?.message)
+    finalizeReason = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (finalizeReason !== null) {
+      await getDb().update(agentRuns)
+        .set({ status: 'failed', finishedAt: new Date(), error: finalizeReason })
+        .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, 'running')))
+    }
   }
 }

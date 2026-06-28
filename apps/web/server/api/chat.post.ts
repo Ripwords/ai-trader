@@ -60,7 +60,10 @@ export default defineEventHandler(async (event) => {
     const { buildRecallContext } = await import('../llm/recall')
     const watch = await client.listWatchlist({ group: 'All' }).catch(() => [] as Array<{ code?: string }>)
     const watchSymbols = (Array.isArray(watch) ? watch : []).map(w => String(w?.code ?? '')).filter(Boolean)
-    recallContext = await buildRecallContext({ userId: ownerId, text: newestUserText, watchlist: watchSymbols })
+    recallContext = await Promise.race([
+      buildRecallContext({ userId: ownerId, text: newestUserText, watchlist: watchSymbols }),
+      new Promise<string>(r => setTimeout(() => r(''), 800)),
+    ])
   } catch (err) {
     console.error('[chat] recall build failed', err)
   }

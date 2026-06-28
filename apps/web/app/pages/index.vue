@@ -9,6 +9,7 @@ import {
   isToolUIPart,
 } from 'ai'
 import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
+import { requestRunNotificationPermission } from '../lib/notify'
 
 definePageMeta({ title: 'chat' })
 
@@ -125,6 +126,7 @@ function onConversationDeleted(id: string) { if (id === chatId.value) startNewCh
 function onSubmit() {
   const text = input.value.trim()
   if (!text) return
+  void requestRunNotificationPermission()
   chat.sendMessage({ text })
   input.value = ''
 }

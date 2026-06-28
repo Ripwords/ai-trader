@@ -47,7 +47,7 @@ export function formatRecallLine(s: LatestRunSummary, nowMs: number): string {
   const verdict = s.rating
     ? `${s.rating}${s.confidence != null ? ` conf ${s.confidence}` : ''}`
     : s.status
-  return `${s.symbol} — research ${ageText(s.finishedAt, nowMs)}: ${verdict} (run ${s.runId.slice(0, 8)})`
+  return `${s.symbol} — research ${ageText(s.finishedAt, nowMs)}: ${verdict} (run ${s.runId})`
 }
 
 /**
@@ -64,19 +64,18 @@ export async function buildRecallContext(opts: { userId: string; text: string; w
 
   const watch = new Set(opts.watchlist.map(w => w.toUpperCase()))
   const nowMs = Date.now()
-  const lines: string[] = []
-  for (const cand of candidates) {
+  const lineOrNulls = await Promise.all(candidates.map(async (cand): Promise<string | null> => {
     // Cheap path: on the watchlist (bare symbol, possibly market-prefixed like US.NVDA).
     const onWatch = watch.has(cand) || [...watch].some(w => w.endsWith(`.${cand}`))
     let symbol = cand
     if (!onWatch) {
       const r = await resolveSymbol(cand)
-      if (r.status !== 'resolved') continue
+      if (r.status !== 'resolved') return null
       symbol = r.symbol
     }
     const latest = await getLatestRunForSymbol(opts.userId, symbol)
       ?? (symbol !== cand ? await getLatestRunForSymbol(opts.userId, cand) : null)
-    if (latest) lines.push(formatRecallLine(latest, nowMs))
-  }
-  return lines.join('\n')
+    return latest ? formatRecallLine(latest, nowMs) : null
+  }))
+  return lineOrNulls.filter((l): l is string => l !== null).join('\n')
 }

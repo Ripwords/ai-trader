@@ -31,6 +31,6 @@ describe('formatRecallLine', () => {
     expect(line).toContain('BUY')
     expect(line).toContain('conf 72')
     expect(line).toContain('2h ago')
-    expect(line).toContain('abcdef12') // short run id for research_get
+    expect(line).toContain('abcdef1234') // full run id for research_get
   })
 })
