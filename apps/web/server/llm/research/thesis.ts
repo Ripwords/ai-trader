@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, ne } from 'drizzle-orm'
 import { getDb } from '../../../db/client'
 import { agentRuns, agentDecisions, agentReflections } from '../../../db/schema'
 
@@ -43,7 +43,7 @@ export async function buildThesisSummary(userId: string, symbol: string): Promis
     })
     .from(agentRuns)
     .leftJoin(agentDecisions, eq(agentDecisions.runId, agentRuns.id))
-    .where(and(eq(agentRuns.userId, userId), eq(agentRuns.symbol, symbol)))
+    .where(and(eq(agentRuns.userId, userId), eq(agentRuns.symbol, symbol), ne(agentRuns.status, 'running')))
     .orderBy(desc(agentRuns.startedAt))
     .limit(20)
 

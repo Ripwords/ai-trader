@@ -2,6 +2,12 @@ import { parseSlashCommand } from './commands'
 
 export interface SlashDispatch { toolName: string; directive: string }
 
+export type StepToolChoice = { type: 'tool'; toolName: string } | 'auto'
+/** Force the dispatched tool on the first step only; auto thereafter so the model writes prose. */
+export function stepToolChoice(toolName: string, stepNumber: number): StepToolChoice {
+  return stepNumber === 0 ? { type: 'tool', toolName } : 'auto'
+}
+
 /**
  * Map a slash-command message to a deterministic tool dispatch: the tool to
  * force via streamText toolChoice, plus a directive appended to the system

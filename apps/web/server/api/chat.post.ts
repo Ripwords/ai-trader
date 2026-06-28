@@ -72,7 +72,7 @@ export default defineEventHandler(async (event) => {
     body.messages as Parameters<typeof convertToModelMessages>[0],
   )
 
-  const { slashDispatch } = await import('../llm/research/dispatch')
+  const { slashDispatch, stepToolChoice } = await import('../llm/research/dispatch')
   const dispatch = slashDispatch(newestUserText)
   const systemPrompt = dispatch
     ? `${buildSystemPrompt(ghostfolioStatus, recallContext)}\n\n${dispatch.directive}`
@@ -84,7 +84,16 @@ export default defineEventHandler(async (event) => {
     messages: modelMessages,
     tools,
     stopWhen: stepCountIs(8),
-    ...(dispatch ? { toolChoice: { type: 'tool' as const, toolName: dispatch.toolName as Extract<keyof typeof tools, string> } } : {}),
+    ...(dispatch
+      ? {
+          prepareStep: ({ stepNumber }: { stepNumber: number }) => {
+            const tc = stepToolChoice(dispatch.toolName, stepNumber)
+            return tc === 'auto'
+              ? { toolChoice: 'auto' as const }
+              : { toolChoice: { type: 'tool' as const, toolName: dispatch.toolName as Extract<keyof typeof tools, string> } }
+          },
+        }
+      : {}),
   })
 
   // The chat-id round-trip: tell the client which thread we wrote to so it can

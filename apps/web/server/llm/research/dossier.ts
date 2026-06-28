@@ -74,8 +74,8 @@ export async function buildResearchDossier(
       : Promise.resolve(undefined),
   ])
 
-  const sections: Record<string, DossierSection<unknown>> = { valuation, fundamentals, insider, news, agentsVerdict }
-  const missing = Object.entries(sections).filter(([, s]) => !s.ok).map(([k]) => k)
+  const dataSections: Record<string, DossierSection<unknown>> = { valuation, fundamentals, insider, news }
+  const missing = Object.entries(dataSections).filter(([, s]) => !s.ok).map(([k]) => k)
 
   const dossier: ResearchDossier = {
     symbol, companyName, preset: opts.preset, part: opts.part,
