@@ -103,6 +103,20 @@ def value(
         veto=Veto(triggered=False, reason=None, rating_cap=None), warnings=warnings,
     )
     result.veto = _compute_veto(vi, result)
+    # Guardrail: when the market price diverges wildly from the DCF fair value
+    # (>= ~3x, i.e. MoS <= -200%), the output is out-of-regime. This is usually
+    # deeply cyclical/normalized FCF or an upstream data anomaly (e.g. an
+    # unadjusted split inflating the price feed ~10x vs the fundamentals feed,
+    # as seen for US.MU). Surface it instead of printing a confident -1880%.
+    if fair_value > 0 and mos <= Decimal("-2.0"):
+        ratio = vi.current_price / fair_value
+        result.warnings.append(
+            f"market price is {ratio:.1f}x the DCF fair value (margin of safety "
+            f"{mos:.0%}); the price implies FCF growth beyond the model's range — "
+            f"likely deeply cyclical/normalized FCF or a data anomaly (e.g. an "
+            f"unadjusted split in the price feed). Treat the fair value as "
+            f"out-of-regime, not a precise target."
+        )
     # v1 single-source market-cap sanity check; full two-source cross_source_check deferred to v2
     if vi.shares_outstanding is not None and vi.metrics.market_cap is not None:
         ok, msg = verify_market_cap(vi.current_price, vi.shares_outstanding, vi.metrics.market_cap)
@@ -116,7 +130,7 @@ def _compute_veto(vi: ValuationInput, result: ValuationResult) -> Veto:
     if result.margin_of_safety_pct is not None and result.margin_of_safety_pct <= Decimal("-0.50"):
         return Veto(triggered=True, rating_cap="hold",
                     reason=f"price >= 1.5x DCF fair value "
-                           f"(margin of safety {result.margin_of_safety_pct:.2f})")
+                           f"(margin of safety {result.margin_of_safety_pct:.1%})")
     # (b) reverse-DCF implies implausible growth
     base_g = derive_growth(vi.history)
     if (result.reverse_dcf_implied_growth is not None and base_g > 0

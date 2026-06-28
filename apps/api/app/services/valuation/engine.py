@@ -8,6 +8,13 @@ getcontext().prec = 28
 
 _TWO = Decimal("2")
 
+# Reverse-DCF search band and edge tolerance. A solved growth within
+# ``_RDCF_EDGE`` of a bound is treated as saturated (price unreachable in
+# range) and reported as ``None`` rather than a misleading precise figure.
+_RDCF_LO = Decimal("-0.50")
+_RDCF_HI = Decimal("1.00")
+_RDCF_EDGE = Decimal("0.01")
+
 
 def dcf(
     fcf_base: Decimal,
@@ -59,25 +66,42 @@ def reverse_dcf(
     net_debt: Decimal,
     shares: Decimal,
     explicit_years: int = 5,
-) -> Decimal:
+) -> Decimal | None:
     """Bisection-solve the flat annual growth that makes ``dcf`` == ``price``.
 
     ai-berkshire's reality check: what growth does the current price imply?
-    Searches g in [-0.50, 1.00]; returns the midpoint at convergence.
+    Searches g in [-0.50, 1.00]. Returns ``None`` when the price is NOT
+    reachable inside that band — i.e. the solver would otherwise saturate at a
+    bound. Surfacing the bound (e.g. ``0.999``) as a precise "99.9% implied
+    growth" is misleading: it means the price implies growth beyond the search
+    range (extreme overvaluation or a data anomaly), which the caller should
+    flag rather than print as a real figure.
     """
-    lo, hi = Decimal("-0.50"), Decimal("1.00")
+    lo, hi = _RDCF_LO, _RDCF_HI
     target = price
+    solved: Decimal | None = None
     for _ in range(200):
         mid = (lo + hi) / _TWO
         fv = dcf(fcf_base, [mid] * explicit_years, discount_rate,
                  terminal_growth, net_debt, shares)
         if abs(fv - target) < Decimal("0.0000001"):
-            return mid
+            solved = mid
+            break
         if fv < target:
             lo = mid
         else:
             hi = mid
-    return ((lo + hi) / _TWO).quantize(Decimal("0.000001"), ROUND_HALF_EVEN)
+    if solved is None:
+        solved = (lo + hi) / _TWO
+        final_fv = dcf(fcf_base, [solved] * explicit_years, discount_rate,
+                       terminal_growth, net_debt, shares)
+        # Did not converge: price is unreachable anywhere in the band.
+        if target != 0 and abs(final_fv - target) > abs(target) * Decimal("0.01"):
+            return None
+    # Reject a solution pinned at the search edge — it's saturated/unreliable.
+    if solved >= _RDCF_HI - _RDCF_EDGE or solved <= _RDCF_LO + _RDCF_EDGE:
+        return None
+    return solved.quantize(Decimal("0.000001"), ROUND_HALF_EVEN)
 
 
 def _median(values: list[Decimal]) -> Decimal | None:
