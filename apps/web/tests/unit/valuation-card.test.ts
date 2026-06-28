@@ -18,7 +18,7 @@ describe('ValuationCard', () => {
           reverse_dcf_implied_growth: '0.4',
           data_quality: 'full',
           assumptions_used: null,
-          veto: { triggered: true, reason: 'price >= 2x DCF fair value', rating_cap: 'hold' },
+          veto: { triggered: true, reason: 'price >= 1.5x DCF fair value (margin of safety -0.85)', rating_cap: 'hold' },
           warnings: [],
         },
       },
@@ -47,5 +47,19 @@ describe('ValuationCard', () => {
       },
     })
     expect(wrapper.text().toLowerCase()).toContain('unavailable')
+  })
+
+  it('does not throw when given an error shape (no veto field)', () => {
+    // value_stock returns { error: '...' } on proxy failure; card must not crash
+    expect(() => {
+      mount(ValuationCard, {
+        props: { result: { error: 'valuation failed: 422' } as any },
+      })
+    }).not.toThrow()
+    const wrapper = mount(ValuationCard, {
+      props: { result: { error: 'valuation failed: 422' } as any },
+    })
+    // Should render some fallback text (either the error message or generic label)
+    expect(wrapper.text()).toBeTruthy()
   })
 })

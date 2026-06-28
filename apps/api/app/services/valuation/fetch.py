@@ -73,6 +73,8 @@ def to_valuation_input(symbol: str, payload: dict) -> ValuationInput:
 
     shares = metrics.shares_outstanding
 
+    avg_price_by_period = avg_close_by_year(bars) if bars else None
+
     return ValuationInput(
         symbol=symbol,
         current_price=current_price,
@@ -82,6 +84,7 @@ def to_valuation_input(symbol: str, payload: dict) -> ValuationInput:
         beta=metrics.beta,
         history=history,
         metrics=metrics,
+        avg_price_by_period=avg_price_by_period or None,
     )
 
 

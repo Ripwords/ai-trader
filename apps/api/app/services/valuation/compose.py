@@ -11,6 +11,7 @@ from app.services.valuation.engine import (
 from app.services.valuation.models import (
     Assumptions, Scenario, ValuationInput, ValuationResult, Veto,
 )
+from app.services.valuation.verify import verify_market_cap
 
 RATING_SEVERITY = {
     "sell": 0, "reduce": 1, "hold": 2, "buy": 3, "strong-buy": 4,
@@ -40,9 +41,10 @@ def value(
     warnings: list[str] = []
     cur_mult = current_multiples(vi.metrics, vi.current_price)
     hist_mult = None
-    if avg_price_by_period and vi.shares_outstanding:
+    eff_avg = avg_price_by_period or vi.avg_price_by_period
+    if eff_avg and vi.shares_outstanding:
         hist_mult = historical_self_multiples(
-            vi.history, vi.shares_outstanding, avg_price_by_period)
+            vi.history, vi.shares_outstanding, eff_avg)
 
     dcf_invalid = (
         vi.fcf_base is None or vi.fcf_base <= 0
@@ -101,6 +103,11 @@ def value(
         veto=Veto(triggered=False, reason=None, rating_cap=None), warnings=warnings,
     )
     result.veto = _compute_veto(vi, result)
+    # v1 single-source market-cap sanity check; full two-source cross_source_check deferred to v2
+    if vi.shares_outstanding is not None and vi.metrics.market_cap is not None:
+        ok, msg = verify_market_cap(vi.current_price, vi.shares_outstanding, vi.metrics.market_cap)
+        if not ok and msg:
+            result.warnings.append(msg)
     return result
 
 
@@ -108,7 +115,7 @@ def _compute_veto(vi: ValuationInput, result: ValuationResult) -> Veto:
     # (a) grossly overvalued by DCF
     if result.margin_of_safety_pct is not None and result.margin_of_safety_pct <= Decimal("-0.50"):
         return Veto(triggered=True, rating_cap="hold",
-                    reason=f"price >= 2x DCF fair value "
+                    reason=f"price >= 1.5x DCF fair value "
                            f"(margin of safety {result.margin_of_safety_pct:.2f})")
     # (b) reverse-DCF implies implausible growth
     base_g = derive_growth(vi.history)

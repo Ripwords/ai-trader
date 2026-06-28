@@ -45,6 +45,7 @@ class ValuationInput(_Model):
     beta: Decimal | None
     history: list[HistoryPeriod]
     metrics: Metrics
+    avg_price_by_period: dict[str, Decimal] | None = None
 
 
 class Scenario(_Model):

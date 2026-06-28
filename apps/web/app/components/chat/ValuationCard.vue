@@ -74,19 +74,24 @@ function mosClass(v: string | number | null | undefined): string {
 <template>
   <div class="surface-1 rounded-md overflow-hidden val-card">
     <!-- Veto Banner (prominent, shown when triggered) -->
-    <div v-if="result.veto.triggered" class="veto-banner" role="alert">
+    <div v-if="result?.veto?.triggered" class="veto-banner" role="alert">
       <span class="veto-label">veto</span>
       <span class="veto-reason">{{ result.veto.reason }}</span>
       <span v-if="result.veto.rating_cap" class="veto-cap">cap: {{ result.veto.rating_cap }}</span>
     </div>
 
+    <!-- Error / malformed shape fallback -->
+    <div v-if="!result?.veto" class="val-body">
+      <p class="val-empty-label">{{ (result as any)?.error ?? 'valuation unavailable' }}</p>
+    </div>
+
     <!-- Header -->
-    <header class="val-head">
+    <header v-if="result?.veto" class="val-head">
       <div class="val-symbol">{{ result.symbol }}</div>
       <span class="val-badge" :class="`badge-${result.data_quality}`">{{ result.data_quality }}</span>
     </header>
 
-    <div class="val-body">
+    <div v-if="result?.veto" class="val-body">
       <!-- Unavailable / partial state -->
       <div v-if="result.data_quality === 'unavailable'" class="val-empty">
         <p class="val-empty-label">data quality: unavailable</p>
