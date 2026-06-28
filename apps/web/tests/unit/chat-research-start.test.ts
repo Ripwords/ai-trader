@@ -48,6 +48,16 @@ describe('research_start tool', () => {
     const out = await tools.research_start.execute({ symbol: 'NVDA' }, {} as unknown) as Record<string, unknown>
     expect(out).toMatchObject({ status: 'already_running', runId: 'existing-1' })
   })
+
+  it('returns { status: "error" } when self-fetch returns a non-ok, non-409 status', async () => {
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
+      jsonResponse(500, {})) as unknown as typeof fetch
+    const tools = makeTools({} as unknown as ApiClient)
+    const out = await tools.research_start.execute({ symbol: 'NVDA' }, {} as unknown) as Record<string, unknown>
+    expect(out.status).toBe('error')
+    expect(typeof out.error).toBe('string')
+    expect(String(out.error)).toMatch(/500/)
+  })
 })
 
 describe('research_status tool', () => {
@@ -57,5 +67,14 @@ describe('research_status tool', () => {
     const tools = makeTools({} as unknown as ApiClient)
     const out = await tools.research_status.execute({ runId: 'run-9' }, {} as unknown) as Record<string, unknown>
     expect(out).toMatchObject({ runId: 'run-9', status: 'complete' })
+  })
+
+  it('forwards the session cookie when fetching run status', async () => {
+    const fetchSpy = vi.fn(async () => jsonResponse(200, { runId: 'run-9', status: 'complete', lastSeq: 12 }))
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = fetchSpy as unknown as typeof fetch
+    const tools = makeTools({} as unknown as ApiClient, fakeEventWithCookie('session=xyz'))
+    await tools.research_status.execute({ runId: 'run-9' }, {} as unknown)
+    const init = (fetchSpy.mock.calls[0]?.[1] ?? {}) as RequestInit
+    expect((init.headers as Record<string, string>).cookie).toBe('session=xyz')
   })
 })

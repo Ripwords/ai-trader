@@ -4,6 +4,8 @@ import { getDb } from '../../../db/client'
 import { agentRuns } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
 import { resolveSymbol } from '../../lib/yahoo'
+import { AgentRunTee } from '../../utils/agents-tee'
+import { splitNdjson } from '../../utils/ndjson'
 
 export interface AgentsRunBody {
   symbol: string
@@ -126,9 +128,6 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
 
   return { run, userId, upstream }
 }
-
-import { AgentRunTee } from '../../utils/agents-tee'
-import { splitNdjson } from '../../utils/ndjson'
 
 /**
  * Consume the upstream NDJSON stream entirely into a fresh AgentRunTee. Used by
