@@ -83,6 +83,9 @@ importers:
       vue:
         specifier: ^3.5.33
         version: 3.5.34(typescript@6.0.3)
+      vue-border-beam:
+        specifier: ^0.1.1
+        version: 0.1.1(vue@3.5.34(typescript@6.0.3))
       vue-router:
         specifier: ^5.0.6
         version: 5.0.6(@vue/compiler-sfc@3.5.34)(vue@3.5.34(typescript@6.0.3))
@@ -5678,6 +5681,11 @@ packages:
 
   vscode-uri@3.1.0:
     resolution: {integrity: sha512-/BpdSx+yCQGnCvecbyXdxHDkuk55/G3xwnC0GqY4gmQ3j+A+g8kzzgB4Nk/SINjqn6+waqw3EgbVF2QKExkRxQ==}
+
+  vue-border-beam@0.1.1:
+    resolution: {integrity: sha512-6tv/qNnzW2hBDm7uCS2yjzERtJuS3MC39iSP/xNwUY+Ic941eBv7ZMB0GzmYpvQhV++c+aLzBj3FRFRNARpVxw==}
+    peerDependencies:
+      vue: '>=3.3.0'
 
   vue-bundle-renderer@2.2.0:
     resolution: {integrity: sha512-sz/0WEdYH1KfaOm0XaBmRZOWgYTEvUDt6yPYaUzl4E52qzgWLlknaPPTTZmp6benaPTlQAI/hN1x3tAzZygycg==}
@@ -11669,6 +11677,10 @@ snapshots:
       - msw
 
   vscode-uri@3.1.0: {}
+
+  vue-border-beam@0.1.1(vue@3.5.34(typescript@6.0.3)):
+    dependencies:
+      vue: 3.5.34(typescript@6.0.3)
 
   vue-bundle-renderer@2.2.0:
     dependencies:

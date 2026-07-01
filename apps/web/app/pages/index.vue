@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { DefaultChatTransport, type UIMessage } from 'ai'
 import { Chat } from '@ai-sdk/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   getToolName,
   isReasoningUIPart,
@@ -9,8 +9,9 @@ import {
   isToolUIPart,
 } from 'ai'
 import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
+import { BorderBeam } from 'vue-border-beam'
 import { requestRunNotificationPermission } from '../lib/notify'
-import { filterCommandPalette, type PaletteItem } from '../lib/slash'
+import { cycleIndex, filterCommandPalette, splitSlashHighlight, type PaletteItem } from '../lib/slash'
 
 definePageMeta({ title: 'chat' })
 
@@ -20,15 +21,128 @@ const router = useRouter()
 
 const slashCommands = ref<PaletteItem[]>([])
 const slashSuggestions = computed(() => filterCommandPalette(input.value, slashCommands.value))
+const slashCommandNames = computed(() => slashCommands.value.map(c => c.name))
+const slashActiveIndex = ref(0)
+const slashDismissed = ref(false)
+const slashOpen = computed(() => slashSuggestions.value.length > 0 && !slashDismissed.value)
 async function ensureCommands() {
   if (slashCommands.value.length) return
   try {
     const r = await $fetch<{ commands: PaletteItem[] }>('/api/chat/commands')
     slashCommands.value = r.commands ?? []
   } catch { /* palette is optional */ }
+  void nextTick(syncSlashMirror)
 }
-function applySlash(name: string) { input.value = `/${name} ` }
-watch(input, (v) => { if (v.startsWith('/')) void ensureCommands() })
+function applySlash(name: string) {
+  input.value = `/${name} `
+  slashDismissed.value = true
+}
+watch(input, (v) => {
+  if (v.startsWith('/')) void ensureCommands()
+  slashDismissed.value = false
+  void nextTick(syncSlashMirror)
+})
+watch(slashSuggestions, (list) => {
+  if (slashActiveIndex.value > list.length - 1) slashActiveIndex.value = 0
+})
+
+// Keyboard-driven palette: intercepted in the CAPTURE phase on the prompt
+// wrapper so it fires before UChatPrompt's own textarea Enter handler (which
+// would otherwise submit the message). stopPropagation prevents that submit.
+function onPromptKeydown(e: KeyboardEvent) {
+  if (!slashOpen.value) return
+  const list = slashSuggestions.value
+  switch (e.key) {
+    case 'ArrowDown':
+      slashActiveIndex.value = cycleIndex(slashActiveIndex.value, list.length, 1)
+      e.preventDefault(); e.stopPropagation(); break
+    case 'ArrowUp':
+      slashActiveIndex.value = cycleIndex(slashActiveIndex.value, list.length, -1)
+      e.preventDefault(); e.stopPropagation(); break
+    case 'Tab':
+    case 'Enter': {
+      const pick = list[slashActiveIndex.value]
+      if (pick) applySlash(pick.name)
+      e.preventDefault(); e.stopPropagation(); break
+    }
+    case 'Escape':
+      slashDismissed.value = true
+      e.preventDefault(); e.stopPropagation(); break
+  }
+}
+
+// --- Slash-command text highlighting --------------------------------------
+// A <textarea> cannot colour a substring, so when the input starts with a
+// recognised /command we hide the textarea's own glyphs (color: transparent,
+// caret kept) and render a pixel-aligned mirror on top that paints the command
+// token in the accent colour and the rest in the textarea's normal colour.
+const promptWrap = ref<HTMLElement | null>(null)
+const slashMirror = ref<HTMLElement | null>(null)
+const slashHighlight = computed(() => splitSlashHighlight(input.value, slashCommandNames.value))
+const mirrorStyle = ref<Record<string, string>>({ display: 'none' })
+const inputFocused = ref(false)
+let mirrorObserver: ResizeObserver | null = null
+
+// The border beam is an idle-only cue: it plays only when the input is neither
+// focused nor showing a command highlight, so it never competes with the focus
+// ring or the highlighted command.
+const beamActive = computed(() => !slashHighlight.value.cmd && !inputFocused.value)
+
+function findTextarea(): HTMLTextAreaElement | null {
+  return promptWrap.value?.querySelector('textarea') ?? null
+}
+function onInputFocus() { inputFocused.value = true }
+function onInputBlur() { inputFocused.value = false }
+
+function syncSlashMirror() {
+  const mirror = slashMirror.value
+  const ta = findTextarea()
+  if (!mirror || !ta || !slashHighlight.value.cmd) {
+    mirrorStyle.value = { display: 'none' }
+    return
+  }
+  const host = (mirror.offsetParent as HTMLElement | null) ?? ta.parentElement!
+  const tr = ta.getBoundingClientRect()
+  const hr = host.getBoundingClientRect()
+  const cs = getComputedStyle(ta)
+  mirrorStyle.value = {
+    position: 'absolute',
+    left: `${tr.left - hr.left}px`,
+    top: `${tr.top - hr.top}px`,
+    width: `${tr.width}px`,
+    height: `${tr.height}px`,
+    boxSizing: 'border-box',
+    paddingTop: cs.paddingTop,
+    paddingRight: cs.paddingRight,
+    paddingBottom: cs.paddingBottom,
+    paddingLeft: cs.paddingLeft,
+    fontFamily: cs.fontFamily,
+    fontSize: cs.fontSize,
+    fontWeight: cs.fontWeight,
+    fontStyle: cs.fontStyle,
+    lineHeight: cs.lineHeight,
+    letterSpacing: cs.letterSpacing,
+    tabSize: cs.tabSize,
+    textAlign: cs.textAlign,
+    color: cs.color,
+  }
+  mirror.scrollTop = ta.scrollTop
+}
+
+onMounted(() => {
+  const ta = findTextarea()
+  if (ta && 'ResizeObserver' in window) {
+    mirrorObserver = new ResizeObserver(() => syncSlashMirror())
+    mirrorObserver.observe(ta)
+    ta.addEventListener('scroll', syncSlashMirror, { passive: true })
+  }
+  if (ta) {
+    inputFocused.value = document.activeElement === ta
+    ta.addEventListener('focus', onInputFocus)
+    ta.addEventListener('blur', onInputBlur)
+  }
+  window.addEventListener('resize', syncSlashMirror, { passive: true })
+})
 
 const chatId = ref<string | null>(typeof route.query.c === 'string' ? route.query.c : null)
 const conversationsList = ref<{ refresh: () => Promise<void> } | null>(null)
@@ -116,6 +230,12 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (contextTimer) clearTimeout(contextTimer)
+  mirrorObserver?.disconnect()
+  const ta = findTextarea()
+  ta?.removeEventListener('scroll', syncSlashMirror)
+  ta?.removeEventListener('focus', onInputFocus)
+  ta?.removeEventListener('blur', onInputBlur)
+  window.removeEventListener('resize', syncSlashMirror)
 })
 
 watch(() => route.query.c, async (next) => {
@@ -486,38 +606,94 @@ function agentsVerdict(output: unknown) {
             </div>
           </div>
         </div>
-        <div v-if="slashSuggestions.length" class="slash-palette">
-          <button
-            v-for="s in slashSuggestions"
-            :key="s.name"
-            type="button"
-            class="slash-item"
-            @click="applySlash(s.name)"
-          >
-            <span class="slash-name">/{{ s.name }}</span>
-            <span class="slash-desc">{{ s.description }}</span>
-          </button>
-        </div>
-        <UChatPrompt
-          v-model="input"
-          :error="chat.error"
-          placeholder="Show me NVDA daily, what's on my watchlist, any news on…"
-          :ui="{ body: '!pe-11' }"
-          @submit="onSubmit"
+        <div
+          ref="promptWrap"
+          class="prompt-wrap"
+          :class="{ 'slash-hl': slashHighlight.cmd }"
+          @keydown.capture="onPromptKeydown"
         >
-          <UChatPromptSubmit
-            :status="chat.status"
-            color="neutral"
-            variant="solid"
-            :ui="{
-              base: '!absolute !bottom-0 !end-0 !size-8 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
-              leadingIcon: '!size-4',
-              trailingIcon: '!size-4',
-            }"
-            @stop="chat.stop()"
-            @reload="chat.regenerate()"
-          />
-        </UChatPrompt>
+          <div v-if="slashOpen" class="slash-palette">
+            <button
+              v-for="(s, i) in slashSuggestions"
+              :key="s.name"
+              type="button"
+              class="slash-item"
+              :class="{ 'slash-item--active': i === slashActiveIndex }"
+              @click="applySlash(s.name)"
+              @mousemove="slashActiveIndex = i"
+            >
+              <span class="slash-name">/{{ s.name }}</span>
+              <span class="slash-desc">{{ s.description }}</span>
+            </button>
+          </div>
+          <!-- BorderBeam gates its render on onMounted, so it must be
+               client-only to avoid a hydration mismatch. It wraps the input
+               and traces an animated beam around its border. -->
+          <ClientOnly>
+            <BorderBeam
+              size="md"
+              color-variant="sunset"
+              theme="dark"
+              :duration="7"
+              :border-radius="8"
+              :active="beamActive"
+              :strength="0.25"
+              :brightness="0.7"
+              :saturation="0.9"
+              class="beam-frame"
+            >
+              <UChatPrompt
+                v-model="input"
+                :error="chat.error"
+                placeholder="Show me NVDA daily, what's on my watchlist, any news on…"
+                :ui="{ body: '!pe-11' }"
+                @submit="onSubmit"
+              >
+                <UChatPromptSubmit
+                  :status="chat.status"
+                  color="neutral"
+                  variant="solid"
+                  :ui="{
+                    base: '!absolute !bottom-0 !end-0 !size-8 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
+                    leadingIcon: '!size-4',
+                    trailingIcon: '!size-4',
+                  }"
+                  @stop="chat.stop()"
+                  @reload="chat.regenerate()"
+                />
+              </UChatPrompt>
+            </BorderBeam>
+            <template #fallback>
+              <UChatPrompt
+                v-model="input"
+                :error="chat.error"
+                placeholder="Show me NVDA daily, what's on my watchlist, any news on…"
+                :ui="{ body: '!pe-11' }"
+                @submit="onSubmit"
+              >
+                <UChatPromptSubmit
+                  :status="chat.status"
+                  color="neutral"
+                  variant="solid"
+                  :ui="{
+                    base: '!absolute !bottom-0 !end-0 !size-8 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
+                    leadingIcon: '!size-4',
+                    trailingIcon: '!size-4',
+                  }"
+                  @stop="chat.stop()"
+                  @reload="chat.regenerate()"
+                />
+              </UChatPrompt>
+            </template>
+          </ClientOnly>
+          <div
+            v-show="slashHighlight.cmd"
+            ref="slashMirror"
+            class="slash-mirror"
+            :style="mirrorStyle"
+            aria-hidden="true"
+          ><span class="mirror-cmd">{{ slashHighlight.cmd }}</span><span class="mirror-rest">{{ slashHighlight.rest }}</span></div>
+        </div>
       </div>
     </footer>
   </div>
@@ -551,12 +727,56 @@ function agentsVerdict(output: unknown) {
   z-index: 10;
 }
 
+.prompt-wrap {
+  position: relative;
+}
+
 .slash-palette {
   border: 1px solid var(--hairline, rgba(255,255,255,0.06));
   border-radius: 6px;
   background: var(--ink-1, #111);
   margin-bottom: 4px;
   overflow: hidden;
+}
+
+.slash-item--active {
+  background: var(--ink-2, #1a1a1a);
+}
+
+.slash-item--active .slash-desc {
+  color: var(--paper-2, rgba(255,255,255,0.7));
+}
+
+.beam-frame {
+  position: relative;
+}
+
+/* When a recognised command is present, hide the textarea's own glyphs (keep
+   the caret) so the mirror on top is the only visible text. Background is left
+   untouched so the dark theme is preserved. */
+.slash-hl :deep(textarea) {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--paper-0, #fff);
+}
+
+/* Text-highlight overlay: pixel-aligned with the textarea, painting the
+   command token in the accent colour and the rest in the normal text colour
+   (inherited from the inline `color` copied off the textarea). */
+.slash-mirror {
+  z-index: 5;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  pointer-events: none;
+  overflow: hidden;
+  user-select: none;
+}
+
+.mirror-cmd {
+  color: var(--accent, #d4a96a);
+  font-weight: 500;
 }
 
 .slash-item {
