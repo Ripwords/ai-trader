@@ -8,9 +8,15 @@ vi.mock('../../server/lib/yahoo', () => ({
   getQuarterlyHistory: vi.fn(async () => [{ q: '2025Q4', eps: 1 }]),
   getEarningsInfo: vi.fn(async () => ({ nextEarningsDate: '2026-08-01' })),
   getInsiderTrades: vi.fn(async () => [{ name: 'CEO', shares: 100 }]),
+  getDailyBars: vi.fn(async () => Array.from({ length: 260 }, (_, i) => ({
+    time: '2025-01-01', open: 100 + i, high: 100 + i, low: 100 + i, close: 100 + i, volume: 1000,
+  }))),
 }))
 vi.mock('../../server/lib/contextual-news', () => ({
   getContextualNews: vi.fn(async () => ({ ticker: [], macro: [], contextual: [] })),
+}))
+vi.mock('../../server/lib/holdings', () => ({
+  getHoldingForSymbol: vi.fn(async () => ({ owned_quantity: 12, allocation_pct: 3.4 })),
 }))
 vi.mock('../../server/lib/agents/runs-query', () => ({
   getLatestRunForSymbol: vi.fn(async () => ({ runId: 'r1', rating: 'BUY', confidence: 72, finishedAt: '2026-06-27T00:00:00Z' })),
@@ -43,6 +49,13 @@ describe('buildResearchDossier', () => {
     expect(dossier.agentsVerdict.ok).toBe(true)
     expect(dossier.agentsVerdict.data?.rating).toBe('BUY')
     expect(dossier.dataQuality.missing).toEqual([])
+  })
+  it('includes a technicals snapshot and holdings context', async () => {
+    const d = await buildResearchDossier('NVDA', baseOpts) as Extract<Awaited<ReturnType<typeof buildResearchDossier>>, { technicals: unknown }>
+    expect(d.technicals.ok).toBe(true)
+    expect((d.technicals.data as { trend?: string })?.trend).toBe('up')
+    expect(d.holdings.ok).toBe(true)
+    expect((d.holdings.data as { owned_quantity?: number })?.owned_quantity).toBe(12)
   })
   it('degrades a failing source to ok:false with a note instead of throwing', async () => {
     const yahoo = await import('../../server/lib/yahoo')

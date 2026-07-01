@@ -1,10 +1,12 @@
 import {
   resolveSymbol, getFinancialMetrics, getHistorical, getQuarterlyHistory,
-  getEarningsInfo, getInsiderTrades,
+  getEarningsInfo, getInsiderTrades, getDailyBars,
 } from '../../lib/yahoo'
 import { getContextualNews } from '../../lib/contextual-news'
 import { getLatestRunForSymbol, getRunAssessment } from '../../lib/agents/runs-query'
 import { searchWithFallback } from '../../lib/search'
+import { getHoldingForSymbol } from '../../lib/holdings'
+import { computeTechnicals, type TechnicalsSnapshot } from './technicals'
 
 export type ResearchPreset = 'research' | 'team' | 'series' | 'management'
 export interface DossierSection<T> { ok: boolean; note?: string; data: T | null }
@@ -13,8 +15,10 @@ export interface ResearchDossier {
   symbol: string; companyName: string; preset: ResearchPreset; part?: number
   valuation: DossierSection<unknown>
   fundamentals: DossierSection<{ metrics: unknown; annual: unknown; quarterly: unknown; earnings: unknown }>
+  technicals: DossierSection<TechnicalsSnapshot>
   insider: DossierSection<unknown>
   news: DossierSection<unknown>
+  holdings: DossierSection<unknown>
   agentsVerdict: DossierSection<AgentsVerdictData>
   managementWeb?: DossierSection<unknown>
   dataQuality: { full: boolean; missing: string[] }
@@ -40,7 +44,7 @@ export async function buildResearchDossier(
   const symbol = resolution.symbol
   const companyName = resolution.name
 
-  const [valuation, fundamentals, insider, news, agentsVerdict, managementWeb] = await Promise.all([
+  const [valuation, fundamentals, technicals, insider, news, holdings, agentsVerdict, managementWeb] = await Promise.all([
     section('valuation', async () => {
       const res = await fetch(`${opts.baseUrl}/api/research/valuation?symbol=${encodeURIComponent(symbol)}`, {
         headers: { ...(opts.sessionCookie ? { cookie: opts.sessionCookie } : {}) },
@@ -54,8 +58,10 @@ export async function buildResearchDossier(
       quarterly: await getQuarterlyHistory(symbol),
       earnings: await getEarningsInfo(symbol),
     })),
+    section('technicals', async () => computeTechnicals(await getDailyBars(symbol))),
     section('insider', () => getInsiderTrades(symbol)),
     section('news', () => getContextualNews({ symbol, companyName, maxResults: 10 })),
+    section('holdings', () => getHoldingForSymbol(symbol)),
     (async (): Promise<DossierSection<AgentsVerdictData>> => {
       try {
         const latest = await getLatestRunForSymbol(opts.userId, symbol)
@@ -79,7 +85,7 @@ export async function buildResearchDossier(
 
   const dossier: ResearchDossier = {
     symbol, companyName, preset: opts.preset, part: opts.part,
-    valuation, fundamentals, insider, news, agentsVerdict,
+    valuation, fundamentals, technicals, insider, news, holdings, agentsVerdict,
     dataQuality: { full: missing.length === 0, missing },
   }
   if (managementWeb) dossier.managementWeb = managementWeb

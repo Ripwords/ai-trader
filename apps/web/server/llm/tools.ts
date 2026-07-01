@@ -504,7 +504,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'investment_research': tool({
       description:
-        'Produce a deep-research MEMO on a company by aggregating valuation, fundamentals, contextual news, insider activity, and the latest agents verdict. preset controls emphasis: research=standard 7-section memo; team=bull/bear/quant/macro lenses; series=long-form (optional part); management=founder/capital-allocation focus + web bio (pass person). Fast — reuses existing data, does NOT start a fresh agents run. Use for "deep dive / research report / full analysis on X".',
+        'Produce a deep-research MEMO on a company by aggregating valuation, fundamentals, a price/technicals snapshot (SMAs, RSI, 52w range, trailing returns, trend), contextual news, insider activity, the user\'s current holdings/exposure, and the latest agents verdict. preset controls emphasis: research=standard 7-section memo; team=bull/bear/quant/macro lenses; series=long-form (optional part); management=founder/capital-allocation focus + web bio (pass person). Fast — reuses existing data, does NOT start a fresh agents run. Use for "deep dive / research report / full analysis on X".',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker or company name, e.g. NVDA, US.NVDA, 腾讯'),
         preset: z.enum(['research', 'team', 'series', 'management']).default('research'),
