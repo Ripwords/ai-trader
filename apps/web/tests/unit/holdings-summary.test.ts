@@ -112,10 +112,13 @@ describe('holdings summary', () => {
           { acc_id: 'paper', trd_env: 'SIMULATE', acc_role: 'OWNER' },
         ]),
         getPortfolio: vi.fn(async ({ trd_env }: { trd_env: 'REAL' | 'SIMULATE' }) => ({
-          cash: trd_env === 'REAL' ? 8_000 : 2_000,
+          // Scalar cash/currency is the HKD base-currency aggregate; the
+          // native holdings are USD-only (matching the real account shape).
+          cash: trd_env === 'REAL' ? 12_806 : 2_000,
           market_val: 32_000,
           total_assets: trd_env === 'REAL' ? 40_000 : 34_000,
           currency: 'HKD',
+          cash_by_currency: { USD: trd_env === 'REAL' ? 1_634 : 256 },
           positions: [{
             code: 'HK.00700',
             qty: 100,
@@ -142,9 +145,11 @@ describe('holdings summary', () => {
       expect(p.currency).toBeTruthy()
     }
     expect(out.positions.some(p => p.currency === 'HKD')).toBe(true)
-    // Moomoo cash is grouped by its real currency.
-    expect(out.cash_live_by_currency.HKD).toBe(8_000)
-    expect(out.cash_paper_by_currency.HKD).toBe(2_000)
+    // Cash is reported in the currency actually held (USD), NOT the HKD
+    // base/reporting currency — no phantom HKD balance.
+    expect(out.cash_live_by_currency).toEqual({ USD: 1_634 })
+    expect(out.cash_paper_by_currency).toEqual({ USD: 256 })
+    expect(out.cash_live_by_currency.HKD).toBeUndefined()
     // Ghostfolio net worth currency is surfaced.
     expect(out.net_worth_currency).toBe('MYR')
   })

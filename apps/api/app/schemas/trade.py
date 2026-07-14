@@ -40,8 +40,16 @@ class Portfolio(BaseModel):
     market_val: float
     total_assets: float
     positions: list[Position]
-    # Account settlement currency for the cash/market_val/total_assets figures.
+    # Account BASE/reporting currency for the scalar cash/market_val/total_assets
+    # figures. For moomoo margin accounts this is the account's home currency
+    # (often HKD) and the scalar `cash` is every currency's cash CONVERTED into
+    # it — NOT a native balance. Do not present it as money the user holds.
     currency: str | None = None
+    # Native cash the user actually holds, keyed by real currency
+    # (e.g. {"USD": 1634.12}). Built from moomoo's per-currency *_cash columns.
+    # This is the truth about what currencies are held; prefer it over the
+    # base-currency `cash`/`currency` when telling the user what they own.
+    cash_by_currency: dict[str, float] = {}
 
 
 class Order(BaseModel):

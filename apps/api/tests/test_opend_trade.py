@@ -155,6 +155,37 @@ def test_get_portfolio_preserves_currency():
     assert portfolio.positions[0].currency == "HKD"
 
 
+def test_get_portfolio_reports_native_cash_not_base_currency():
+    """The scalar `cash`/`currency` from accinfo is the BASE-currency (HKD)
+    aggregate — every currency's cash converted into the account's home
+    currency. The native holdings live in the per-currency *_cash columns.
+    A USD-only margin account must report USD cash, never a phantom HKD balance.
+    Mirrors the real moomoo accinfo shape (base HKD, native us_cash)."""
+    _set_ctx(FakeTradeCtx(
+        positions_payload=[],
+        accinfo_payload=[
+            {
+                "cash": 12806.63,        # HKD base-currency equivalent
+                "market_val": 116228.86,
+                "total_assets": 129035.49,
+                "currency": "HKD",       # account home/reporting currency
+                "us_cash": 1634.12,      # native USD cash (the truth)
+                "hk_cash": 0.0,
+                "my_cash": 0.0,
+                "jp_cash": "N/A",        # unset markets come back as 'N/A'
+                "au_cash": "N/A",
+            }
+        ],
+    ))
+    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    portfolio = adapter.get_portfolio(acc_id=12345, trd_env="REAL")
+    # Native holdings: only USD, no phantom HKD/MYR.
+    assert portfolio.cash_by_currency == {"USD": 1634.12}
+    # Base-currency scalar is preserved but clearly labelled as HKD (home ccy).
+    assert portfolio.currency == "HKD"
+    assert portfolio.cash == 12806.63
+
+
 def test_get_portfolio_currency_absent_is_none():
     """Paper accounts / older SDKs may omit the currency column; coerce to None
     rather than the string 'N/A' or a hardcoded default."""

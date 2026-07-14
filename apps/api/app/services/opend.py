@@ -419,12 +419,33 @@ class OpendAdapter:
             for _, r in positions_df.iterrows()
         ]
         a = accinfo_df.iloc[0].to_dict() if not accinfo_df.empty else {}
+        # moomoo exposes native per-currency cash alongside the base-currency
+        # aggregate. The base `cash` field is every currency converted into the
+        # account's home currency (accinfo `currency`, often HKD), so it must
+        # NOT be read as a native balance. These *_cash columns are the real
+        # per-currency holdings. Only non-zero balances are surfaced.
+        cash_col_to_ccy = {
+            "us_cash": "USD",
+            "hk_cash": "HKD",
+            "cn_cash": "CNH",
+            "jp_cash": "JPY",
+            "sg_cash": "SGD",
+            "au_cash": "AUD",
+            "ca_cash": "CAD",
+            "my_cash": "MYR",
+        }
+        cash_by_currency: dict[str, float] = {}
+        for col, ccy in cash_col_to_ccy.items():
+            amount = _to_float(a.get(col))  # 'N/A'/None/'' -> 0.0
+            if amount:
+                cash_by_currency[ccy] = cash_by_currency.get(ccy, 0.0) + amount
         return Portfolio(
             cash=_to_float(a.get("cash", 0)),
             market_val=_to_float(a.get("market_val", 0)),
             total_assets=_to_float(a.get("total_assets", 0)),
             positions=positions,
             currency=_currency(a.get("currency")),
+            cash_by_currency=cash_by_currency,
         )
 
     def list_orders(self, *, acc_id: str, trd_env: str = "SIMULATE") -> list[Order]:

@@ -513,6 +513,7 @@ function agentsVerdict(output: unknown) {
                 :total_assets="(getToolOutput(part) as any).total_assets"
                 :positions="(getToolOutput(part) as any).positions"
                 :currency="(getToolOutput(part) as any).currency"
+                :cash_by_currency="(getToolOutput(part) as any).cash_by_currency"
               />
               <PortfolioMptCard
                 v-else-if="hasOutput(part) && getToolName(part) === 'portfolio_mpt_analysis'"

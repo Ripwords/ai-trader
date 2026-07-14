@@ -134,11 +134,19 @@ async function fetchMoomooSlice(symbol: string): Promise<MoomooSlice> {
       try {
         const portfolio: Portfolio = await client.getPortfolio({ acc_id: acc.acc_id, trd_env: acc.trd_env })
         const isPaper = acc.trd_env === 'SIMULATE'
-        // Group cash by the account's real settlement currency. 'UNKNOWN'
-        // when the broker didn't report one — never silently fold it into USD.
-        const cashCurrency = portfolio.currency ?? 'UNKNOWN'
+        // Group cash by the currencies the user ACTUALLY holds (moomoo's native
+        // per-currency cash), not the base/reporting currency. moomoo's scalar
+        // `cash` + `currency` is the home-currency (e.g. HKD) conversion of all
+        // cash, so using it here would invent a phantom HKD balance for a
+        // USD-only account. Fall back to the base scalar only if the native
+        // breakdown is missing.
+        const nativeCash = portfolio.cash_by_currency && Object.keys(portfolio.cash_by_currency).length > 0
+          ? portfolio.cash_by_currency
+          : { [portfolio.currency ?? 'UNKNOWN']: portfolio.cash || 0 }
         const cashBucket = isPaper ? out.cash_paper_by_currency : out.cash_live_by_currency
-        cashBucket[cashCurrency] = (cashBucket[cashCurrency] ?? 0) + (portfolio.cash || 0)
+        for (const [ccy, amt] of Object.entries(nativeCash)) {
+          cashBucket[ccy] = (cashBucket[ccy] ?? 0) + (amt || 0)
+        }
         if (isPaper) {
           out.cash_paper_usd += portfolio.cash || 0
           out.paper_total_value += portfolio.total_assets || 0

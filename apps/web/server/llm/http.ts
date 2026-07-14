@@ -85,8 +85,13 @@ export interface Portfolio {
   market_val: number
   total_assets: number
   positions: Position[]
-  // Account settlement currency for cash/market_val/total_assets.
+  // Account BASE/reporting currency (often HKD). The scalar `cash` is every
+  // currency's cash converted into it — NOT a native balance. Don't present it
+  // as money the user holds.
   currency: string | null
+  // Native cash actually held, keyed by real currency (e.g. { USD: 1634.12 }).
+  // Prefer this over cash/currency when reporting what the user owns.
+  cash_by_currency: Record<string, number>
 }
 
 export interface Order {

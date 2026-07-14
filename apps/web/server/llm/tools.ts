@@ -221,16 +221,27 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         }
         const currencies = Object.keys(totals_by_currency)
         const mixed_currency = currencies.filter(c => c !== 'UNKNOWN').length > 1
+        // Native cash the user actually holds, aggregated across accounts. The
+        // per-currency totals above are in each account's BASE currency (moomoo
+        // reports HKD-converted scalars); this map is the real per-currency
+        // cash. Report cash from here, not from the base-currency totals.
+        const native_cash_by_currency: Record<string, number> = {}
+        for (const row of rows) {
+          for (const [ccy, amt] of Object.entries(row.portfolio.cash_by_currency ?? {})) {
+            native_cash_by_currency[ccy] = (native_cash_by_currency[ccy] ?? 0) + (amt || 0)
+          }
+        }
         return {
           trd_env,
           totals,
           totals_by_currency,
+          native_cash_by_currency,
           currencies,
           mixed_currency,
-          // Explicit guardrail for the model: don't add across currencies.
-          currency_note: mixed_currency
-            ? 'Accounts span multiple currencies. Report each currency separately or call convert_fx before combining; do NOT add the totals field across currencies.'
-            : undefined,
+          // Explicit guardrail for the model: don't add across currencies, and
+          // don't present base-currency figures as native holdings.
+          currency_note:
+            'The totals fields are in each account\'s BASE/reporting currency (moomoo margin accounts report in HKD). native_cash_by_currency is the actual cash the user holds — report cash from it. Do not add amounts across currencies without convert_fx.',
           accounts: rows,
           skipped,
         }

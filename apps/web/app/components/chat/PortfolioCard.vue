@@ -9,11 +9,23 @@ interface Position {
   pl_ratio: number
   currency?: string | null
 }
-const props = defineProps<{ cash: number; market_val: number; total_assets: number; positions: Position[]; currency?: string | null }>()
+const props = defineProps<{
+  cash: number
+  market_val: number
+  total_assets: number
+  positions: Position[]
+  currency?: string | null
+  cash_by_currency?: Record<string, number> | null
+}>()
 
-// Account settlement currency for the cash / market value / total assets
-// figures. Shown so the numbers are never read as an implicit USD.
+// Base/reporting currency for the scalar cash / market value / total assets.
+// For moomoo margin accounts this is the home currency (e.g. HKD) that all
+// figures are converted into — NOT necessarily a currency the user holds.
 const currencyLabel = computed(() => props.currency || '')
+
+// Native cash the user actually holds, per real currency. Preferred over the
+// base-currency `cash` scalar so we never imply a phantom HKD balance.
+const nativeCash = computed(() => Object.entries(props.cash_by_currency ?? {}).filter(([, v]) => v))
 
 function fmt(n: number, opts: Intl.NumberFormatOptions = {}): string {
   return n.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2, ...opts })
@@ -28,7 +40,7 @@ function fmtSigned(n: number): string {
     <header class="px-5 py-4 border-b hairline flex items-baseline justify-between">
       <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">
         Portfolio · paper
-        <span v-if="currencyLabel" class="ml-1 text-[var(--accent)]">· {{ currencyLabel }}</span>
+        <span v-if="currencyLabel" class="ml-1 text-[var(--accent)]">· base {{ currencyLabel }}</span>
       </div>
       <div class="font-mono text-sm text-[var(--paper-2)]" data-mono>{{ props.positions.length }} positions</div>
     </header>
@@ -36,10 +48,22 @@ function fmtSigned(n: number): string {
     <div class="grid grid-cols-3 divide-x hairline">
       <div class="px-5 py-4">
         <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">cash</div>
-        <div class="font-mono text-2xl text-[var(--paper-0)] mt-2" data-mono>{{ fmt(props.cash) }}</div>
+        <template v-if="nativeCash.length">
+          <div
+            v-for="[ccy, amt] in nativeCash"
+            :key="ccy"
+            class="font-mono text-2xl text-[var(--paper-0)] mt-2" data-mono
+          >{{ fmt(amt) }} <span class="text-sm text-[var(--paper-3)]">{{ ccy }}</span></div>
+          <div v-if="currencyLabel" class="font-mono text-[10px] text-[var(--paper-3)] mt-1" data-mono>
+            ≈ {{ fmt(props.cash) }} {{ currencyLabel }} base
+          </div>
+        </template>
+        <div v-else class="font-mono text-2xl text-[var(--paper-0)] mt-2" data-mono>
+          {{ fmt(props.cash) }}<span v-if="currencyLabel" class="text-sm text-[var(--paper-3)]"> {{ currencyLabel }}</span>
+        </div>
       </div>
       <div class="px-5 py-4">
-        <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">market value</div>
+        <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">market value<span v-if="currencyLabel"> · {{ currencyLabel }}</span></div>
         <div class="font-mono text-2xl text-[var(--paper-0)] mt-2" data-mono>{{ fmt(props.market_val) }}</div>
       </div>
       <div class="px-5 py-4 bg-[var(--ink-2)]">
