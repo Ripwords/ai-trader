@@ -11,6 +11,7 @@ import { getGhostfolioStatus, getGhostfolioTools } from '../llm/mcp'
 import { buildSystemPrompt } from '../llm/chat-context'
 import { buildModel, DEFAULT_MODEL_SPEC } from '../llm/model'
 import { makeTools } from '../llm/tools'
+import { resolveMaxSteps } from '../llm/chat-steps'
 
 interface ChatBody {
   messages?: Array<{ id?: string; role: string; parts?: unknown[]; [k: string]: unknown }>
@@ -18,6 +19,9 @@ interface ChatBody {
   // Omitted on the first message of a new chat — server creates a thread
   // and returns the id in the X-Chat-Id response header so the UI can route to it.
   chatId?: string
+  // Max agentic steps (model generations) for this turn. Client-controlled so
+  // the user can raise it for deep multi-tool work; defaults to 30 server-side.
+  maxSteps?: number
 }
 
 export default defineEventHandler(async (event) => {
@@ -78,12 +82,13 @@ export default defineEventHandler(async (event) => {
     ? `${buildSystemPrompt(ghostfolioStatus, recallContext)}\n\n${dispatch.directive}`
     : buildSystemPrompt(ghostfolioStatus, recallContext)
 
+  const maxSteps = resolveMaxSteps(body.maxSteps)
   const result = streamText({
     model: buildModel(),
     system: systemPrompt,
     messages: modelMessages,
     tools,
-    stopWhen: stepCountIs(8),
+    stopWhen: stepCountIs(maxSteps),
     ...(dispatch
       ? {
           prepareStep: ({ stepNumber }: { stepNumber: number }) => {
@@ -104,6 +109,14 @@ export default defineEventHandler(async (event) => {
   // Persist the full assistant response when streaming completes.
   const modelSpec = process.env.LLM_MODEL || DEFAULT_MODEL_SPEC
   return result.toUIMessageStreamResponse({
+    // Forward the failure into the stream as a visible message. Without this,
+    // an error mid-stream (e.g. context-window overflow on a long conversation)
+    // ends the stream silently and the chat just "stops". Surface it instead.
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[chat] stream error', message)
+      return `The assistant stopped early: ${message}`
+    },
     onFinish: async ({ messages: finalMessages }) => {
       try {
         const totalUsage = await result.totalUsage

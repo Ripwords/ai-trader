@@ -10,6 +10,7 @@
 import { convertToModelMessages, stepCountIs, streamText, tool, type UIMessage } from 'ai'
 import { z } from 'zod'
 import { buildModel } from '../../llm/model'
+import { DEFAULT_CHAT_MAX_STEPS } from '../../llm/chat-steps'
 
 const STRATEGY_PROMPT = [
   'You are a trading-strategy authoring assistant for the user\'s sandboxed Python environment.',
@@ -176,7 +177,7 @@ export default defineEventHandler(async (event) => {
     system: STRATEGY_PROMPT + ctx,
     messages: modelMessages,
     tools: { propose_config: proposeConfig },
-    stopWhen: stepCountIs(3),
+    stopWhen: stepCountIs(DEFAULT_CHAT_MAX_STEPS),
   })
 
   return result.toUIMessageStreamResponse()

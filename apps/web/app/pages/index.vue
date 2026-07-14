@@ -19,6 +19,31 @@ const input = ref('')
 const route = useRoute()
 const router = useRouter()
 
+// Max agentic steps (model turns) per message. Higher = the assistant can chain
+// more tool calls before it must produce a final answer; keeps long multi-tool
+// conversations from stopping early. Persisted locally; sent to /api/chat.
+const MAX_STEPS_MIN = 1
+const MAX_STEPS_MAX = 100
+const DEFAULT_MAX_STEPS = 30
+const maxSteps = ref(DEFAULT_MAX_STEPS)
+onMounted(() => {
+  const saved = Number(localStorage.getItem('chat:maxSteps'))
+  if (Number.isFinite(saved) && saved >= MAX_STEPS_MIN && saved <= MAX_STEPS_MAX) {
+    maxSteps.value = saved
+  }
+})
+watch(maxSteps, (v) => {
+  const clamped = Math.min(MAX_STEPS_MAX, Math.max(MAX_STEPS_MIN, Math.round(v || DEFAULT_MAX_STEPS)))
+  if (clamped !== v) {
+    maxSteps.value = clamped
+    return
+  }
+  localStorage.setItem('chat:maxSteps', String(clamped))
+})
+function bumpMaxSteps(delta: number) {
+  maxSteps.value = Math.min(MAX_STEPS_MAX, Math.max(MAX_STEPS_MIN, maxSteps.value + delta))
+}
+
 const slashCommands = ref<PaletteItem[]>([])
 const slashSuggestions = computed(() => filterCommandPalette(input.value, slashCommands.value))
 const slashCommandNames = computed(() => slashCommands.value.map(c => c.name))
@@ -184,7 +209,7 @@ const chat = new Chat({
   transport: new DefaultChatTransport({
     api: '/api/chat',
     prepareSendMessagesRequest: ({ messages, body }) => ({
-      body: { ...body, messages, chatId: chatId.value },
+      body: { ...body, messages, chatId: chatId.value, maxSteps: maxSteps.value },
     }),
     fetch: async (url, init) => {
       const res = await fetch(url, init)
@@ -487,6 +512,7 @@ function agentsVerdict(output: unknown) {
                 :market_val="(getToolOutput(part) as any).market_val"
                 :total_assets="(getToolOutput(part) as any).total_assets"
                 :positions="(getToolOutput(part) as any).positions"
+                :currency="(getToolOutput(part) as any).currency"
               />
               <PortfolioMptCard
                 v-else-if="hasOutput(part) && getToolName(part) === 'portfolio_mpt_analysis'"
@@ -585,6 +611,32 @@ function agentsVerdict(output: unknown) {
               <div class="min-w-0 text-[var(--paper-3)] truncate">
                 model
                 <span class="text-[var(--paper-2)] normal-case tracking-normal">{{ contextInfo?.modelSpec ?? 'loading' }}</span>
+              </div>
+              <div
+                class="flex items-center gap-1 text-[var(--paper-3)]"
+                title="Max agentic steps (model turns) per message. Raise this for deep multi-tool research so the assistant doesn't stop early."
+              >
+                <span>steps</span>
+                <button
+                  type="button"
+                  class="size-4 inline-flex items-center justify-center leading-none hover:text-[var(--accent)] disabled:opacity-40"
+                  :disabled="maxSteps <= MAX_STEPS_MIN"
+                  @click="bumpMaxSteps(-5)"
+                >−</button>
+                <input
+                  v-model.number="maxSteps"
+                  type="number"
+                  :min="MAX_STEPS_MIN"
+                  :max="MAX_STEPS_MAX"
+                  class="w-8 bg-transparent text-center text-[var(--paper-2)] normal-case tracking-normal outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                  aria-label="max agentic steps per message"
+                >
+                <button
+                  type="button"
+                  class="size-4 inline-flex items-center justify-center leading-none hover:text-[var(--accent)] disabled:opacity-40"
+                  :disabled="maxSteps >= MAX_STEPS_MAX"
+                  @click="bumpMaxSteps(5)"
+                >+</button>
               </div>
               <div v-if="contextError" class="text-[var(--tape-down)]">
                 context unavailable
