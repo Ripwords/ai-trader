@@ -145,6 +145,26 @@ describe('tool catalogue', () => {
     })
   })
 
+  it('trade.account_overview groups totals by currency and flags mixed currencies', async () => {
+    const c = fakeClient()
+    c.listAccounts.mockResolvedValueOnce([
+      { acc_id: '1', trd_env: 'REAL', acc_type: 'CASH', card_num: null, security_firm: null, trdmarket_auth: ['US'], acc_role: 'OWNER' },
+      { acc_id: '2', trd_env: 'REAL', acc_type: 'CASH', card_num: null, security_firm: null, trdmarket_auth: ['HK'], acc_role: 'OWNER' },
+    ])
+    c.getPortfolio
+      .mockResolvedValueOnce({ cash: 1000, market_val: 2000, total_assets: 3000, currency: 'USD', positions: [] })
+      .mockResolvedValueOnce({ cash: 5000, market_val: 6000, total_assets: 11000, currency: 'HKD', positions: [] })
+    const tools = makeTools(c as unknown as ApiClient)
+    const out = await (tools['trade_account_overview'] as { execute: (args: { trd_env: 'REAL' }) => Promise<Record<string, unknown>> }).execute({ trd_env: 'REAL' })
+
+    expect(out.mixed_currency).toBe(true)
+    expect(out.currencies).toEqual(expect.arrayContaining(['USD', 'HKD']))
+    expect(out.totals_by_currency).toMatchObject({
+      USD: { cash: 1000, market_val: 2000, total_assets: 3000 },
+      HKD: { cash: 5000, market_val: 6000, total_assets: 11000 },
+    })
+  })
+
   it('portfolio_mpt_analysis returns a compact subset heatmap for chat', async () => {
     const tools = makeTools(fakeClient() as unknown as ApiClient)
     const out = await (tools['portfolio_mpt_analysis'] as { execute: (args: {

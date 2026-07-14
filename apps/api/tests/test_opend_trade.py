@@ -123,6 +123,54 @@ def test_get_portfolio_merges_positions_and_account():
     assert pos.pl_ratio == pytest.approx(0.10)  # SDK returned 10.0 (percentage) → normalized to 0.10
 
 
+def test_get_portfolio_preserves_currency():
+    """moomoo returns a per-position `currency` column and a per-account
+    settlement `currency`; both must survive into the typed schema so
+    downstream consumers don't assume USD."""
+    _set_ctx(FakeTradeCtx(
+        positions_payload=[
+            {
+                "code": "HK.00700",
+                "qty": 100,
+                "average_cost": 300.0,
+                "nominal_price": 320.0,
+                "market_val": 32000.0,
+                "unrealized_pl": 2000.0,
+                "pl_ratio_avg_cost": 6.67,
+                "currency": "HKD",
+            }
+        ],
+        accinfo_payload=[
+            {
+                "cash": 5000.0,
+                "market_val": 32000.0,
+                "total_assets": 37000.0,
+                "currency": "HKD",
+            }
+        ],
+    ))
+    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    portfolio = adapter.get_portfolio(acc_id=12345, trd_env="REAL")
+    assert portfolio.currency == "HKD"
+    assert portfolio.positions[0].currency == "HKD"
+
+
+def test_get_portfolio_currency_absent_is_none():
+    """Paper accounts / older SDKs may omit the currency column; coerce to None
+    rather than the string 'N/A' or a hardcoded default."""
+    _set_ctx(FakeTradeCtx(
+        positions_payload=[
+            {"code": "US.NVDA", "qty": 1, "average_cost": 1.0, "nominal_price": 1.0,
+             "market_val": 1.0, "unrealized_pl": 0.0, "pl_ratio_avg_cost": 0.0},
+        ],
+        accinfo_payload=[{"cash": 1.0, "market_val": 1.0, "total_assets": 2.0}],
+    ))
+    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    portfolio = adapter.get_portfolio(acc_id=12345, trd_env="SIMULATE")
+    assert portfolio.currency is None
+    assert portfolio.positions[0].currency is None
+
+
 def test_list_orders_returns_typed():
     _set_ctx(FakeTradeCtx(orders_payload=[
         {

@@ -394,6 +394,15 @@ class OpendAdapter:
             except (TypeError, ValueError):
                 return 0.0
 
+        def _currency(value: object) -> str | None:
+            """moomoo reports a settlement currency (USD/HKD/…) per position and
+            per account. Missing/'N/A' values coerce to None so downstream never
+            treats a blank as USD."""
+            if value is None or value == "" or value == "N/A":
+                return None
+            text = str(value).strip()
+            return text or None
+
         positions = [
             Position(
                 code=str(r["code"]),
@@ -405,6 +414,7 @@ class OpendAdapter:
                 market_val=_to_float(r.get("market_val", 0)),
                 pl_val=_to_float(r.get("unrealized_pl", r.get("pl_val", 0))),
                 pl_ratio=_to_float(r.get("pl_ratio_avg_cost", r.get("pl_ratio", 0))) / 100.0,
+                currency=_currency(r.get("currency")),
             )
             for _, r in positions_df.iterrows()
         ]
@@ -414,6 +424,7 @@ class OpendAdapter:
             market_val=_to_float(a.get("market_val", 0)),
             total_assets=_to_float(a.get("total_assets", 0)),
             positions=positions,
+            currency=_currency(a.get("currency")),
         )
 
     def list_orders(self, *, acc_id: str, trd_env: str = "SIMULATE") -> list[Order]:

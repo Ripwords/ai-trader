@@ -16,7 +16,7 @@ function getRiskFreeRate(): number {
 
 async function getPortfolioCorrelation(opts?: { force?: boolean }): Promise<PortfolioCorrelationResult> {
   const portfolio = await getFullPortfolioCached({ force: Boolean(opts?.force) })
-  const inputs = collectPortfolioMptInputs(portfolio)
+  const inputs = await collectPortfolioMptInputs(portfolio)
   const barsBySymbol = new Map(
     await Promise.all(
       inputs.map(async input => [input.symbol, await getDailyBars(input.symbol, LOOKBACK_DAYS + 1)] as const),

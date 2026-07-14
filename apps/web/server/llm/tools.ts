@@ -207,7 +207,33 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           }),
           { cash: 0, market_val: 0, total_assets: 0 },
         )
-        return { trd_env, totals, accounts: rows, skipped }
+        // Group totals by the account settlement currency so we never present a
+        // cross-currency sum as a single figure. `totals` above remains only a
+        // naive same-unit sum — trust totals_by_currency when currencies differ.
+        const totals_by_currency: Record<string, { cash: number; market_val: number; total_assets: number }> = {}
+        for (const row of rows) {
+          const cur = row.portfolio.currency ?? 'UNKNOWN'
+          const bucket = totals_by_currency[cur] ?? { cash: 0, market_val: 0, total_assets: 0 }
+          bucket.cash += row.portfolio.cash
+          bucket.market_val += row.portfolio.market_val
+          bucket.total_assets += row.portfolio.total_assets
+          totals_by_currency[cur] = bucket
+        }
+        const currencies = Object.keys(totals_by_currency)
+        const mixed_currency = currencies.filter(c => c !== 'UNKNOWN').length > 1
+        return {
+          trd_env,
+          totals,
+          totals_by_currency,
+          currencies,
+          mixed_currency,
+          // Explicit guardrail for the model: don't add across currencies.
+          currency_note: mixed_currency
+            ? 'Accounts span multiple currencies. Report each currency separately or call convert_fx before combining; do NOT add the totals field across currencies.'
+            : undefined,
+          accounts: rows,
+          skipped,
+        }
       },
     }),
 

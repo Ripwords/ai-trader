@@ -127,7 +127,7 @@ describe('portfolio correlation', () => {
     ])
   })
 
-  it('collects MPT inputs with actual market-value weights when available', () => {
+  it('collects MPT inputs with actual market-value weights when available', async () => {
     const portfolio = {
       positions: [
         { symbol: 'NVDA', name: 'NVIDIA Corporation', market_value: 600 },
@@ -138,9 +138,31 @@ describe('portfolio correlation', () => {
       moomoo_paper: [{ symbol: 'US.SPY', market_value: 250 }],
     } as FullPortfolio
 
-    expect(collectPortfolioMptInputs(portfolio)).toEqual([
+    expect(await collectPortfolioMptInputs(portfolio)).toEqual([
       { symbol: 'NVDA', name: 'NVIDIA Corporation', market_value: 1000 },
       { symbol: 'GLD', name: 'SPDR Gold Shares', market_value: 500 },
     ])
+  })
+
+  it('converts moomoo-only positions to a common currency before weighting', async () => {
+    const portfolio = {
+      positions: [],
+      net_worth_currency: 'USD',
+      moomoo_live: [
+        { symbol: 'US.NVDA', market_value: 1000, currency: 'USD' },
+        { symbol: 'HK.00700', market_value: 800, currency: 'HKD' },
+      ],
+      moomoo_paper: [],
+    } as unknown as FullPortfolio
+
+    // Fake FX: 1 HKD = 0.128 USD. USD passes through unchanged.
+    const convert = async (amount: number, from: string, to: string) =>
+      from === to ? amount : from === 'HKD' && to === 'USD' ? amount * 0.128 : amount
+
+    const inputs = await collectPortfolioMptInputs(portfolio, convert)
+    const bySymbol = Object.fromEntries(inputs.map(i => [i.symbol, i.market_value]))
+    expect(bySymbol.NVDA).toBe(1000)
+    // 800 HKD → 102.4 USD, NOT summed raw as 800.
+    expect(bySymbol['0700.HK']).toBeCloseTo(102.4, 5)
   })
 })

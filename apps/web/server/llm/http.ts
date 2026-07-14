@@ -75,6 +75,9 @@ export interface Position {
   market_val: number
   pl_val: number
   pl_ratio: number
+  // Settlement currency (e.g. 'USD', 'HKD'). null when the broker didn't
+  // report it — never assume USD.
+  currency: string | null
 }
 
 export interface Portfolio {
@@ -82,6 +85,8 @@ export interface Portfolio {
   market_val: number
   total_assets: number
   positions: Position[]
+  // Account settlement currency for cash/market_val/total_assets.
+  currency: string | null
 }
 
 export interface Order {

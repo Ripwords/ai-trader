@@ -79,4 +79,73 @@ describe('holdings summary', () => {
     expect(out.reconciliation.status).toBe('matched')
     expect(out.allocation_pct).toBe(50)
   })
+
+  it('preserves per-position and cash currency instead of assuming USD', async () => {
+    vi.doMock('../../server/llm/mcp', () => ({
+      getGhostfolioStatus: vi.fn(async () => 'ok'),
+      callGhostfolioTool: vi.fn(async (name: string) => {
+        if (name === 'get_portfolio_holdings') {
+          return {
+            holdings: [{
+              symbol: '0700.HK',
+              quantity: 100,
+              valueInBaseCurrency: 150_000,
+              investment: 120_000,
+              marketPrice: 320,
+              netPerformancePercent: 0.25,
+              currency: 'HKD',
+            }],
+          }
+        }
+        if (name === 'get_portfolio_details') {
+          return { summary: { totalValueInBaseCurrency: 300_000, baseCurrency: 'MYR' } }
+        }
+        if (name === 'get_accounts') return { accounts: [{ name: 'IBKR' }] }
+        return null
+      }),
+    }))
+
+    vi.doMock('../../server/llm/http', () => ({
+      getApiClient: () => ({
+        listAccounts: vi.fn(async () => [
+          { acc_id: 'live', trd_env: 'REAL', acc_role: 'OWNER' },
+          { acc_id: 'paper', trd_env: 'SIMULATE', acc_role: 'OWNER' },
+        ]),
+        getPortfolio: vi.fn(async ({ trd_env }: { trd_env: 'REAL' | 'SIMULATE' }) => ({
+          cash: trd_env === 'REAL' ? 8_000 : 2_000,
+          market_val: 32_000,
+          total_assets: trd_env === 'REAL' ? 40_000 : 34_000,
+          currency: 'HKD',
+          positions: [{
+            code: 'HK.00700',
+            qty: 100,
+            cost_price: 300,
+            current_price: 320,
+            market_val: 32_000,
+            pl_val: 2_000,
+            pl_ratio: 0.0667,
+            currency: 'HKD',
+          }],
+        })),
+      }),
+    }))
+
+    vi.doMock('../../server/lib/yahoo', () => ({
+      toYahooSymbol: (symbol: string) => symbol.replace(/^HK\./, '').replace(/^0*/, '0') + '.HK',
+    }))
+
+    const { getHoldingForSymbol } = await import('../../server/lib/holdings')
+    const out = await getHoldingForSymbol('HK.00700')
+
+    // Every position carries its real currency, not a USD assumption.
+    for (const p of out.positions) {
+      expect(p.currency).toBeTruthy()
+    }
+    expect(out.positions.some(p => p.currency === 'HKD')).toBe(true)
+    // Moomoo cash is grouped by its real currency.
+    expect(out.cash_live_by_currency.HKD).toBe(8_000)
+    expect(out.cash_paper_by_currency.HKD).toBe(2_000)
+    // Ghostfolio net worth currency is surfaced.
+    expect(out.net_worth_currency).toBe('MYR')
+  })
 })

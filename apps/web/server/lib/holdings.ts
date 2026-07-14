@@ -12,6 +12,9 @@ export interface HoldingPosition {
   market_value: number | null
   unrealized_pnl_pct: number | null
   account_label: string
+  // Settlement currency of market_value (e.g. 'USD', 'HKD', 'MYR'). null when
+  // the source didn't report it. Never assume USD.
+  currency: string | null
 }
 
 export interface HoldingSummary {
@@ -29,10 +32,18 @@ export interface HoldingSummary {
   total_quantity: number
   total_market_value: number
   net_worth_total: number | null
+  // Currency of net_worth_total (Ghostfolio base currency, e.g. 'MYR'). null
+  // when Ghostfolio isn't the answer source.
+  net_worth_currency: string | null
   allocation_pct: number | null
   allocation_source: 'ghostfolio_tracker' | null
+  // Deprecated USD-named aggregates: retained for backward compatibility, but
+  // they sum moomoo cash across markets regardless of currency. Prefer the
+  // *_by_currency maps, which keep each market's cash in its real currency.
   cash_paper_usd: number
   cash_live_usd: number
+  cash_paper_by_currency: Record<string, number>
+  cash_live_by_currency: Record<string, number>
   ghostfolio_status: GhostfolioStatus
   reconciliation: {
     status: 'matched' | 'mismatch' | 'not_compared'
@@ -73,6 +84,8 @@ interface MoomooSlice {
   total_market_value: number
   cash_paper_usd: number
   cash_live_usd: number
+  cash_paper_by_currency: Record<string, number>
+  cash_live_by_currency: Record<string, number>
   // total paper-account value across ALL paper positions (used for portfolio sizing)
   paper_total_value: number
   paper_positions_by_symbol: Record<string, number>
@@ -84,6 +97,8 @@ async function fetchMoomooSlice(symbol: string): Promise<MoomooSlice> {
     total_market_value: 0,
     cash_paper_usd: 0,
     cash_live_usd: 0,
+    cash_paper_by_currency: {},
+    cash_live_by_currency: {},
     paper_total_value: 0,
     paper_positions_by_symbol: {},
   }
@@ -103,13 +118,27 @@ async function fetchMoomooSlice(symbol: string): Promise<MoomooSlice> {
   }
 
   const tradingAccounts = accounts.filter(a => a.acc_role !== 'IPO')
-  const out: MoomooSlice = { ...empty, paper_positions_by_symbol: {} }
+  const out: MoomooSlice = {
+    positions: [],
+    total_market_value: 0,
+    cash_paper_usd: 0,
+    cash_live_usd: 0,
+    cash_paper_by_currency: {},
+    cash_live_by_currency: {},
+    paper_total_value: 0,
+    paper_positions_by_symbol: {},
+  }
 
   await Promise.all(
     tradingAccounts.map(async (acc) => {
       try {
         const portfolio: Portfolio = await client.getPortfolio({ acc_id: acc.acc_id, trd_env: acc.trd_env })
         const isPaper = acc.trd_env === 'SIMULATE'
+        // Group cash by the account's real settlement currency. 'UNKNOWN'
+        // when the broker didn't report one — never silently fold it into USD.
+        const cashCurrency = portfolio.currency ?? 'UNKNOWN'
+        const cashBucket = isPaper ? out.cash_paper_by_currency : out.cash_live_by_currency
+        cashBucket[cashCurrency] = (cashBucket[cashCurrency] ?? 0) + (portfolio.cash || 0)
         if (isPaper) {
           out.cash_paper_usd += portfolio.cash || 0
           out.paper_total_value += portfolio.total_assets || 0
@@ -134,6 +163,9 @@ async function fetchMoomooSlice(symbol: string): Promise<MoomooSlice> {
             market_value: p.market_val,
             unrealized_pnl_pct: p.pl_ratio,
             account_label: isPaper ? 'Moomoo Paper' : 'Moomoo Live',
+            // Prefer the position's own currency; fall back to the account
+            // settlement currency.
+            currency: p.currency ?? portfolio.currency ?? null,
           })
           out.total_market_value += p.market_val || 0
         }
@@ -150,6 +182,8 @@ interface GhostfolioSlice {
   positions: HoldingPosition[]
   total_market_value: number
   net_worth_total: number | null
+  // Ghostfolio base currency (e.g. 'MYR') that net_worth_total is denominated in.
+  base_currency: string | null
   status: GhostfolioStatus
   account_names: string[]
 }
@@ -164,7 +198,7 @@ const GHOSTFOLIO_ACCOUNTS_TOOL_CANDIDATES = ['get_accounts', 'getAccounts']
 async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
   const status = await getGhostfolioStatus()
   if (status !== 'ok') {
-    return { positions: [], total_market_value: 0, net_worth_total: null, status, account_names: [] }
+    return { positions: [], total_market_value: 0, net_worth_total: null, base_currency: null, status, account_names: [] }
   }
 
   // Ghostfolio uses Yahoo-style symbols (NVDA, 0700.HK, 600519.SS, 0828EA.KL).
@@ -184,7 +218,7 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
 
   if (raw == null) {
     if (lastErr) console.warn('[holdings] ghostfolio holdings tool probe failed:', lastErr instanceof Error ? lastErr.message : String(lastErr))
-    return { positions: [], total_market_value: 0, net_worth_total: null, status: 'failing', account_names: [] }
+    return { positions: [], total_market_value: 0, net_worth_total: null, base_currency: null, status: 'failing', account_names: [] }
   }
 
   let holdingsArr: unknown[] = []
@@ -201,12 +235,16 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
   // Net worth lives in get_portfolio_details.summary.totalValueInBaseCurrency.
   // Fall back to currentValueInBaseCurrency / fireWealth.today if missing.
   let netWorthTotal: number | null = null
+  let baseCurrency: string | null = null
   for (const name of GHOSTFOLIO_DETAILS_TOOL_CANDIDATES) {
     try {
       const details = await callGhostfolioTool(name, {})
       if (isRecord(details)) {
         const summary = isRecord(details.summary) ? details.summary : null
         if (summary) {
+          if (typeof summary.baseCurrency === 'string' && summary.baseCurrency) {
+            baseCurrency = summary.baseCurrency
+          }
           netWorthTotal = toNumber(summary.totalValueInBaseCurrency)
             ?? toNumber(summary.currentValueInBaseCurrency)
             ?? null
@@ -271,11 +309,15 @@ async function fetchGhostfolioSlice(symbol: string): Promise<GhostfolioSlice> {
       market_value: mv,
       unrealized_pnl_pct: pnlPct,
       account_label: 'Ghostfolio (aggregate)',
+      // market_value here is valueInBaseCurrency, so its currency is the
+      // Ghostfolio base currency (e.g. MYR) — not the asset's native trading
+      // currency. Fall back to h.currency only if base is unknown.
+      currency: baseCurrency ?? (typeof h.currency === 'string' && h.currency ? h.currency : null),
     })
     if (mv != null) totalMv += mv
   }
 
-  return { positions, total_market_value: totalMv, net_worth_total: netWorthTotal, status: 'ok', account_names }
+  return { positions, total_market_value: totalMv, net_worth_total: netWorthTotal, base_currency: baseCurrency, status: 'ok', account_names }
 }
 
 export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummary> {
@@ -286,11 +328,11 @@ export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummar
 
   const ghos: GhostfolioSlice = ghosRes.status === 'fulfilled'
     ? ghosRes.value
-    : { positions: [], total_market_value: 0, net_worth_total: null, status: 'failing', account_names: [] }
+    : { positions: [], total_market_value: 0, net_worth_total: null, base_currency: null, status: 'failing', account_names: [] }
 
   const moomoo: MoomooSlice = moomooRes.status === 'fulfilled'
     ? moomooRes.value
-    : { positions: [], total_market_value: 0, cash_paper_usd: 0, cash_live_usd: 0, paper_total_value: 0, paper_positions_by_symbol: {} }
+    : { positions: [], total_market_value: 0, cash_paper_usd: 0, cash_live_usd: 0, cash_paper_by_currency: {}, cash_live_by_currency: {}, paper_total_value: 0, paper_positions_by_symbol: {} }
 
   const positions = [...ghos.positions, ...moomoo.positions]
   const brokerPositions = moomoo.positions.filter(p => p.source === 'moomoo_live')
@@ -366,10 +408,13 @@ export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummar
     total_quantity: owned_quantity,
     total_market_value: owned_market_value,
     net_worth_total: ghos.net_worth_total,
+    net_worth_currency: ghos.base_currency,
     allocation_pct,
     allocation_source: allocation_pct == null ? null : 'ghostfolio_tracker',
     cash_paper_usd: moomoo.cash_paper_usd,
     cash_live_usd: moomoo.cash_live_usd,
+    cash_paper_by_currency: moomoo.cash_paper_by_currency,
+    cash_live_by_currency: moomoo.cash_live_by_currency,
     ghostfolio_status: ghos.status,
     reconciliation,
     value_units_note: 'Ghostfolio values are in its base currency (MYR here). Moomoo live/paper market values are in the broker market currency, typically USD for US symbols and HKD for HK symbols. Do not add those values without FX conversion.',
@@ -431,6 +476,8 @@ export interface FullPortfolioMoomooPosition {
   market_value: number
   pnl_pct: number
   account_id: string
+  // Settlement currency of market_value (e.g. 'USD', 'HKD'). null when unknown.
+  currency: string | null
 }
 
 export interface FullPortfolio {
@@ -659,6 +706,7 @@ async function fetchMoomooFullSlice(): Promise<MoomooFullSlice> {
             market_value: p.market_val ?? 0,
             pnl_pct: p.pl_ratio ?? 0,
             account_id: acc.acc_id,
+            currency: p.currency ?? portfolio.currency ?? null,
           })
         }
       } catch (err) {

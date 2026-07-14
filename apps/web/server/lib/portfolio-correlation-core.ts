@@ -1,6 +1,22 @@
 import type { FullPortfolio } from './holdings'
 import type { DailyBar } from './yahoo'
 
+/**
+ * Converts an amount between currencies. Returns the original amount unchanged
+ * when from === to or when a rate can't be resolved (best-effort — better a
+ * slightly-off weight than a zeroed one). Injectable for tests.
+ */
+export type FxConverter = (amount: number, from: string, to: string) => Promise<number>
+
+// getFxRate is imported lazily so this module stays free of yahoo.ts's
+// Nuxt auto-import (defineCachedFunction) dependency at eval time.
+const defaultFxConverter: FxConverter = async (amount, from, to) => {
+  if (!amount || from === to) return amount
+  const { getFxRate } = await import('./yahoo')
+  const rate = await getFxRate(from, to)
+  return rate == null ? amount : amount * rate
+}
+
 export type PortfolioCorrelationExclusionReason = 'ticker_not_found' | 'insufficient_price_history'
 
 export interface PortfolioCorrelationInput {
@@ -94,10 +110,15 @@ export function collectPortfolioCorrelationInputs(portfolio: FullPortfolio): Por
   return [...bySymbol.values()]
 }
 
-export function collectPortfolioMptInputs(portfolio: FullPortfolio): PortfolioCorrelationInput[] {
+export async function collectPortfolioMptInputs(
+  portfolio: FullPortfolio,
+  convert: FxConverter = defaultFxConverter,
+): Promise<PortfolioCorrelationInput[]> {
   const bySymbol = new Map<string, PortfolioCorrelationInput>()
   const ghostfolioPositions = portfolio.positions ?? []
 
+  // Ghostfolio market values are all denominated in the base currency
+  // (valueInBaseCurrency), so they are already directly comparable — no FX.
   if (ghostfolioPositions.length > 0) {
     for (const position of ghostfolioPositions) {
       const symbol = normalizeTicker(position.symbol)
@@ -113,11 +134,18 @@ export function collectPortfolioMptInputs(portfolio: FullPortfolio): PortfolioCo
     return [...bySymbol.values()]
   }
 
+  // Moomoo-only fallback: positions can be in different market currencies
+  // (USD for US tickers, HKD for HK tickers). Convert every value to a single
+  // base currency before summing so portfolio weights aren't distorted by
+  // adding raw HKD to raw USD.
+  const base = portfolio.net_worth_currency || 'USD'
   for (const position of [...(portfolio.moomoo_live ?? []), ...(portfolio.moomoo_paper ?? [])]) {
     const symbol = normalizeTicker(position.symbol)
     if (!symbol) continue
     const existing = bySymbol.get(symbol)
-    const marketValue = Number.isFinite(position.market_value) ? Math.max(0, position.market_value) : 0
+    const rawValue = Number.isFinite(position.market_value) ? Math.max(0, position.market_value) : 0
+    const positionCurrency = position.currency ?? base
+    const marketValue = await convert(rawValue, positionCurrency, base)
     bySymbol.set(symbol, {
       symbol,
       name: existing?.name ?? symbol,

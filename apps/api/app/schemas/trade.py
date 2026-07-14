@@ -30,6 +30,9 @@ class Position(BaseModel):
     market_val: float
     pl_val: float
     pl_ratio: float
+    # Settlement currency of this position (e.g. "USD", "HKD"). None when the
+    # SDK/account doesn't report it. Never assume USD downstream.
+    currency: str | None = None
 
 
 class Portfolio(BaseModel):
@@ -37,6 +40,8 @@ class Portfolio(BaseModel):
     market_val: float
     total_assets: float
     positions: list[Position]
+    # Account settlement currency for the cash/market_val/total_assets figures.
+    currency: str | None = None
 
 
 class Order(BaseModel):

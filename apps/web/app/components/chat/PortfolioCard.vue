@@ -7,8 +7,13 @@ interface Position {
   market_val: number
   pl_val: number
   pl_ratio: number
+  currency?: string | null
 }
-const props = defineProps<{ cash: number; market_val: number; total_assets: number; positions: Position[] }>()
+const props = defineProps<{ cash: number; market_val: number; total_assets: number; positions: Position[]; currency?: string | null }>()
+
+// Account settlement currency for the cash / market value / total assets
+// figures. Shown so the numbers are never read as an implicit USD.
+const currencyLabel = computed(() => props.currency || '')
 
 function fmt(n: number, opts: Intl.NumberFormatOptions = {}): string {
   return n.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2, ...opts })
@@ -21,7 +26,10 @@ function fmtSigned(n: number): string {
 <template>
   <div class="surface-1 rounded-md overflow-hidden">
     <header class="px-5 py-4 border-b hairline flex items-baseline justify-between">
-      <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">Portfolio · paper</div>
+      <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">
+        Portfolio · paper
+        <span v-if="currencyLabel" class="ml-1 text-[var(--accent)]">· {{ currencyLabel }}</span>
+      </div>
       <div class="font-mono text-sm text-[var(--paper-2)]" data-mono>{{ props.positions.length }} positions</div>
     </header>
 
@@ -35,7 +43,7 @@ function fmtSigned(n: number): string {
         <div class="font-mono text-2xl text-[var(--paper-0)] mt-2" data-mono>{{ fmt(props.market_val) }}</div>
       </div>
       <div class="px-5 py-4 bg-[var(--ink-2)]">
-        <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--accent)]">total assets</div>
+        <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--accent)]">total assets<span v-if="currencyLabel"> · {{ currencyLabel }}</span></div>
         <div class="font-mono text-2xl text-[var(--paper-0)] mt-2" data-mono>{{ fmt(props.total_assets) }}</div>
       </div>
     </div>
