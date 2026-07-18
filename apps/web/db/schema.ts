@@ -205,3 +205,52 @@ export const agentReflections = pgTable('agent_reflections', {
   // role) without conflict.
   uniqueDecisionRole: uniqueIndex('agent_reflections_decision_role_uq').on(t.decisionId, t.role),
 }))
+
+// Daily (or manual) portfolio value snapshot — the persistence layer behind
+// the equity curve. `source` ∈ {'auto','manual'}: auto rows are written once
+// per day by the cron capture endpoint (idempotent), manual rows by the
+// portfolio page's capture button. Totals are in `currency` (the aggregate
+// base currency, e.g. MYR from Ghostfolio; null when the fallback resolver
+// couldn't report one). `perAccount` mirrors FullPortfolio.accounts,
+// `positions` is [{symbol, qty, price, value, currency}], and `resolver`
+// preserves the raw live-resolver shape ({cash, total_value, positions})
+// so historical rows stay comparable with resolvePortfolio() output.
+export const portfolioSnapshots = pgTable('portfolio_snapshots', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+  source: varchar('source', { length: 16 }).notNull().default('auto'),
+  currency: varchar('currency', { length: 8 }),
+  netWorth: numeric('net_worth', { precision: 18, scale: 2 }).notNull(),
+  cash: numeric('cash', { precision: 18, scale: 2 }).notNull(),
+  positionsValue: numeric('positions_value', { precision: 18, scale: 2 }).notNull(),
+  perAccount: jsonb('per_account').notNull().default([]),
+  positions: jsonb('positions').notNull().default([]),
+  resolver: jsonb('resolver'),
+}, t => ({
+  byCapturedAt: index('portfolio_snapshots_captured_at_idx').on(t.capturedAt),
+}))
+
+// Ledger of every paper order the system places, regardless of origin.
+// `source` ∈ {'agent_decision','chat','algo'}. `decisionId` links back to the
+// agent decision that motivated the order (the FK agentDecisions.paperOrderId
+// was reserved for). Inserts are best-effort at the placement sites — a
+// ledger failure never fails the order itself. `raw` keeps the broker's
+// place-order response for forensics.
+export const paperOrders = pgTable('paper_orders', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  source: varchar('source', { length: 16 }).notNull(),
+  decisionId: uuid('decision_id').references(() => agentDecisions.id, { onDelete: 'set null' }),
+  moomooOrderId: varchar('moomoo_order_id', { length: 64 }),
+  accId: varchar('acc_id', { length: 32 }),
+  symbol: varchar('symbol', { length: 32 }).notNull(),
+  side: varchar('side', { length: 8 }).notNull(),
+  qty: integer('qty').notNull(),
+  price: numeric('price', { precision: 18, scale: 6 }),
+  orderType: varchar('order_type', { length: 16 }),
+  trdEnv: varchar('trd_env', { length: 16 }).notNull().default('SIMULATE'),
+  status: varchar('status', { length: 32 }),
+  raw: jsonb('raw'),
+}, t => ({
+  bySymbol: index('paper_orders_symbol_idx').on(t.symbol, t.createdAt),
+}))
