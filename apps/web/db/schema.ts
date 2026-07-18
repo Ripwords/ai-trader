@@ -254,3 +254,26 @@ export const paperOrders = pgTable('paper_orders', {
 }, t => ({
   bySymbol: index('paper_orders_symbol_idx').on(t.symbol, t.createdAt),
 }))
+
+// Price alerts evaluated server-side by the Nitro polling plugin
+// (server/plugins/price-alerts.ts). `symbol` is canonical moomoo form
+// (e.g. US.NVDA) — creation goes through resolveSymbol. `kind` ∈
+// {'price_above','price_below','pct_move_day'}; for pct_move_day the
+// threshold is a day-move percentage (abs). `status` ∈
+// {'active','triggered','cancelled'}; triggered_at/triggered_price are set
+// once when the condition first crosses. Single-user app — no user_id
+// (same convention as algo_signals).
+export const priceAlerts = pgTable('price_alerts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  symbol: varchar('symbol', { length: 32 }).notNull(),
+  kind: varchar('kind', { length: 16 }).notNull(),
+  threshold: numeric('threshold', { precision: 18, scale: 6 }).notNull(),
+  note: text('note'),
+  status: varchar('status', { length: 16 }).notNull().default('active'),
+  triggeredAt: timestamp('triggered_at'),
+  triggeredPrice: numeric('triggered_price', { precision: 18, scale: 6 }),
+}, t => ({
+  // Hot path: the evaluation loop only ever loads active alerts.
+  activeOnly: index('price_alerts_active_idx').on(t.status).where(sql`status = 'active'`),
+}))

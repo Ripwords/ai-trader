@@ -15,6 +15,13 @@
       "when": 1784382388118,
       "tag": "0001_aberrant_justice",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784383226005,
+      "tag": "0002_public_the_fury",
+      "breakpoints": true
     }
   ]
 }

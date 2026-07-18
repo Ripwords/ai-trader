@@ -436,6 +436,9 @@ async function capturePlanningSnapshot() {
             @capture="captureSnapshot()"
           />
 
+          <!-- Price alerts -->
+          <AlertsPanel />
+
           <PortfolioCorrelationMatrix
             :correlation="correlation ?? null"
             :pending="correlationPending"

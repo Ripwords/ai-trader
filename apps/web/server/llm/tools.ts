@@ -807,5 +807,58 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         return getPortfolioPerformance({ days })
       },
     }),
+
+    // --- Price alerts (server-side 60s evaluation loop) --------------------
+
+    'alert_create': tool({
+      description:
+        'Create a price alert the server watches for the user — "notify me when NVDA hits 150" → alert_create(symbol NVDA, kind price_above, threshold 150); "tell me if TSLA drops below 200" → price_below; "ping me if AAPL moves more than 3% today" → pct_move_day with threshold 3. The alert fires a browser notification once when the condition crosses. The symbol is resolved to canonical form first; if resolution fails, relay the candidates to the user instead of guessing.',
+      inputSchema: z.object({
+        symbol: z.string().describe('Ticker, e.g. NVDA, US.NVDA, HK.00700'),
+        kind: z.enum(['price_above', 'price_below', 'pct_move_day']).describe('price_above: last >= threshold; price_below: last <= threshold; pct_move_day: abs day move % >= threshold'),
+        threshold: z.number().positive().describe('Price level, or percent for pct_move_day (3 = 3%)'),
+        note: z.string().max(500).optional().describe('Optional note shown in the notification, e.g. the reason for the alert'),
+      }),
+      execute: async ({ symbol, kind, threshold, note }) => {
+        const { resolveSymbol } = await import('../lib/yahoo')
+        const resolution = await resolveSymbol(symbol)
+        if (resolution.status !== 'resolved') {
+          return {
+            error: `could not resolve symbol "${symbol}" (${resolution.status})`,
+            ...(resolution.status === 'ambiguous' ? { candidates: resolution.candidates } : {}),
+          }
+        }
+        const { createAlert } = await import('../lib/alerts')
+        const alert = await createAlert({ symbol: resolution.symbol, kind, threshold, note: note ?? null })
+        return { alert, message: `Alert armed: ${alert.symbol} ${alert.kind} ${alert.threshold}. The server checks every minute; the user gets a browser notification when it triggers.` }
+      },
+    }),
+
+    'alert_list': tool({
+      description:
+        'List the user\'s price alerts. Defaults to active (armed) alerts; pass status=triggered for fired ones, cancelled, or all. Use for "what alerts do I have", or to find an id before alert_cancel.',
+      inputSchema: z.object({
+        status: z.enum(['active', 'triggered', 'cancelled', 'all']).default('active'),
+      }),
+      execute: async ({ status }) => {
+        const { listAlerts } = await import('../lib/alerts')
+        const alerts = await listAlerts({ status: status === 'all' ? undefined : status })
+        return { alerts }
+      },
+    }),
+
+    'alert_cancel': tool({
+      description:
+        'Cancel an active price alert by id ("remove my NVDA alert" — call alert_list first if you only know the symbol). Only active alerts can be cancelled.',
+      inputSchema: z.object({
+        id: z.string().describe('Alert id from alert_list or alert_create'),
+      }),
+      execute: async ({ id }) => {
+        const { cancelAlert } = await import('../lib/alerts')
+        const alert = await cancelAlert(id)
+        if (!alert) return { error: 'alert not found', id }
+        return { alert }
+      },
+    }),
   }
 }

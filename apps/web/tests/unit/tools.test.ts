@@ -71,6 +71,41 @@ vi.mock('../../server/lib/paper-orders', () => ({
   recordPaperOrder: paperOrdersMock.recordPaperOrder,
 }))
 
+const alertsMock = vi.hoisted(() => ({
+  createAlert: vi.fn(async (input: { symbol: string; kind: string; threshold: number; note?: string | null }) => ({
+    id: 'alert-1',
+    symbol: input.symbol,
+    kind: input.kind,
+    threshold: input.threshold,
+    note: input.note ?? null,
+    status: 'active',
+    createdAt: '2026-07-18T00:00:00.000Z',
+    triggeredAt: null,
+    triggeredPrice: null,
+  })),
+  listAlerts: vi.fn(async () => [] as unknown[]),
+  cancelAlert: vi.fn(async () => null),
+  resolveSymbolMock: vi.fn(async () => ({
+    status: 'resolved' as const,
+    symbol: 'US.NVDA',
+    moomoo: 'US.NVDA',
+    yahoo: 'NVDA',
+    name: 'NVIDIA Corporation',
+    exchange: 'NASDAQ',
+    quoteType: 'Equity',
+  })),
+}))
+
+vi.mock('../../server/lib/alerts', () => ({
+  createAlert: alertsMock.createAlert,
+  listAlerts: alertsMock.listAlerts,
+  cancelAlert: alertsMock.cancelAlert,
+}))
+
+vi.mock('../../server/lib/yahoo', () => ({
+  resolveSymbol: alertsMock.resolveSymbolMock,
+}))
+
 // Stand-in for ApiClient — only the methods our tools call.
 function fakeClient() {
   return {
@@ -97,6 +132,9 @@ describe('tool catalogue', () => {
     const tools = makeTools(fakeClient() as unknown as ApiClient)
     expect(Object.keys(tools).sort()).toEqual([
       'agents_debate',
+      'alert_cancel',
+      'alert_create',
+      'alert_list',
       'algo_backtest',
       'algo_kill',
       'algo_list',
@@ -384,5 +422,55 @@ describe('tool catalogue', () => {
       code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, order_type: 'NORMAL', trd_env: 'REAL', live_confirmation: phrase,
     })
     expect(paperOrdersMock.recordPaperOrder).not.toHaveBeenCalled()
+  })
+
+  it('alert_create resolves the symbol to canonical form before persisting', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['alert_create'] as { execute: (args: {
+      symbol: string
+      kind: 'price_above'
+      threshold: number
+    }) => Promise<unknown> }).execute({ symbol: 'NVDA', kind: 'price_above', threshold: 150 })
+
+    expect(alertsMock.resolveSymbolMock).toHaveBeenCalledWith('NVDA')
+    expect(alertsMock.createAlert).toHaveBeenCalledWith({
+      symbol: 'US.NVDA',
+      kind: 'price_above',
+      threshold: 150,
+      note: null,
+    })
+    expect(out).toMatchObject({ alert: { id: 'alert-1', symbol: 'US.NVDA', status: 'active' } })
+  })
+
+  it('alert_create surfaces an unresolved symbol instead of guessing', async () => {
+    alertsMock.createAlert.mockClear()
+    alertsMock.resolveSymbolMock.mockResolvedValueOnce({
+      status: 'not_found',
+    } as unknown as Awaited<ReturnType<typeof alertsMock.resolveSymbolMock>>)
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['alert_create'] as { execute: (args: {
+      symbol: string
+      kind: 'price_above'
+      threshold: number
+    }) => Promise<unknown> }).execute({ symbol: 'ZZZZZ', kind: 'price_above', threshold: 1 })
+
+    expect(alertsMock.createAlert).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ error: expect.stringContaining('ZZZZZ') })
+  })
+
+  it('alert_list forwards the status filter', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['alert_list'] as { execute: (args: { status: 'active' }) => Promise<unknown> })
+      .execute({ status: 'active' })
+    expect(alertsMock.listAlerts).toHaveBeenCalledWith({ status: 'active' })
+    expect(out).toMatchObject({ alerts: [] })
+  })
+
+  it('alert_cancel reports a missing alert as an error', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['alert_cancel'] as { execute: (args: { id: string }) => Promise<unknown> })
+      .execute({ id: 'nope' })
+    expect(alertsMock.cancelAlert).toHaveBeenCalledWith('nope')
+    expect(out).toMatchObject({ error: 'alert not found', id: 'nope' })
   })
 })

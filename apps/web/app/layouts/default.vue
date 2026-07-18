@@ -11,6 +11,7 @@ const drawerOpen = useState('shell.drawerOpen', () => false)
       @toggle-drawer="drawerOpen = !drawerOpen"
     />
     <ActiveRunsWatcher />
+    <AlertsWatcher />
 
     <div class="app-body">
       <slot />
