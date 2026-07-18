@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     AGENTS_DAILY_COST_USD_CAP: float = 5.00
     WEB_INTERNAL_BASE_URL: str = "http://web:3000"
 
+    # --- Live trading safety rails (server-side defense in depth; the web
+    # layer separately requires a typed confirmation phrase for REAL trades).
+    # When False, any REAL place/modify/cancel is refused with 403.
+    ALLOW_LIVE_TRADING: bool = False
+    # Max summed notional (qty * price, USD-equivalent) of today's REAL
+    # orders, including the one being placed. Conservative: non-USD notional
+    # is counted 1:1 as USD rather than converted.
+    MAX_DAILY_LIVE_NOTIONAL_USD: float = 1000.0
+
+    # --- Agents cost-cap fallback pricing. Used when the configured model has
+    # no entry in the pricing table: charge these conservative rates rather
+    # than 0.0 so an unknown model can never bypass the daily cap.
+    AGENTS_FALLBACK_INPUT_USD_PER_1M: float = 15.00
+    AGENTS_FALLBACK_OUTPUT_USD_PER_1M: float = 75.00
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
