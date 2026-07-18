@@ -12,8 +12,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import math
 import os
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Protocol
 
 import httpx
@@ -77,6 +79,92 @@ async def _internal_get_safe(path: str, params: dict[str, Any]) -> dict:
         return await _internal_get(path, params)
     except Exception:  # noqa: BLE001 - data-source fallback should fail soft
         return {}
+
+
+# ─── trend formatting helpers ──────────────────────────────────────────
+# Analysts pay per token; trend sections are compact markdown tables of
+# pre-formatted magnitudes ("130.50B"), not raw JSON dumps.
+
+
+def _fmt_money(v: Any) -> str:
+    """Compact money formatting: 130_497_000_000 → ``130.50B``; None → n/a."""
+    if v is None or isinstance(v, bool):
+        return "n/a"
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return "n/a"
+    if not math.isfinite(x):
+        return "n/a"
+    sign = "-" if x < 0 else ""
+    a = abs(x)
+    for div, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if a >= div:
+            return f"{sign}{a / div:.2f}{suffix}"
+    return f"{sign}{a:.2f}"
+
+
+def _pct_delta(curr: Any, prev: Any) -> str:
+    """Signed percent change ``prev → curr`` (``+114.2%``), n/a when undefined."""
+    try:
+        c, p = float(curr), float(prev)
+    except (TypeError, ValueError):
+        return "n/a"
+    if not math.isfinite(c) or not math.isfinite(p) or p == 0:
+        return "n/a"
+    return f"{(c - p) / abs(p) * 100:+.1f}%"
+
+
+def _cagr_pct(first: Any, last: Any, years: int) -> str:
+    """Compound annual growth from ``first`` to ``last`` over ``years``
+    intervals. n/a when either endpoint is missing or non-positive (CAGR of
+    a negative base is undefined)."""
+    try:
+        f0, f1 = float(first), float(last)
+    except (TypeError, ValueError):
+        return "n/a"
+    if years <= 0 or f0 <= 0 or f1 <= 0:
+        return "n/a"
+    return f"{((f1 / f0) ** (1 / years) - 1) * 100:+.1f}%"
+
+
+def _md_table(headers: list[str], rows: list[list[str]]) -> str:
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "|" + "---|" * len(headers),
+    ]
+    lines += ["| " + " | ".join(row) + " |" for row in rows]
+    return "\n".join(lines)
+
+
+def _bars_needed(start: date, today: date) -> int:
+    """Daily bars to fetch so history reaches back to ``start``: calendar
+    days scaled to ~5 trading days/week plus a small buffer, floored at 30
+    and capped at 500 (the internal route's own cap)."""
+    days_back = max((today - start).days, 1)
+    return min(500, max(30, math.ceil(days_back * 5 / 7) + 10))
+
+
+def _csv_num(v: Any) -> str:
+    if isinstance(v, bool) or v is None:
+        return ""
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return str(int(v)) if v.is_integer() else f"{v:g}"
+    return str(v)
+
+
+async def _statement_history(ticker: str, freq: str, periods: int) -> list[dict]:
+    """Fetch multi-period statement history (most-recent-first) from the web
+    container. Fail-soft: an outage or missing route returns ``[]`` so the
+    calling tool still serves the latest-period snapshot."""
+    data = await _internal_get_safe(
+        "/api/internal/yahoo/statement-history",
+        {"symbol": ticker, "freq": freq, "periods": periods},
+    )
+    rows = data.get("periods") if isinstance(data, dict) else None
+    return rows if isinstance(rows, list) else []
 
 
 async def resolve_symbol(symbol: str) -> dict:
@@ -189,13 +277,14 @@ def build_toolkit(
     # ─── Tool signatures match TradingAgents' bundled tools verbatim ───
     # The analyst prompts are trained on the upstream signatures; any drift
     # (param name, missing optional arg, missing date kwarg) burns multiple
-    # tool calls per run while the LLM guesses what we want. We accept every
-    # upstream param even when our HTTP-backed implementation can't honour
-    # it (e.g. ``freq=quarterly``, ``curr_date``) — silently ignore is
-    # better than schema-validation failures that the LLM has to retry past.
-    # Where upstream itself is inconsistent (some tools use ``symbol``,
-    # others ``ticker``), match upstream — don't unify; that would just
-    # re-introduce the drift.
+    # tool calls per run while the LLM guesses what we want. ``freq`` is now
+    # honoured (annual|quarterly trend sections). ``curr_date`` is still
+    # accepted but ignored: the Yahoo-backed routes have no as-of support,
+    # and dropping the param would trigger schema-validation retries in
+    # prompts trained on the upstream signature — each docstring says so
+    # explicitly instead of pretending. Where upstream itself is
+    # inconsistent (some tools use ``symbol``, others ``ticker``), match
+    # upstream — don't unify; that would just re-introduce the drift.
 
     @tool
     async def get_balance_sheet(
@@ -203,13 +292,50 @@ def build_toolkit(
         freq: str = "quarterly",
         curr_date: str | None = None,
     ) -> str:
-        """Retrieve balance sheet data for a given ticker symbol."""
-        del freq, curr_date  # Yahoo bundle only carries the most-recent period
-        data = await _internal_get("/api/internal/yahoo/balance-sheet", {"symbol": ticker})
+        """Retrieve the latest balance sheet PLUS a multi-year annual trend
+        table (total assets, total debt, equity, debt/equity per fiscal
+        year). ``freq`` is accepted for compatibility, but balance-sheet
+        history is annual-only in the data source, so the trend is always
+        annual. ``curr_date`` is ignored (no as-of support)."""
+        del freq, curr_date  # see docstring — annual-only history, no as-of
+        data, hist = await asyncio.gather(
+            _internal_get("/api/internal/yahoo/balance-sheet", {"symbol": ticker}),
+            _statement_history(ticker, "annual", 5),
+        )
         bs = data.get("balance_sheet")
-        if not bs:
+        if not bs and not hist:
             return f"No balance sheet available for {_label(ticker)}."
-        return f"Balance Sheet for {_label(ticker)}:\n```json\n{json.dumps(bs, indent=2)}\n```"
+        parts: list[str] = []
+        if bs:
+            parts.append(
+                f"Balance Sheet for {_label(ticker)} (latest period):\n"
+                f"```json\n{json.dumps(bs, indent=2)}\n```"
+            )
+        else:
+            parts.append(f"Balance Sheet for {_label(ticker)}: no latest-period snapshot.")
+        if hist:
+            rows = []
+            for p in reversed(hist):  # oldest → newest
+                debt = p.get("total_debt")
+                equity = p.get("shareholders_equity")
+                ratio = (
+                    f"{float(debt) / float(equity):.2f}"
+                    if isinstance(debt, (int, float)) and isinstance(equity, (int, float)) and equity
+                    else "n/a"
+                )
+                rows.append([
+                    str(p.get("period")),
+                    _fmt_money(p.get("total_assets")),
+                    _fmt_money(debt),
+                    _fmt_money(equity),
+                    ratio,
+                ])
+            parts.append(
+                "Annual balance-sheet trend (oldest → newest; quarterly history "
+                "not available from source):\n"
+                + _md_table(["FY", "Total Assets", "Total Debt", "Equity", "Debt/Equity"], rows)
+            )
+        return "\n\n".join(parts)
 
     @tool
     async def get_cashflow(
@@ -217,13 +343,40 @@ def build_toolkit(
         freq: str = "quarterly",
         curr_date: str | None = None,
     ) -> str:
-        """Retrieve cash flow statement data for a given ticker symbol."""
-        del freq, curr_date
-        data = await _internal_get("/api/internal/yahoo/cashflow", {"symbol": ticker})
+        """Retrieve the latest cash flow statement PLUS a multi-year annual
+        free-cash-flow trend table with YoY deltas. ``freq`` is accepted for
+        compatibility, but cashflow history is annual-only in the data
+        source, so the trend is always annual. ``curr_date`` is ignored
+        (no as-of support)."""
+        del freq, curr_date  # see docstring — annual-only history, no as-of
+        data, hist = await asyncio.gather(
+            _internal_get("/api/internal/yahoo/cashflow", {"symbol": ticker}),
+            _statement_history(ticker, "annual", 5),
+        )
         cf = data.get("cashflow")
-        if not cf:
+        if not cf and not hist:
             return f"No cashflow available for {_label(ticker)}."
-        return f"Cashflow for {_label(ticker)}:\n```json\n{json.dumps(cf, indent=2)}\n```"
+        parts = []
+        if cf:
+            parts.append(
+                f"Cashflow for {_label(ticker)} (latest period):\n"
+                f"```json\n{json.dumps(cf, indent=2)}\n```"
+            )
+        else:
+            parts.append(f"Cashflow for {_label(ticker)}: no latest-period snapshot.")
+        if hist:
+            chron = list(reversed(hist))  # oldest → newest
+            rows = []
+            for i, p in enumerate(chron):
+                fcf = p.get("fcf")
+                yoy = _pct_delta(fcf, chron[i - 1].get("fcf")) if i else "—"
+                rows.append([str(p.get("period")), _fmt_money(fcf), yoy])
+            parts.append(
+                "Annual free-cash-flow trend (oldest → newest; quarterly history "
+                "not available from source):\n"
+                + _md_table(["FY", "FCF", "YoY"], rows)
+            )
+        return "\n\n".join(parts)
 
     @tool
     async def get_income_statement(
@@ -231,35 +384,138 @@ def build_toolkit(
         freq: str = "quarterly",
         curr_date: str | None = None,
     ) -> str:
-        """Retrieve income statement data for a given ticker symbol."""
-        del freq, curr_date
-        data = await _internal_get("/api/internal/yahoo/income-statement", {"symbol": ticker})
+        """Retrieve the latest income statement PLUS a multi-period trend
+        table. ``freq='quarterly'`` (default) gives the last 8 quarters
+        (revenue, QoQ, net income, EPS); ``freq='annual'`` gives 5 fiscal
+        years (revenue, YoY, net income, net margin). ``curr_date`` is
+        ignored (no as-of support)."""
+        del curr_date  # no as-of support in the data source
+        quarterly = str(freq).lower().startswith("q")
+        data, hist = await asyncio.gather(
+            _internal_get("/api/internal/yahoo/income-statement", {"symbol": ticker}),
+            _statement_history(
+                ticker, "quarterly" if quarterly else "annual", 8 if quarterly else 5
+            ),
+        )
         is_ = data.get("income_statement")
-        if not is_:
+        if not is_ and not hist:
             return f"No income statement available for {_label(ticker)}."
-        return f"Income Statement for {_label(ticker)}:\n```json\n{json.dumps(is_, indent=2)}\n```"
+        parts = []
+        if is_:
+            parts.append(
+                f"Income Statement for {_label(ticker)} (latest period):\n"
+                f"```json\n{json.dumps(is_, indent=2)}\n```"
+            )
+        else:
+            parts.append(f"Income Statement for {_label(ticker)}: no latest-period snapshot.")
+        if hist:
+            chron = list(reversed(hist))  # oldest → newest
+            rows = []
+            if quarterly:
+                for i, p in enumerate(chron):
+                    rev = p.get("revenue")
+                    eps = p.get("eps")
+                    rows.append([
+                        str(p.get("period")),
+                        _fmt_money(rev),
+                        _pct_delta(rev, chron[i - 1].get("revenue")) if i else "—",
+                        _fmt_money(p.get("net_income")),
+                        f"{float(eps):.2f}" if isinstance(eps, (int, float)) else "n/a",
+                    ])
+                parts.append(
+                    "Quarterly trend (oldest → newest):\n"
+                    + _md_table(["Quarter", "Revenue", "QoQ", "Net Income", "EPS"], rows)
+                )
+            else:
+                for i, p in enumerate(chron):
+                    rev = p.get("revenue")
+                    ni = p.get("net_income")
+                    margin = (
+                        f"{float(ni) / float(rev) * 100:.1f}%"
+                        if isinstance(ni, (int, float)) and isinstance(rev, (int, float)) and rev
+                        else "n/a"
+                    )
+                    rows.append([
+                        str(p.get("period")),
+                        _fmt_money(rev),
+                        _pct_delta(rev, chron[i - 1].get("revenue")) if i else "—",
+                        _fmt_money(ni),
+                        margin,
+                    ])
+                parts.append(
+                    "Annual trend (oldest → newest):\n"
+                    + _md_table(["FY", "Revenue", "YoY", "Net Income", "Net Margin"], rows)
+                )
+        return "\n\n".join(parts)
 
     @tool
     async def get_fundamentals(ticker: str, curr_date: str) -> str:
-        """Retrieve comprehensive fundamental data for a given ticker symbol."""
-        del curr_date
+        """Retrieve comprehensive fundamental metrics (valuation ratios,
+        margins, growth, leverage) PLUS a multi-year revenue / net income /
+        FCF trend table with CAGRs. ``curr_date`` is ignored (no as-of
+        support in the data source)."""
+        del curr_date  # no as-of support in the data source
         data = await _internal_get("/api/internal/yahoo/fundamentals", {"symbol": ticker})
-        return f"Fundamentals for {_label(ticker)}:\n```json\n{json.dumps(data, indent=2)}\n```"
+        metrics = data.get("metrics") if isinstance(data, dict) else None
+        history = data.get("history") if isinstance(data, dict) else None
+        body = (
+            f"Fundamentals for {_label(ticker)}:\n"
+            f"```json\n{json.dumps(metrics if metrics else data, indent=2)}\n```"
+        )
+        if isinstance(history, list) and len(history) >= 2:
+            chron = list(reversed(history))  # oldest → newest
+            rows = [
+                [
+                    str(p.get("period")),
+                    _fmt_money(p.get("revenue")),
+                    _fmt_money(p.get("net_income")),
+                    _fmt_money(p.get("fcf")),
+                ]
+                for p in chron
+                if isinstance(p, dict)
+            ]
+            years = len(chron) - 1
+            first, last = chron[0], chron[-1]
+            cagr_line = (
+                f"CAGR over {years}y — revenue: "
+                f"{_cagr_pct(first.get('revenue'), last.get('revenue'), years)}, "
+                f"net income: {_cagr_pct(first.get('net_income'), last.get('net_income'), years)}, "
+                f"FCF: {_cagr_pct(first.get('fcf'), last.get('fcf'), years)}"
+            )
+            body += (
+                f"\n\nAnnual trend (oldest → newest, {len(chron)} fiscal years):\n"
+                + _md_table(["FY", "Revenue", "Net Income", "FCF"], rows)
+                + "\n"
+                + cagr_line
+            )
+        return body
 
     @tool
     async def get_insider_transactions(
         ticker: str,
         curr_date: str | None = None,
+        days: int = 90,
     ) -> str:
-        """Retrieve insider transaction information about a company."""
-        del curr_date
+        """Retrieve insider transactions (open-market buys/sells) within the
+        trailing ``days`` window (default 90, max 365). ``curr_date`` is
+        ignored — the window always ends today (no as-of support)."""
+        del curr_date  # window always ends today; no as-of support
+        try:
+            window = int(days)
+        except (TypeError, ValueError):
+            window = 90
+        window = max(1, min(365, window))
         data = await _internal_get(
-            "/api/internal/yahoo/insider-transactions", {"symbol": ticker}
+            "/api/internal/yahoo/insider-transactions",
+            {"symbol": ticker, "days": window},
         )
         rows = data.get("transactions") or []
         if not rows:
-            return f"No insider transactions in the last 90 days for {_label(ticker)}."
-        return f"Insider Transactions for {_label(ticker)}:\n```json\n{json.dumps(rows, indent=2)}\n```"
+            return f"No insider transactions in the last {window} days for {_label(ticker)}."
+        return (
+            f"Insider Transactions for {_label(ticker)} (last {window} days):\n"
+            f"```json\n{json.dumps(rows, indent=2)}\n```"
+        )
 
     @tool
     async def get_news(ticker: str, start_date: str, end_date: str) -> str:
@@ -309,13 +565,27 @@ def build_toolkit(
 
     @tool
     async def get_stock_data(symbol: str, start_date: str, end_date: str) -> str:
-        """Daily OHLCV bars for the given symbol in the date range."""
-        bars = await _market_bars(opend_client, symbol, ktype="K_DAY", num=252)
+        """OHLCV bars for the given symbol covering start_date..end_date
+        (YYYY-MM-DD). History reaches back up to ~500 trading days; ranges
+        spanning more than 120 bars are downsampled to weekly bars (stated
+        in the output header). Invalid/missing dates fall back to the most
+        recent 60 daily bars."""
+        # Parse the requested window; fall back to legacy 252-fetch/last-60
+        # behaviour when the dates are unusable.
+        window: tuple[date, date] | None = None
+        try:
+            start = date.fromisoformat(str(start_date)[:10])
+            end = date.fromisoformat(str(end_date)[:10])
+            if start <= end:
+                window = (start, end)
+        except (TypeError, ValueError):
+            window = None
+        num = _bars_needed(window[0], date.today()) if window else 252
+        bars = await _market_bars(opend_client, symbol, ktype="K_DAY", num=num)
         if not bars:
             return f"Market data unavailable for {_label(symbol)}."
-        # ``time_key`` is a datetime object on the production Bar model; the
-        # JSON encoder doesn't know how to serialise it, so coerce to ISO
-        # strings before dumping.
+        # ``time`` is a datetime object on the production Bar model; coerce
+        # to ISO strings so range filtering and output are uniform.
         bars = [
             {
                 **b,
@@ -329,9 +599,40 @@ def build_toolkit(
             else b
             for b in bars
         ]
+        note = ""
+        if window:
+            lo, hi = window[0].isoformat(), window[1].isoformat()
+            selected = [b for b in bars if lo <= str(b.get("time"))[:10] <= hi]
+            if not selected:
+                selected = bars[-60:]
+                note = " — no bars inside the requested range; showing the most recent 60"
+        else:
+            selected = bars[-60:]
+        cadence = "daily"
+        if len(selected) > 120:
+            # Weekly downsample: keep the last bar of each ISO week so long
+            # ranges stay token-bounded. Dict preserves first-seen week order;
+            # later bars in the same week overwrite the value.
+            by_week: dict[tuple[int, int], dict] = {}
+            for b in selected:
+                d = date.fromisoformat(str(b.get("time"))[:10])
+                iso = d.isocalendar()
+                by_week[(iso[0], iso[1])] = b
+            daily_count = len(selected)
+            selected = list(by_week.values())
+            cadence = "weekly"
+            note = (
+                f" — downsampled to weekly ({len(selected)} bars from "
+                f"{daily_count} daily){note}"
+            )
+        cols = ("time", "open", "high", "low", "close", "volume")
+        lines = [
+            ",".join(_csv_num(b.get(c)) for c in cols) for b in selected
+        ]
         return (
-            f"Daily bars for {_label(symbol)} ({start_date}..{end_date}):\n"
-            f"```json\n{json.dumps(bars[-60:], indent=2, default=str)}\n```"
+            f"{cadence.capitalize()} bars for {_label(symbol)} "
+            f"({start_date}..{end_date}){note}:\n"
+            "date,open,high,low,close,volume\n" + "\n".join(lines)
         )
 
     @tool

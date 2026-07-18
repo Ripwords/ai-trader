@@ -1,7 +1,13 @@
+from datetime import date
+
 import pytest
 from unittest.mock import patch
 
-from app.services.agents.toolkit import build_toolkit, _normalize_moomoo_symbol
+from app.services.agents.toolkit import (
+    _bars_needed,
+    _normalize_moomoo_symbol,
+    build_toolkit,
+)
 
 
 def test_normalize_moomoo_symbol_adds_us_prefix_for_bare_ticker():
@@ -126,7 +132,12 @@ async def test_get_stock_data_uses_yahoo_bars_for_non_moomoo_yahoo_ticker(monkey
 
     assert captured["url"].endswith("/api/internal/yahoo/daily-bars")
     assert captured["headers"]["authorization"] == "Bearer secret"
-    assert captured["params"] == {"symbol": "0097.KL", "limit": 252}
+    # The fetch depth now derives from the requested start date (was a
+    # hard-coded 252) so the returned bars actually cover the range.
+    assert captured["params"] == {
+        "symbol": "0097.KL",
+        "limit": _bars_needed(date(2026, 5, 1), date.today()),
+    }
     assert "Daily bars for 0097.KL" in result
     assert "3.15" in result
 
@@ -136,12 +147,10 @@ async def test_get_balance_sheet_calls_internal(monkeypatch):
     monkeypatch.setenv("WEB_INTERNAL_BASE_URL", "http://web:3000")
     monkeypatch.setenv("INTERNAL_BEARER", "secret")
 
-    captured = {}
+    calls = []
 
     async def fake_get(self, url, headers=None, params=None, timeout=None, **kwargs):
-        captured["url"] = url
-        captured["headers"] = headers
-        captured["params"] = params
+        calls.append({"url": url, "headers": headers, "params": params})
 
         class R:
             status_code = 200
@@ -159,9 +168,11 @@ async def test_get_balance_sheet_calls_internal(monkeypatch):
         result = await toolkit.get_balance_sheet.ainvoke({"ticker": "NVDA"})
     assert "Balance Sheet for NVDA" in result
     assert "total_assets" in result
-    assert "/api/internal/yahoo/balance-sheet" in captured["url"]
-    assert captured["headers"]["authorization"] == "Bearer secret"
-    assert captured["params"]["symbol"] == "NVDA"
+    # The tool now also fans out to /statement-history for the trend;
+    # the snapshot call itself must be unchanged.
+    snap = next(c for c in calls if c["url"].endswith("/api/internal/yahoo/balance-sheet"))
+    assert snap["headers"]["authorization"] == "Bearer secret"
+    assert snap["params"]["symbol"] == "NVDA"
 
 
 @pytest.mark.asyncio
