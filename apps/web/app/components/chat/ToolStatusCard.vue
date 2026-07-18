@@ -33,6 +33,9 @@ const labels: Record<string, string> = {
   holdings_context: 'Reconciling holdings',
   convert_fx: 'Converting currency',
   usage_summary: 'Loading usage',
+  alert_create: 'Arming price alert',
+  alert_list: 'Loading price alerts',
+  alert_cancel: 'Cancelling price alert',
 }
 
 const label = computed(() => labels[props.toolName] ?? `Running ${props.toolName}`)
