@@ -185,6 +185,7 @@ async def place_order(
             qty=body.qty,
             price=body.price,
             order_type=body.order_type,
+            trigger_price=body.trigger_price,
             trd_env=body.trd_env,
             acc_id=body.acc_id,
         )
@@ -204,6 +205,7 @@ async def modify_order(
             acc_id=body.acc_id,
             price=body.price,
             qty=body.qty,
+            trigger_price=body.trigger_price,
             trd_env=body.trd_env,
         )
     except OpendError as exc:

@@ -190,7 +190,8 @@ export class ApiClient {
     side: 'BUY' | 'SELL'
     qty: number
     price?: number
-    order_type?: 'NORMAL' | 'MARKET'
+    order_type?: 'NORMAL' | 'MARKET' | 'STOP' | 'STOP_LIMIT'
+    trigger_price?: number
     trd_env?: 'SIMULATE' | 'REAL'
     acc_id?: string
   }): Promise<PlaceOrderResult> {
@@ -202,6 +203,7 @@ export class ApiClient {
     acc_id: string
     price?: number
     qty?: number
+    trigger_price?: number
     trd_env?: 'SIMULATE' | 'REAL'
   }): Promise<{ order_id: string; status: string }> {
     return this.fetch('/trade/order/modify', { method: 'POST', body: args })

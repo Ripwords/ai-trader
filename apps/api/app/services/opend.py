@@ -506,20 +506,34 @@ class OpendAdapter:
         qty: int,
         price: float | None = None,
         order_type: str = "NORMAL",
+        trigger_price: float | None = None,
         trd_env: str = "SIMULATE",
         acc_id: str | None = None,
     ) -> PlaceOrderResult:
-        """Place a paper or live order. For NORMAL orders price is required.
-        For MARKET orders price is ignored (we pass 0 — SDK accepts that for
-        market orders on supported markets)."""
-        if order_type == "NORMAL" and price is None:
-            raise OpendError("price is required for NORMAL (limit) orders")
+        """Place a paper or live order.
+
+        - NORMAL (limit): ``price`` required.
+        - MARKET: ``price`` ignored (we pass 0 — SDK accepts that for market
+          orders on supported markets).
+        - STOP (stop-market): ``trigger_price`` required (SDK ``aux_price``),
+          ``price`` ignored.
+        - STOP_LIMIT: both ``trigger_price`` (SDK ``aux_price``) and
+          ``price`` (the limit) required.
+        """
+        if order_type in ("NORMAL", "STOP_LIMIT") and price is None:
+            raise OpendError(f"price is required for {order_type} orders")
+        if order_type in ("STOP", "STOP_LIMIT") and trigger_price is None:
+            raise OpendError(f"trigger_price is required for {order_type} orders")
+        # STOP is trigger-only; a stray limit price would be rejected or
+        # silently misread by the SDK, so drop it.
+        if order_type in ("MARKET", "STOP"):
+            price = None
         ctx = self._trade_ctx_factory()
         try:
             try:
                 from moomoo import OrderType as MoomooOrderType, TrdSide  # type: ignore[import-not-found]
                 sdk_side = TrdSide.BUY if side == "BUY" else TrdSide.SELL
-                sdk_type = MoomooOrderType.NORMAL if order_type == "NORMAL" else MoomooOrderType.MARKET
+                sdk_type = getattr(MoomooOrderType, order_type)
             except ImportError:
                 sdk_side = side
                 sdk_type = order_type
@@ -533,6 +547,7 @@ class OpendAdapter:
                 order_type=sdk_type,
                 trd_env=env,
                 acc_id=int(resolved_acc_id),
+                aux_price=trigger_price,
             )
         finally:
             try:
@@ -560,10 +575,15 @@ class OpendAdapter:
         acc_id: str,
         price: float | None = None,
         qty: int | None = None,
+        trigger_price: float | None = None,
         trd_env: str = "SIMULATE",
     ) -> dict[str, str]:
-        if price is None and qty is None:
-            raise OpendError("modify_order: provide at least one of price or qty")
+        """Modify price/qty and — for STOP / STOP_LIMIT orders — the trigger
+        price (SDK ``aux_price``)."""
+        if price is None and qty is None and trigger_price is None:
+            raise OpendError(
+                "modify_order: provide at least one of price, qty, or trigger_price"
+            )
         ctx = self._trade_ctx_factory()
         try:
             try:
@@ -579,6 +599,7 @@ class OpendAdapter:
                 price=price if price is not None else 0,
                 acc_id=int(acc_id),
                 trd_env=env,
+                aux_price=trigger_price,
             )
         finally:
             try:

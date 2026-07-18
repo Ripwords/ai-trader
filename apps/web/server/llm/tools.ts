@@ -35,21 +35,25 @@ export function expectedLivePlaceConfirmation(args: {
   side: 'BUY' | 'SELL'
   qty: number
   price?: number
-  order_type?: 'NORMAL' | 'MARKET'
+  order_type?: 'NORMAL' | 'MARKET' | 'STOP' | 'STOP_LIMIT'
+  trigger_price?: number
 }): string {
   const orderType = args.order_type ?? 'NORMAL'
   const pricePart = args.price != null ? ` @ ${formatLiveNumber(args.price)}` : ''
-  return `LIVE PLACE ${args.side} ${args.qty} ${args.code} ${orderType}${pricePart}`.toUpperCase()
+  const triggerPart = args.trigger_price != null ? ` TRIG ${formatLiveNumber(args.trigger_price)}` : ''
+  return `LIVE PLACE ${args.side} ${args.qty} ${args.code} ${orderType}${pricePart}${triggerPart}`.toUpperCase()
 }
 
 export function expectedLiveModifyConfirmation(args: {
   order_id: string
   price?: number
   qty?: number
+  trigger_price?: number
 }): string {
   const pricePart = args.price != null ? ` PRICE ${formatLiveNumber(args.price)}` : ''
   const qtyPart = args.qty != null ? ` QTY ${args.qty}` : ''
-  return `LIVE MODIFY ${args.order_id}${pricePart}${qtyPart}`.toUpperCase()
+  const triggerPart = args.trigger_price != null ? ` TRIG ${formatLiveNumber(args.trigger_price)}` : ''
+  return `LIVE MODIFY ${args.order_id}${pricePart}${qtyPart}${triggerPart}`.toUpperCase()
 }
 
 export function expectedLiveCancelConfirmation(args: { order_id: string }): string {
@@ -327,14 +331,17 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       description:
         'Place a paper trading order (default trd_env=SIMULATE). REFUSE to place live orders ' +
         '(trd_env=REAL) unless the latest user message includes the exact LIVE PLACE confirmation phrase. For NORMAL (limit) orders ' +
-        'price is required; for MARKET orders price is ignored. acc_id is optional for paper — server ' +
+        'price is required; for MARKET orders price is ignored. STOP is a stop-market order ' +
+        '(trigger_price required, price ignored); STOP_LIMIT needs both trigger_price (the trigger) ' +
+        'and price (the limit once triggered). acc_id is optional for paper — server ' +
         'auto-picks the first SIMULATE account if omitted.',
       inputSchema: z.object({
         code: z.string().describe('moomoo symbol like US.NVDA, HK.00700'),
         side: z.enum(['BUY', 'SELL']),
         qty: z.number().int().min(1),
-        price: z.number().optional(),
-        order_type: z.enum(['NORMAL', 'MARKET']).default('NORMAL'),
+        price: z.number().optional().describe('Limit price. Required for NORMAL and STOP_LIMIT; ignored for MARKET and STOP.'),
+        order_type: z.enum(['NORMAL', 'MARKET', 'STOP', 'STOP_LIMIT']).default('NORMAL'),
+        trigger_price: z.number().optional().describe('Trigger (stop) price. Required for STOP and STOP_LIMIT orders; ignored otherwise. For a SELL stop-loss it sits below the market; for a BUY stop above.'),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
         acc_id: z.string().optional(),
         live_confirmation: z.string().optional().describe('Required only for REAL orders. Must exactly match the LIVE PLACE phrase typed by the user in the latest message.'),
@@ -353,12 +360,13 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'trade_modify_order': tool({
       description:
-        'Modify an existing order\'s price and/or quantity. acc_id required. trd_env defaults to SIMULATE. REAL modifies require an exact LIVE MODIFY confirmation phrase in the latest user message.',
+        'Modify an existing order\'s price, quantity, and/or trigger price (for STOP / STOP_LIMIT orders). acc_id required. trd_env defaults to SIMULATE. REAL modifies require an exact LIVE MODIFY confirmation phrase in the latest user message.',
       inputSchema: z.object({
         order_id: z.string(),
         acc_id: z.string(),
         price: z.number().optional(),
         qty: z.number().int().optional(),
+        trigger_price: z.number().optional().describe('New trigger (stop) price, only meaningful when modifying a STOP or STOP_LIMIT order.'),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
         live_confirmation: z.string().optional().describe('Required only for REAL order modifies. Must exactly match the LIVE MODIFY phrase typed by the user in the latest message.'),
       }),

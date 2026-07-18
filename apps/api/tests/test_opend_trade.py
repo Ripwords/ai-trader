@@ -25,6 +25,8 @@ class FakeTradeCtx:
         self._orders = orders_payload or []
         self._fills = fills_payload or []
         self._fail = fail
+        self.place_calls: list[dict] = []
+        self.modify_calls: list[dict] = []
 
     def get_acc_list(self):
         if self._fail:
@@ -50,6 +52,27 @@ class FakeTradeCtx:
         if self._fail:
             return -1, "boom"
         return 0, pd.DataFrame(self._fills)
+
+    def place_order(self, **kwargs):
+        if self._fail:
+            return -1, "boom"
+        self.place_calls.append(kwargs)
+        return 0, pd.DataFrame([
+            {
+                "order_id": "ord-777",
+                "code": kwargs["code"],
+                "qty": kwargs["qty"],
+                "price": kwargs["price"],
+                "order_status": "SUBMITTED",
+                "acc_id": kwargs["acc_id"],
+            }
+        ])
+
+    def modify_order(self, **kwargs):
+        if self._fail:
+            return -1, "boom"
+        self.modify_calls.append(kwargs)
+        return 0, pd.DataFrame([{"order_id": kwargs["order_id"]}])
 
     def close(self):
         pass
@@ -248,6 +271,141 @@ def test_list_fills_returns_typed():
     assert f.side == "SELL"
     assert f.qty == 5
     assert f.price == 115.0
+
+
+# --- place / modify / cancel RPC mapping ----------------------------------
+
+
+def _adapter_with(ctx: FakeTradeCtx) -> OpendAdapter:
+    return OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: ctx)
+
+
+def test_place_limit_order_maps_fields():
+    ctx = FakeTradeCtx()
+    result = _adapter_with(ctx).place_order(
+        code="US.NVDA", side="BUY", qty=10, price=100.0,
+        order_type="NORMAL", trd_env="SIMULATE", acc_id="12345",
+    )
+    assert len(ctx.place_calls) == 1
+    call = ctx.place_calls[0]
+    assert call["code"] == "US.NVDA"
+    assert str(call["trd_side"]) == "BUY"
+    assert str(call["order_type"]) == "NORMAL"
+    assert call["price"] == 100.0
+    assert call["qty"] == 10
+    assert call["aux_price"] is None
+    assert result.order_id == "ord-777"
+    assert result.side == "BUY"
+
+
+def test_place_market_order_sends_zero_price():
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).place_order(
+        code="US.NVDA", side="SELL", qty=5, price=None,
+        order_type="MARKET", trd_env="SIMULATE", acc_id="12345",
+    )
+    call = ctx.place_calls[0]
+    assert str(call["order_type"]) == "MARKET"
+    assert call["price"] == 0
+    assert call["aux_price"] is None
+
+
+def test_place_stop_order_maps_trigger_to_aux_price():
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).place_order(
+        code="US.NVDA", side="SELL", qty=10, price=None,
+        order_type="STOP", trigger_price=95.0,
+        trd_env="SIMULATE", acc_id="12345",
+    )
+    call = ctx.place_calls[0]
+    assert str(call["order_type"]) == "STOP"
+    assert call["aux_price"] == 95.0
+    assert call["price"] == 0  # STOP has no limit price
+
+
+def test_place_stop_order_requires_trigger_price():
+    ctx = FakeTradeCtx()
+    with pytest.raises(OpendError, match="trigger_price"):
+        _adapter_with(ctx).place_order(
+            code="US.NVDA", side="SELL", qty=10,
+            order_type="STOP", trd_env="SIMULATE", acc_id="12345",
+        )
+    assert ctx.place_calls == []
+
+
+def test_place_stop_limit_order_maps_price_and_trigger():
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).place_order(
+        code="US.NVDA", side="SELL", qty=10, price=94.5,
+        order_type="STOP_LIMIT", trigger_price=95.0,
+        trd_env="SIMULATE", acc_id="12345",
+    )
+    call = ctx.place_calls[0]
+    assert str(call["order_type"]) == "STOP_LIMIT"
+    assert call["price"] == 94.5
+    assert call["aux_price"] == 95.0
+
+
+def test_place_stop_limit_requires_both_prices():
+    ctx = FakeTradeCtx()
+    with pytest.raises(OpendError, match="trigger_price"):
+        _adapter_with(ctx).place_order(
+            code="US.NVDA", side="SELL", qty=10, price=94.5,
+            order_type="STOP_LIMIT", trd_env="SIMULATE", acc_id="12345",
+        )
+    with pytest.raises(OpendError, match="price"):
+        _adapter_with(ctx).place_order(
+            code="US.NVDA", side="SELL", qty=10,
+            order_type="STOP_LIMIT", trigger_price=95.0,
+            trd_env="SIMULATE", acc_id="12345",
+        )
+    assert ctx.place_calls == []
+
+
+def test_modify_order_maps_fields_and_aux_price():
+    ctx = FakeTradeCtx()
+    result = _adapter_with(ctx).modify_order(
+        order_id="ord-777", acc_id="12345", price=101.0, qty=8,
+        trigger_price=96.0, trd_env="SIMULATE",
+    )
+    assert len(ctx.modify_calls) == 1
+    call = ctx.modify_calls[0]
+    assert str(call["modify_order_op"]) == "NORMAL"
+    assert call["order_id"] == "ord-777"
+    assert call["price"] == 101.0
+    assert call["qty"] == 8
+    assert call["aux_price"] == 96.0
+    assert result == {"order_id": "ord-777", "status": "MODIFIED"}
+
+
+def test_modify_order_accepts_trigger_only():
+    """Moving just the stop trigger is a valid modify."""
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).modify_order(
+        order_id="ord-777", acc_id="12345", trigger_price=97.0,
+        trd_env="SIMULATE",
+    )
+    assert ctx.modify_calls[0]["aux_price"] == 97.0
+
+
+def test_modify_order_requires_some_change():
+    ctx = FakeTradeCtx()
+    with pytest.raises(OpendError, match="at least one"):
+        _adapter_with(ctx).modify_order(
+            order_id="ord-777", acc_id="12345", trd_env="SIMULATE",
+        )
+    assert ctx.modify_calls == []
+
+
+def test_cancel_order_maps_cancel_op():
+    ctx = FakeTradeCtx()
+    result = _adapter_with(ctx).cancel_order(
+        order_id="ord-777", acc_id="12345", trd_env="SIMULATE",
+    )
+    call = ctx.modify_calls[0]
+    assert str(call["modify_order_op"]) == "CANCEL"
+    assert call["order_id"] == "ord-777"
+    assert result == {"order_id": "ord-777", "status": "CANCELLED"}
 
 
 def test_default_factories_encrypt_when_key_path_set(monkeypatch, tmp_path):

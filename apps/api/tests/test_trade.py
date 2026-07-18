@@ -90,7 +90,10 @@ class FakeTradeAdapter:
 
     def modify_order(self, *, order_id, acc_id, price=None, qty=None,
                      trd_env="SIMULATE", trigger_price=None):
-        self.modified.append({"order_id": order_id, "trd_env": trd_env})
+        self.modified.append({
+            "order_id": order_id, "trd_env": trd_env,
+            "price": price, "qty": qty, "trigger_price": trigger_price,
+        })
         return {"order_id": order_id, "status": "MODIFIED"}
 
     def cancel_order(self, *, order_id, acc_id, trd_env="SIMULATE"):
@@ -139,6 +142,49 @@ def test_fills_endpoint(client_with_bearer_and_fake_trade):
 def test_trade_routes_require_bearer(client):
     res = client.get("/trade/accounts")
     assert res.status_code == 401
+
+
+# --- stop / stop-limit threading -------------------------------------------
+
+
+def test_place_stop_order_threads_trigger_price(
+    client_with_bearer_and_fake_trade, fake_trade_adapter
+):
+    res = client_with_bearer_and_fake_trade.post("/trade/order/place", json={
+        "code": "US.NVDA", "side": "SELL", "qty": 10,
+        "order_type": "STOP", "trigger_price": 95.0,
+        "trd_env": "SIMULATE",
+    })
+    assert res.status_code == 200
+    placed = fake_trade_adapter.placed[0]
+    assert placed["order_type"] == "STOP"
+    assert placed["trigger_price"] == 95.0
+
+
+def test_place_stop_limit_order_threads_both_prices(
+    client_with_bearer_and_fake_trade, fake_trade_adapter
+):
+    res = client_with_bearer_and_fake_trade.post("/trade/order/place", json={
+        "code": "US.NVDA", "side": "SELL", "qty": 10, "price": 94.5,
+        "order_type": "STOP_LIMIT", "trigger_price": 95.0,
+        "trd_env": "SIMULATE",
+    })
+    assert res.status_code == 200
+    placed = fake_trade_adapter.placed[0]
+    assert placed["order_type"] == "STOP_LIMIT"
+    assert placed["price"] == 94.5
+    assert placed["trigger_price"] == 95.0
+
+
+def test_modify_order_threads_trigger_price(
+    client_with_bearer_and_fake_trade, fake_trade_adapter
+):
+    res = client_with_bearer_and_fake_trade.post("/trade/order/modify", json={
+        "order_id": "ord-1", "acc_id": "12345",
+        "trigger_price": 96.0, "trd_env": "SIMULATE",
+    })
+    assert res.status_code == 200
+    assert fake_trade_adapter.modified[0]["trigger_price"] == 96.0
 
 
 # --- live-order gating -----------------------------------------------------

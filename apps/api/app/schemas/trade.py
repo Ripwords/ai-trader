@@ -5,7 +5,9 @@ from pydantic import BaseModel
 
 
 TrdEnv = Literal["SIMULATE", "REAL"]
-OrderType = Literal["NORMAL", "MARKET"]
+# NORMAL = limit, MARKET = market, STOP = stop-market (trigger only),
+# STOP_LIMIT = stop-limit (trigger + limit price). Mirrors moomoo OrderType.
+OrderType = Literal["NORMAL", "MARKET", "STOP", "STOP_LIMIT"]
 
 
 class Account(BaseModel):
@@ -76,8 +78,12 @@ class PlaceOrderRequest(BaseModel):
     code: str
     side: Literal["BUY", "SELL"]
     qty: int
-    price: float | None = None  # required for NORMAL (limit), ignored for MARKET
+    # price: required for NORMAL and STOP_LIMIT (the limit price), ignored
+    # for MARKET and STOP.
+    price: float | None = None
     order_type: OrderType = "NORMAL"
+    # trigger_price: required for STOP / STOP_LIMIT (moomoo aux_price).
+    trigger_price: float | None = None
     trd_env: TrdEnv = "SIMULATE"
     acc_id: str | None = None  # string on wire (see Account.acc_id note); None = first SIMULATE
 
@@ -86,6 +92,8 @@ class ModifyOrderRequest(BaseModel):
     order_id: str
     price: float | None = None
     qty: int | None = None
+    # New trigger price when modifying a STOP / STOP_LIMIT (moomoo aux_price).
+    trigger_price: float | None = None
     trd_env: TrdEnv = "SIMULATE"
     acc_id: str
 
