@@ -12,6 +12,7 @@ import type {
   PlanningSnapshot,
   PlanningSummary,
 } from '../../../server/lib/planning'
+import type { CaptureResult, PortfolioPerformance } from '../../../server/lib/portfolio-history'
 
 useHead({ title: 'portfolio' })
 
@@ -57,6 +58,31 @@ const {
 } = useLazyFetch<PlanningSnapshot[]>('/api/planning/history', {
   server: true,
 })
+const {
+  data: performance,
+  pending: performancePending,
+  error: performanceError,
+  refresh: refreshPerformance,
+} = useLazyFetch<PortfolioPerformance>('/api/portfolio/performance', {
+  server: true,
+})
+const snapshotSaving = ref(false)
+const snapshotMessage = ref('')
+const performanceErrorMessage = computed(() => performanceError.value?.message ?? '')
+
+async function captureSnapshot() {
+  snapshotSaving.value = true
+  snapshotMessage.value = ''
+  try {
+    const result = await $fetch<CaptureResult>('/api/portfolio/capture-snapshot', { method: 'POST' })
+    snapshotMessage.value = result.capturedAt ? `captured ${result.capturedAt.slice(0, 16).replace('T', ' ')}` : 'captured'
+    await refreshPerformance()
+  } catch (err) {
+    snapshotMessage.value = err instanceof Error ? err.message : 'capture failed'
+  } finally {
+    snapshotSaving.value = false
+  }
+}
 const settingsDraft = ref<PlanningSettings | null>(null)
 const settingsSaving = ref(false)
 const settingsMessage = ref('')
@@ -80,6 +106,7 @@ function hardRefresh() {
   refreshPlanning()
   refreshSettings()
   refreshHistory()
+  refreshPerformance()
 }
 
 type SortKey = 'allocation_pct' | 'pnl_pct' | 'market_value' | 'symbol'
@@ -398,6 +425,16 @@ async function capturePlanningSnapshot() {
               <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">since cost basis</div>
               </div>
           </section>
+
+          <PortfolioPerformanceCard
+            :series="performance?.series ?? []"
+            :stats="performance?.stats ?? null"
+            :pending="performancePending"
+            :capturing="snapshotSaving"
+            :error-message="performanceErrorMessage"
+            :message="snapshotMessage"
+            @capture="captureSnapshot()"
+          />
 
           <PortfolioCorrelationMatrix
             :correlation="correlation ?? null"
