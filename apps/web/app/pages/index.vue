@@ -11,7 +11,7 @@ import {
 import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
 import { BorderBeam } from 'vue-border-beam'
 import { requestRunNotificationPermission } from '../lib/notify'
-import { cycleIndex, filterCommandPalette, splitSlashHighlight, type PaletteItem } from '../lib/slash'
+import { buildMirrorStyle, cycleIndex, filterCommandPalette, splitSlashHighlight, type PaletteItem } from '../lib/slash'
 
 definePageMeta({ title: 'chat' })
 
@@ -122,35 +122,24 @@ function onInputBlur() { inputFocused.value = false }
 function syncSlashMirror() {
   const mirror = slashMirror.value
   const ta = findTextarea()
-  if (!mirror || !ta || !slashHighlight.value.cmd) {
+  // Re-assert on every sync: BorderBeam's ClientOnly swap can replace the
+  // textarea after onMounted, and the native spellcheck squiggle paints even
+  // under transparent text while the highlight mirror is active.
+  if (ta && ta.spellcheck) ta.spellcheck = false
+  // Measure against .prompt-wrap directly — it is the positioned ancestor the
+  // absolute mirror resolves against. mirror.offsetParent is null while the
+  // mirror is still display:none (the state this sync is transitioning out
+  // of), and any fallback element measures the wrong box.
+  const host = promptWrap.value
+  if (!mirror || !ta || !host || !slashHighlight.value.cmd) {
     mirrorStyle.value = { display: 'none' }
     return
   }
-  const host = (mirror.offsetParent as HTMLElement | null) ?? ta.parentElement!
-  const tr = ta.getBoundingClientRect()
-  const hr = host.getBoundingClientRect()
-  const cs = getComputedStyle(ta)
-  mirrorStyle.value = {
-    position: 'absolute',
-    left: `${tr.left - hr.left}px`,
-    top: `${tr.top - hr.top}px`,
-    width: `${tr.width}px`,
-    height: `${tr.height}px`,
-    boxSizing: 'border-box',
-    paddingTop: cs.paddingTop,
-    paddingRight: cs.paddingRight,
-    paddingBottom: cs.paddingBottom,
-    paddingLeft: cs.paddingLeft,
-    fontFamily: cs.fontFamily,
-    fontSize: cs.fontSize,
-    fontWeight: cs.fontWeight,
-    fontStyle: cs.fontStyle,
-    lineHeight: cs.lineHeight,
-    letterSpacing: cs.letterSpacing,
-    tabSize: cs.tabSize,
-    textAlign: cs.textAlign,
-    color: cs.color,
-  }
+  mirrorStyle.value = buildMirrorStyle(
+    ta.getBoundingClientRect(),
+    host.getBoundingClientRect(),
+    getComputedStyle(ta),
+  )
   mirror.scrollTop = ta.scrollTop
 }
 
@@ -165,6 +154,7 @@ onMounted(() => {
     inputFocused.value = document.activeElement === ta
     ta.addEventListener('focus', onInputFocus)
     ta.addEventListener('blur', onInputBlur)
+    ta.spellcheck = false
   }
   window.addEventListener('resize', syncSlashMirror, { passive: true })
 })
@@ -818,9 +808,12 @@ function agentsVerdict(output: unknown) {
 }
 
 /* Text-highlight overlay: pixel-aligned with the textarea, painting the
-   command token in the accent colour and the rest in the normal text colour
-   (inherited from the inline `color` copied off the textarea). */
+   command token in the accent colour and the rest in the normal text colour.
+   Colours are owned HERE, not copied off the textarea — its computed color is
+   `transparent` while the highlight is active, so copying it made the args
+   after the command invisible. Same var + fallback as the caret above. */
 .slash-mirror {
+  color: var(--paper-0, #fff);
   z-index: 5;
   margin: 0;
   white-space: pre-wrap;
