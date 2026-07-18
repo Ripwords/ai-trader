@@ -23,6 +23,12 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'dyp-ask', tool: 'dyp_ask',
     description: 'First-principles reasoning answer to a pointed investment question.',
     args: [{ name: 'question', kind: 'text', required: true }] },
+  { name: 'technical-analysis', tool: 'technical_analysis',
+    description: 'Deterministic TA snapshot: SMA ladder, MACD, RSI, Bollinger, ATR, stochastic, OBV, support/resistance + signals.',
+    args: [{ name: 'symbol', kind: 'symbol', required: true }] },
+  { name: 'ta', tool: 'technical_analysis',
+    description: 'Alias of /technical-analysis.',
+    args: [{ name: 'symbol', kind: 'symbol', required: true }] },
 ]
 
 const BY_NAME = new Map(SLASH_COMMANDS.map(c => [c.name, c]))

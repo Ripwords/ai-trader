@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { parseSlashCommand, SLASH_COMMANDS } from '../../server/llm/research/commands'
 
 describe('SLASH_COMMANDS', () => {
-  it('registers all seven commands mapped to their tools', () => {
+  it('registers all nine commands mapped to their tools', () => {
     const names = SLASH_COMMANDS.map(c => c.name).sort()
     expect(names).toEqual([
       'deep-company-series', 'dyp-ask', 'investment-research', 'investment-team',
-      'management-deep-dive', 'news-pulse', 'thesis-tracker',
+      'management-deep-dive', 'news-pulse', 'ta', 'technical-analysis', 'thesis-tracker',
     ])
     const research = SLASH_COMMANDS.find(c => c.name === 'investment-research')!
     expect(research.tool).toBe('investment_research')
@@ -42,6 +42,14 @@ describe('parseSlashCommand', () => {
     const p = parseSlashCommand('/dyp-ask 拼多多的护城河到底在哪里？')!
     expect(p.command.tool).toBe('dyp_ask')
     expect(p.args.question).toBe('拼多多的护城河到底在哪里？')
+  })
+  it('maps /technical-analysis and its /ta alias to the technical_analysis tool', () => {
+    const p1 = parseSlashCommand('/technical-analysis NVDA')!
+    expect(p1.command.tool).toBe('technical_analysis')
+    expect(p1.args.symbol).toBe('NVDA')
+    const p2 = parseSlashCommand('/ta US.TSLA')!
+    expect(p2.command.tool).toBe('technical_analysis')
+    expect(p2.args.symbol).toBe('US.TSLA')
   })
   it('handles news-pulse and thesis-tracker', () => {
     expect(parseSlashCommand('/news-pulse 腾讯')!.command.tool).toBe('news_pulse')

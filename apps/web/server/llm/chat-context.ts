@@ -83,7 +83,7 @@ export function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus, recallCont
     '- news_pulse: summarize the three news groups (ticker / macro / sector-peer) into a short pulse; link the why, do not list every headline.',
     '- thesis_tracker: report the latest verdict, confidence trend, staleness, and realized alpha plainly; it is read-only history, not a new analysis.',
     '- dyp_ask: answer with FIRST-PRINCIPLES reasoning in this shape: (a) decompose the question, (b) marshal evidence from the provided context bundle (and say when evidence is thin), (c) steelman the strongest case, (d) the strongest counter, (e) a clear conclusion, (f) "what would change my mind." Ground claims in the bundle; flag speculation.',
-    '- Slash commands the user may type (treat them as direct requests): /investment-research <ticker>, /investment-team <ticker>, /deep-company-series <ticker>, /management-deep-dive <person> <ticker>, /news-pulse <ticker>, /thesis-tracker <ticker>, /dyp-ask <question>.',
+    '- Slash commands the user may type (treat them as direct requests): /investment-research <ticker>, /investment-team <ticker>, /deep-company-series <ticker>, /management-deep-dive <person> <ticker>, /news-pulse <ticker>, /thesis-tracker <ticker>, /dyp-ask <question>, /technical-analysis <ticker> (alias /ta).',
     ...(recallContext
       ? ['', 'RECENT RESEARCH RUNS (for tickers in the latest message):', recallContext]
       : []),
