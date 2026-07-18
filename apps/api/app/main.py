@@ -23,6 +23,7 @@ from app.services.algo.scheduler import (
     Scheduler,
     install_scheduler,
 )
+from app.services.paper_orders import record_paper_order
 from app.settings import get_settings
 
 
@@ -113,9 +114,9 @@ def _make_opend_bridges():
         return await asyncio.to_thread(_do)
 
     async def place_paper_order(symbol: str, side: str, qty: int) -> str | None:
-        def _do() -> str | None:
+        def _do():
             ad = _adapter()
-            res = ad.place_order(
+            return ad.place_order(
                 code=symbol,
                 side=side,  # type: ignore[arg-type]
                 qty=qty,
@@ -124,9 +125,24 @@ def _make_opend_bridges():
                 trd_env="SIMULATE",
                 acc_id=None,
             )
-            return res.order_id
 
-        return await asyncio.to_thread(_do)
+        res = await asyncio.to_thread(_do)
+        # Best-effort paper_orders ledger row — record_paper_order never
+        # raises, so a ledger/db hiccup can't fail the order we just placed.
+        await record_paper_order(
+            source="algo",
+            symbol=res.code,
+            side=res.side,
+            qty=res.qty,
+            moomoo_order_id=res.order_id,
+            acc_id=res.acc_id,
+            price=res.price,
+            order_type="MARKET",
+            trd_env="SIMULATE",
+            status=res.status,
+            raw=res.model_dump(mode="json"),
+        )
+        return res.order_id
 
     return get_klines, get_position, get_account_summary, place_paper_order
 
