@@ -649,3 +649,91 @@ class OpendAdapter:
             )
             for _, r in data.iterrows()
         ]
+
+    def list_history_orders(
+        self,
+        *,
+        acc_id: str,
+        trd_env: str = "SIMULATE",
+        start: str | None = None,
+        end: str | None = None,
+        code: str = "",
+    ) -> list[Order]:
+        """Historical orders via history_order_list_query.
+
+        ``start``/``end`` are YYYY-MM-DD strings; empty means "let the SDK use
+        its default window". Unlike order_list_query this hits the server-side
+        history store, so it is not limited to today's session.
+        """
+        ctx = self._trade_ctx_factory()
+        try:
+            env = self._resolve_trd_env(trd_env)
+            ret, data = ctx.history_order_list_query(
+                code=code or "",
+                start=start or "",
+                end=end or "",
+                trd_env=env,
+                acc_id=int(acc_id),
+            )
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"history_order_list_query failed: {data}")
+        return [
+            Order(
+                order_id=str(r["order_id"]),
+                code=str(r["code"]),
+                side="BUY" if str(r.get("trd_side", "BUY")).upper().startswith("B") else "SELL",
+                qty=int(r.get("qty", 0)),
+                price=float(r.get("price", 0) or 0),
+                status=str(r.get("order_status", "")),
+                created_at=datetime.fromisoformat(str(r["create_time"])),
+            )
+            for _, r in data.iterrows()
+        ]
+
+    def list_history_fills(
+        self,
+        *,
+        acc_id: str,
+        trd_env: str = "SIMULATE",
+        start: str | None = None,
+        end: str | None = None,
+        code: str = "",
+    ) -> list[Fill]:
+        """Historical fills (executed deals) via history_deal_list_query.
+
+        Same range semantics as :meth:`list_history_orders`.
+        """
+        ctx = self._trade_ctx_factory()
+        try:
+            env = self._resolve_trd_env(trd_env)
+            ret, data = ctx.history_deal_list_query(
+                code=code or "",
+                start=start or "",
+                end=end or "",
+                trd_env=env,
+                acc_id=int(acc_id),
+            )
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if ret != 0:
+            raise OpendError(f"history_deal_list_query failed: {data}")
+        return [
+            Fill(
+                fill_id=str(r["deal_id"]),
+                order_id=str(r["order_id"]),
+                code=str(r["code"]),
+                side="BUY" if str(r.get("trd_side", "BUY")).upper().startswith("B") else "SELL",
+                qty=int(r.get("qty", 0)),
+                price=float(r.get("price", 0) or 0),
+                fill_at=datetime.fromisoformat(str(r["create_time"])),
+            )
+            for _, r in data.iterrows()
+        ]
