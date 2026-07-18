@@ -13,6 +13,44 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 
+class _FakeConn:
+    """Minimal asyncpg-connection stand-in for the cost-cap fetchval."""
+
+    def __init__(self, spent: float, calls: list | None = None) -> None:
+        self._spent = spent
+        self._calls = calls
+
+    async def fetchval(self, query: str, *args) -> float:
+        if self._calls is not None:
+            self._calls.append((query, args))
+        return self._spent
+
+
+class _FakeAcquireCtx:
+    def __init__(self, conn: _FakeConn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> _FakeConn:
+        return self._conn
+
+    async def __aexit__(self, *a) -> None:
+        return None
+
+
+class _FakePool:
+    """Fake asyncpg pool reporting a fixed daily spend.
+
+    Runs now hard-require a pool (fail-closed cost cap), so every test that
+    exercises the happy path attaches one of these to ``app.state.pg_pool``.
+    """
+
+    def __init__(self, spent: float = 0.0, calls: list | None = None) -> None:
+        self._conn = _FakeConn(spent, calls)
+
+    def acquire(self) -> _FakeAcquireCtx:
+        return _FakeAcquireCtx(self._conn)
+
+
 @pytest.mark.asyncio
 async def test_unauthorized() -> None:
     from app.main import create_app
@@ -68,6 +106,7 @@ async def test_streams_canned_events(monkeypatch: pytest.MonkeyPatch) -> None:
 
     headers = {"authorization": f"Bearer {os.environ['INTERNAL_BEARER']}"}
     app = create_app()
+    app.state.pg_pool = _FakePool()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://t") as c:
         async with c.stream(
@@ -106,6 +145,7 @@ async def test_emits_error_event_on_run_failure(monkeypatch: pytest.MonkeyPatch)
 
     headers = {"authorization": "Bearer test-bearer"}
     app = create_app()
+    app.state.pg_pool = _FakePool()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://t") as c:
         async with c.stream(
@@ -212,23 +252,8 @@ async def test_run_aborts_when_daily_cap_exceeded(
     monkeypatch.setattr(graph_mod, "run_graph", boom_run)
     monkeypatch.setattr(graph_mod, "build_graph", fake_build_graph)
 
-    class FakeConn:
-        async def fetchval(self, query: str, *args) -> float:
-            return 5.50  # over the 5.00 cap
-
-    class FakeAcquireCtx:
-        async def __aenter__(self) -> FakeConn:
-            return FakeConn()
-
-        async def __aexit__(self, *a) -> None:
-            return None
-
-    class FakePool:
-        def acquire(self) -> FakeAcquireCtx:
-            return FakeAcquireCtx()
-
     app = create_app()
-    app.state.pg_pool = FakePool()
+    app.state.pg_pool = _FakePool(spent=5.50)  # over the 5.00 cap
 
     headers = {"authorization": "Bearer test-bearer"}
     transport = ASGITransport(app=app)
@@ -287,23 +312,8 @@ async def test_run_proceeds_when_under_daily_cap(
     monkeypatch.setattr(graph_mod, "run_graph", fake_run_graph)
     monkeypatch.setattr(graph_mod, "build_graph", fake_build_graph)
 
-    class FakeConn:
-        async def fetchval(self, query: str, *args) -> float:
-            return 0.50
-
-    class FakeAcquireCtx:
-        async def __aenter__(self) -> FakeConn:
-            return FakeConn()
-
-        async def __aexit__(self, *a) -> None:
-            return None
-
-    class FakePool:
-        def acquire(self) -> FakeAcquireCtx:
-            return FakeAcquireCtx()
-
     app = create_app()
-    app.state.pg_pool = FakePool()
+    app.state.pg_pool = _FakePool(spent=0.50)
 
     headers = {"authorization": "Bearer test-bearer"}
     transport = ASGITransport(app=app)
@@ -321,6 +331,71 @@ async def test_run_proceeds_when_under_daily_cap(
 
     assert any(e["type"] == "decision" for e in lines)
     assert lines[-1]["type"] == "run-end"
+
+
+@pytest.mark.asyncio
+async def test_run_refuses_with_503_when_pool_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No asyncpg pool means the daily cost cap can't be checked. Fail
+    closed: refuse to start the run rather than running uncapped."""
+    monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
+    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
+
+    from app.main import create_app
+    from app.settings import get_settings
+
+    get_settings.cache_clear()
+
+    headers = {"authorization": "Bearer test-bearer"}
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        r = await c.post("/agents/run", json={"symbol": "NVDA"}, headers=headers)
+        assert r.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_missing_user_id_enforces_global_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without x-user-id the cap is enforced against the global bucket —
+    the run must still be blocked when the summed spend is over cap."""
+    monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
+    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
+    monkeypatch.setenv("AGENTS_DAILY_COST_USD_CAP", "5.00")
+
+    from app.main import create_app
+    from app.services.agents import graph as graph_mod
+    from app.settings import get_settings
+
+    get_settings.cache_clear()
+
+    def fake_build_graph(opend_client, **kwargs):
+        raise AssertionError("build_graph must not be called when cap is exceeded")
+
+    monkeypatch.setattr(graph_mod, "build_graph", fake_build_graph)
+
+    calls: list = []
+    app = create_app()
+    app.state.pg_pool = _FakePool(spent=9.99, calls=calls)
+
+    headers = {"authorization": "Bearer test-bearer"}  # NO x-user-id
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        async with c.stream(
+            "POST", "/agents/run", json={"symbol": "NVDA"}, headers=headers
+        ) as r:
+            assert r.status_code == 200
+            lines = [
+                json.loads(line) async for line in r.aiter_lines() if line.strip()
+            ]
+
+    assert any(
+        e["type"] == "error" and "daily cap exceeded" in e["message"] for e in lines
+    )
+    # The spend query ran without a user filter (global bucket).
+    assert calls and "user_id" not in calls[0][0]
+    assert calls[0][1] == ()
 
 
 @pytest.mark.asyncio
@@ -401,6 +476,7 @@ async def test_run_end_carries_accumulated_token_totals(
 
     headers = {"authorization": "Bearer test-bearer"}
     app = create_app()
+    app.state.pg_pool = _FakePool()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://t") as c:
         async with c.stream(

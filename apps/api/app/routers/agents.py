@@ -64,26 +64,39 @@ def _compute_run_cost(tokens_in: int, tokens_out: int) -> float:
     ``google_genai``) returned by ``build_tradingagents_config``. We parse
     ``LLM_MODEL`` directly to get the env-convention pair.
 
-    Returns ``0.0`` and logs a warning when the model isn't in the pricing
-    table — better to ship a row with zero cost than to surface a hard error
-    on an unknown model. Token totals still land in the DB regardless.
+    An unknown model (no pricing entry, or an unparseable ``LLM_MODEL``)
+    is charged at conservative fallback rates from settings
+    (``AGENTS_FALLBACK_INPUT_USD_PER_1M`` / ``AGENTS_FALLBACK_OUTPUT_USD_PER_1M``)
+    with a warning — never ``0.0``, so an unknown model can't free-ride under
+    the daily cap. Token totals land in the DB regardless.
     """
     import os as _os
 
     from app.services.agents.model_config import parse_model_spec
 
+    def _fallback(reason: str) -> float:
+        settings = get_settings()
+        cost = (
+            settings.AGENTS_FALLBACK_INPUT_USD_PER_1M * tokens_in
+            + settings.AGENTS_FALLBACK_OUTPUT_USD_PER_1M * tokens_out
+        ) / 1_000_000
+        logger.warning(
+            "%s; charging conservative fallback rates "
+            "($%.2f in / $%.2f out per 1M tokens) -> cost_usd=%.6f",
+            reason,
+            settings.AGENTS_FALLBACK_INPUT_USD_PER_1M,
+            settings.AGENTS_FALLBACK_OUTPUT_USD_PER_1M,
+            cost,
+        )
+        return float(cost)
+
     try:
         spec = parse_model_spec(_os.environ["LLM_MODEL"])
     except Exception as e:  # noqa: BLE001
-        logger.warning("could not resolve provider/model for pricing: %s", e)
-        return 0.0
+        return _fallback(f"could not resolve provider/model for pricing: {e}")
     cost = pricing_mod.price_run(spec.provider, spec.model_id, tokens_in, tokens_out)
     if cost is None:
-        logger.warning(
-            "no pricing entry for %s/%s; reporting cost_usd=0.0",
-            spec.provider, spec.model_id,
-        )
-        return 0.0
+        return _fallback(f"no pricing entry for {spec.provider}/{spec.model_id}")
     return float(cost)
 
 
@@ -147,6 +160,21 @@ async def run_agents(
     run_id = body.run_id or str(uuid.uuid4())
     trade_date = body.trade_date or date_t.today()
 
+    # Fail closed: without an asyncpg pool the daily cost cap can't be
+    # checked, so refuse to start the run at all (503 before any streaming).
+    pool = getattr(request.app.state, "pg_pool", None)
+    if pool is None:
+        logger.error(
+            "refusing agents run %s: pg pool unavailable (DATABASE_URL unset "
+            "or pool creation failed at startup) — the daily cost cap cannot "
+            "be enforced without it",
+            run_id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="db not ready — cost cap cannot be enforced, refusing run",
+        )
+
     async def _stream() -> AsyncIterator[bytes]:
         # Register the current task so DELETE /agents/run/{run_id} can cancel
         # it. We register inside ``_stream`` (rather than around the call to
@@ -157,53 +185,56 @@ async def run_agents(
             _active_runs[run_id] = task
 
         # Cost-cap check happens *before* graph construction so we don't pay
-        # for compiling a doomed run. The asyncpg pool is wired by the FastAPI
-        # lifespan; if it's missing (unit tests, dev without DB), skip the
-        # check — degrades open rather than refusing every run. Same for
-        # missing ``x-user-id`` (we can't sum-by-user without one). On cap
+        # for compiling a doomed run. A missing ``x-user-id`` no longer skips
+        # the check — spend is enforced against the global bucket (today's
+        # spend across all users) instead, which is fail-closed. On cap
         # exceeded we still emit ``run-start`` first so the wire stream's
         # event taxonomy is well-formed (the client expects run-start as the
         # opener); then ``error``; then the ``finally`` block emits run-end.
         settings = get_settings()
-        pool = getattr(request.app.state, "pg_pool", None)
-        if pool is not None and x_user_id:
-            try:
-                async with pool.acquire() as conn:
-                    await assert_under_daily_cap(
-                        conn, x_user_id, settings.AGENTS_DAILY_COST_USD_CAP
-                    )
-            except DailyCapExceeded as e:
-                yield (
-                    json.dumps(
-                        {
-                            "type": "run-start",
-                            "run_id": run_id,
-                            "symbol": body.symbol,
-                            "config": {
-                                "max_debate_rounds": body.max_debate_rounds,
-                                "deep_thinking": body.deep_thinking,
-                            },
-                        }
-                    )
-                    + "\n"
-                ).encode()
-                yield (
-                    json.dumps({"type": "error", "message": str(e)}) + "\n"
-                ).encode()
-                _active_runs.pop(run_id, None)
-                yield (
-                    json.dumps(
-                        {
-                            "type": "run-end",
-                            "run_id": run_id,
-                            "tokens_in": 0,
-                            "tokens_out": 0,
-                            "cost_usd": 0.0,
-                        }
-                    )
-                    + "\n"
-                ).encode()
-                return
+        if not x_user_id:
+            logger.warning(
+                "agents run %s has no x-user-id; enforcing the daily cap "
+                "against the global bucket",
+                run_id,
+            )
+        try:
+            async with pool.acquire() as conn:
+                await assert_under_daily_cap(
+                    conn, x_user_id, settings.AGENTS_DAILY_COST_USD_CAP
+                )
+        except DailyCapExceeded as e:
+            yield (
+                json.dumps(
+                    {
+                        "type": "run-start",
+                        "run_id": run_id,
+                        "symbol": body.symbol,
+                        "config": {
+                            "max_debate_rounds": body.max_debate_rounds,
+                            "deep_thinking": body.deep_thinking,
+                        },
+                    }
+                )
+                + "\n"
+            ).encode()
+            yield (
+                json.dumps({"type": "error", "message": str(e)}) + "\n"
+            ).encode()
+            _active_runs.pop(run_id, None)
+            yield (
+                json.dumps(
+                    {
+                        "type": "run-end",
+                        "run_id": run_id,
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                        "cost_usd": 0.0,
+                    }
+                )
+                + "\n"
+            ).encode()
+            return
 
         opend = getattr(request.app.state, "opend_client", None)
         checkpointer = getattr(request.app.state, "checkpointer", None)

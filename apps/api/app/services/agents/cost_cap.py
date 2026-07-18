@@ -21,8 +21,27 @@ WHERE user_id = $1
   AND started_at >= date_trunc('day', now() AT TIME ZONE 'UTC')
 """
 
+# "Global" bucket: no user filter — sums today's spend across ALL runs.
+# Used when the caller didn't forward an x-user-id; enforcing against the
+# whole day's spend is fail-closed (strictly tighter than any per-user sum).
+_QUERY_GLOBAL = """
+SELECT COALESCE(SUM(cost_usd), 0)::float
+FROM agent_runs
+WHERE started_at >= date_trunc('day', now() AT TIME ZONE 'UTC')
+"""
 
-async def assert_under_daily_cap(db: DBExec, user_id: str, cap_usd: float) -> None:
-    spent = await db.fetchval(_QUERY, user_id) or 0.0
+
+async def assert_under_daily_cap(
+    db: DBExec, user_id: str | None, cap_usd: float
+) -> None:
+    """Raise :class:`DailyCapExceeded` when today's spend is at/over the cap.
+
+    ``user_id=None`` (or empty) enforces against the global bucket instead of
+    skipping the check — a missing user id must never disable the cap.
+    """
+    if user_id:
+        spent = await db.fetchval(_QUERY, user_id) or 0.0
+    else:
+        spent = await db.fetchval(_QUERY_GLOBAL) or 0.0
     if spent >= cap_usd:
         raise DailyCapExceeded(spent_usd=float(spent), cap_usd=cap_usd)
