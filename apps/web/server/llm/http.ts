@@ -236,6 +236,30 @@ export class ApiClient {
   }): Promise<{ order_id: string; status: string }> {
     return this.fetch('/trade/order/cancel', { method: 'POST', body: args })
   }
+
+  valuationScreen(args: { symbols?: string[] } = {}): Promise<ValuationScreenResponse> {
+    const query = args.symbols?.length ? { symbols: args.symbols.join(',') } : undefined
+    return this.fetch('/valuation/screen', { query })
+  }
+}
+
+// Decimal fields cross the wire as strings (pydantic v2 JSON serialization).
+export interface ValuationScreenRow {
+  symbol: string
+  fair_value: string | null
+  current_price: string | null
+  margin_of_safety_pct: string | null
+  data_quality: 'full' | 'multiples_only' | 'unavailable' | null
+  veto: boolean | null
+  error: string | null
+}
+
+export interface ValuationScreenResponse {
+  rows: ValuationScreenRow[]
+  total_symbols: number
+  truncated: boolean
+  source: 'watchlist' | 'symbols'
+  warnings: string[]
 }
 
 export interface PlaceOrderResult {

@@ -294,6 +294,24 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'value_screen': tool({
+      description:
+        'Rank the user\'s moomoo watchlist by valuation margin of safety — find cheap stocks '
+        + 'the user follows. Runs the deterministic DCF for every watchlist symbol and returns rows '
+        + 'sorted by margin of safety descending (nulls/errors last): fair value, current price, '
+        + 'margin of safety, data quality, and veto flag. Pass symbols to screen an explicit list '
+        + 'instead of the watchlist. Use for "which of my stocks is cheapest", "screen my watchlist", '
+        + '"any bargains I follow". Capped at 25 symbols per sweep.',
+      inputSchema: z.object({
+        symbols: z
+          .array(z.string())
+          .optional()
+          .describe('Optional explicit symbols in moomoo form (US.NVDA, HK.00700); omit to screen the watchlist'),
+      }),
+      execute: async ({ symbols }) =>
+        client.valuationScreen(symbols?.length ? { symbols } : {}),
+    }),
+
     'trade_portfolio': tool({
       description: 'Get positions and cash for an account. Read-only. Defaults to REAL.',
       inputSchema: z.object({
