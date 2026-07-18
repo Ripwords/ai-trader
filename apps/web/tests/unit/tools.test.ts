@@ -102,8 +102,16 @@ vi.mock('../../server/lib/alerts', () => ({
   cancelAlert: alertsMock.cancelAlert,
 }))
 
+const yahooBarsMock = vi.hoisted(() => ({
+  getDailyBars: vi.fn(async () => Array.from({ length: 260 }, (_, i) => ({
+    time: `2025-01-${String((i % 28) + 1).padStart(2, '0')}`,
+    open: 100 + i, high: 100 + i, low: 100 + i, close: 100 + i, volume: 1000 + i,
+  }))),
+}))
+
 vi.mock('../../server/lib/yahoo', () => ({
   resolveSymbol: alertsMock.resolveSymbolMock,
+  getDailyBars: yahooBarsMock.getDailyBars,
 }))
 
 // Stand-in for ApiClient — only the methods our tools call.
@@ -166,6 +174,7 @@ describe('tool catalogue', () => {
       'research_status',
       'search_news',
       'search_web',
+      'technical_analysis',
       'thesis_tracker',
       'ticker_news_context',
       'trade_account_overview',
@@ -492,6 +501,42 @@ describe('tool catalogue', () => {
     const tools = makeTools(c as unknown as ApiClient)
     await (tools['value_screen'] as { execute: (args: { symbols?: string[] }) => Promise<unknown> }).execute({})
     expect(c.valuationScreen).toHaveBeenCalledWith({})
+  })
+
+  it('technical_analysis resolves the symbol, fetches daily bars, and returns the snapshot + signals', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['technical_analysis'] as { execute: (args: { symbol: string; lookback_days: number }) => Promise<unknown> })
+      .execute({ symbol: 'NVDA', lookback_days: 365 })
+
+    expect(alertsMock.resolveSymbolMock).toHaveBeenCalledWith('NVDA')
+    // 365 calendar days ~ 252 trading bars, floored at 250 so SMA200 resolves
+    expect(yahooBarsMock.getDailyBars).toHaveBeenCalledWith('US.NVDA', 252)
+    const result = out as { symbol: string; name: string; bar_count: number; snapshot: { trend: string; signals: unknown[]; rsi14: number } }
+    expect(result.symbol).toBe('US.NVDA')
+    expect(result.bar_count).toBe(260)
+    expect(result.snapshot.trend).toBe('up')
+    expect(Array.isArray(result.snapshot.signals)).toBe(true)
+    expect(result.snapshot.signals.length).toBeGreaterThan(0)
+  })
+
+  it('technical_analysis surfaces an unresolved symbol instead of guessing', async () => {
+    yahooBarsMock.getDailyBars.mockClear()
+    alertsMock.resolveSymbolMock.mockResolvedValueOnce({
+      status: 'not_found',
+    } as unknown as Awaited<ReturnType<typeof alertsMock.resolveSymbolMock>>)
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['technical_analysis'] as { execute: (args: { symbol: string; lookback_days: number }) => Promise<unknown> })
+      .execute({ symbol: 'ZZZZZ', lookback_days: 365 })
+    expect(out).toMatchObject({ error: expect.stringContaining('ZZZZZ') })
+    expect(yahooBarsMock.getDailyBars).not.toHaveBeenCalled()
+  })
+
+  it('technical_analysis reports empty bar history as an error', async () => {
+    yahooBarsMock.getDailyBars.mockResolvedValueOnce([])
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['technical_analysis'] as { execute: (args: { symbol: string; lookback_days: number }) => Promise<unknown> })
+      .execute({ symbol: 'NVDA', lookback_days: 365 })
+    expect(out).toMatchObject({ error: expect.stringContaining('no daily bars') })
   })
 
   it('alert_cancel reports a missing alert as an error', async () => {

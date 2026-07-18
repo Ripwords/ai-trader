@@ -312,6 +312,44 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         client.valuationScreen(symbols?.length ? { symbols } : {}),
     }),
 
+    'technical_analysis': tool({
+      description:
+        'Deterministic technical analysis of a symbol from daily OHLCV bars: SMA 20/50/200 ladder, '
+        + 'EMA/MACD(12,26,9) with recent cross detection, RSI(14), Bollinger(20,2) %B and bandwidth, '
+        + 'ATR(14) and ATR%, stochastic %K/%D, OBV trend, volume vs 20-day average, golden/death '
+        + 'cross, swing support/resistance levels, and a signals array of honest rule-based readings '
+        + '(bullish/bearish/neutral per indicator — not predictions). Use for "TA on NVDA", '
+        + '"is TSLA overbought", "support levels for AAPL", or MACD/RSI/moving-average questions.',
+      inputSchema: z.object({
+        symbol: z.string().describe('Ticker, e.g. NVDA, US.NVDA, HK.00700'),
+        lookback_days: z.number().int().min(250).max(1460).default(365)
+          .describe('Calendar-day lookback for daily bars (min 250 so SMA200 can resolve)'),
+      }),
+      execute: async ({ symbol, lookback_days }) => {
+        const { resolveSymbol, getDailyBars } = await import('../lib/yahoo')
+        const { computeTechnicals } = await import('./research/technicals')
+        const resolution = await resolveSymbol(symbol)
+        if (resolution.status !== 'resolved') {
+          return {
+            error: `could not resolve symbol "${symbol}" (${resolution.status})`,
+            ...(resolution.status === 'ambiguous' ? { candidates: resolution.candidates } : {}),
+          }
+        }
+        // ~252 trading days per 365 calendar days; floor at 250 bars for SMA200.
+        const barLimit = Math.min(1000, Math.max(250, Math.round(lookback_days * 252 / 365)))
+        const bars = await getDailyBars(resolution.symbol, barLimit)
+        if (!bars.length) {
+          return { error: `no daily bars available for ${resolution.symbol}`, symbol: resolution.symbol }
+        }
+        return {
+          symbol: resolution.symbol,
+          name: resolution.name,
+          bar_count: bars.length,
+          snapshot: computeTechnicals(bars),
+        }
+      },
+    }),
+
     'trade_portfolio': tool({
       description: 'Get positions and cash for an account. Read-only. Defaults to REAL.',
       inputSchema: z.object({
