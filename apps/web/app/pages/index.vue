@@ -534,6 +534,10 @@ function agentsVerdict(output: unknown) {
                 v-else-if="hasOutput(part) && getToolName(part) === 'value_stock' && (getToolOutput(part) as any)?.veto"
                 :result="getToolOutput(part) as any"
               />
+              <TechnicalsCard
+                v-else-if="hasOutput(part) && getToolName(part) === 'technical_analysis'"
+                :result="getToolOutput(part) as any"
+              />
               <ToolStatusCard
                 v-else
                 :tool-name="getToolName(part)"
