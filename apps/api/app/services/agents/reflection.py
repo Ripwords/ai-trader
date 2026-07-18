@@ -40,6 +40,10 @@ class RealizedReturn:
     benchmark_return: float
     alpha: float
     outcome: Outcome
+    # Symbol close at the horizon exit — feeds the valuation-error note
+    # (fair value vs what the price actually did). None when unknown
+    # (e.g. the placeholder written on a failed price fetch).
+    realized_price: float | None = None
 
 
 class _OpenDLike(Protocol):
@@ -225,6 +229,7 @@ async def compute_realized_return(
         benchmark_return=round(spy_ret, 4),
         alpha=round(alpha, 4),
         outcome=_classify_outcome(rating, alpha),
+        realized_price=round(float(sym_exit["close"]), 6),
     )
 
 
@@ -294,7 +299,7 @@ async def write_reflection_text(
 # regardless. LIMIT 50 keeps a single reflect pass bounded.
 _PENDING_SQL = """
 SELECT d.id, d.run_id, d.user_id, d.symbol, d.trade_date,
-       d.rating, d.confidence, d.rationale,
+       d.rating, d.confidence, d.rationale, d.created_at,
        r_count.count AS reflection_count,
        run.final_state AS final_state
 FROM agent_decisions d
@@ -322,6 +327,85 @@ _REFLECTION_ROLES: tuple[tuple[str, str, str], ...] = (
 )
 
 
+# Roles whose run-time prompts included the deterministic valuation summary
+# (see graph.run_graph's memory seeding) — only they get the post-hoc
+# valuation-error note, so the feedback lands where the context existed.
+_VALUATION_NOTE_ROLES: frozenset[str] = frozenset({"invest_judge", "risk_manager"})
+
+
+def _format_valuation_note(
+    fair_value: float,
+    mos_pct: float | None,
+    realized_price: float,
+    horizon_days: int,
+) -> str:
+    """One compact line comparing the DCF fair value to the realized price.
+
+    The 'valuation error' is (fair_value - realized_price) / realized_price:
+    a positive error means the DCF called the stock worth more than the
+    market subsequently priced it — too optimistic (beyond a 10% tolerance
+    band; inside the band it was 'about right').
+    """
+    err = (fair_value - realized_price) / realized_price
+    if err > 0.10:
+        verdict = f"too optimistic (fair value {err:.1%} above the realized price)"
+    elif err < -0.10:
+        verdict = f"too pessimistic (fair value {abs(err):.1%} below the realized price)"
+    else:
+        verdict = f"about right (within {abs(err):.1%})"
+    mos_part = f" (MoS {mos_pct:.1%})" if mos_pct is not None else ""
+    return (
+        f"valuation called fair value {fair_value:.2f}{mos_part}; "
+        f"price at the {horizon_days}d horizon was {realized_price:.2f} — "
+        f"the DCF was {verdict}"
+    )
+
+
+# Closest-in-time snapshot at/before the decision. agent_run snapshots are
+# preferred over chat/screener ones (they're what the judges actually saw
+# at run time), then recency breaks ties.
+_VALUATION_SNAPSHOT_SQL = """
+SELECT fair_value::float AS fair_value,
+       margin_of_safety_pct::float AS mos
+FROM valuation_snapshots
+WHERE symbol = $1 AND fair_value IS NOT NULL AND created_at <= $2
+ORDER BY (source = 'agent_run') DESC, created_at DESC
+LIMIT 1
+"""
+
+
+async def _valuation_note_for_decision(
+    conn: Any,
+    symbol: str,
+    decision_created_at: Any,
+    realized: RealizedReturn,
+    horizon_days: int,
+) -> str | None:
+    """Look up the decision-time valuation snapshot and format the error note.
+
+    Degrades to ``None`` on every miss: no snapshot stored, snapshot without
+    a fair value, no realized price, or any query error (e.g. the
+    valuation_snapshots table not yet migrated).
+    """
+    if realized.realized_price is None or realized.realized_price <= 0:
+        return None
+    try:
+        row = await conn.fetchrow(
+            _VALUATION_SNAPSHOT_SQL, symbol, decision_created_at
+        )
+    except Exception as e:  # noqa: BLE001 - the note is best-effort context
+        print(f"[reflection] valuation snapshot lookup failed for {symbol}: {e}")
+        return None
+    if row is None or row["fair_value"] is None:
+        return None
+    return _format_valuation_note(
+        fair_value=row["fair_value"],
+        mos_pct=row["mos"],
+        realized_price=realized.realized_price,
+        horizon_days=horizon_days,
+    )
+
+
 def _role_input(final_state: dict[str, Any] | None, source_field: str) -> str:
     """Pull the per-role input text out of ``agent_runs.final_state``.
 
@@ -341,8 +425,43 @@ def _role_input(final_state: dict[str, Any] | None, source_field: str) -> str:
     return final_state.get(source_field, "")
 
 
+def _role_reflection_prompt(
+    role_prefix: str,
+    role_input: str,
+    realized: RealizedReturn,
+    valuation_note: str | None = None,
+) -> str:
+    """Build the role-specific reflection prompt.
+
+    ``valuation_note`` (when present) is the compact fair-value-vs-realized
+    line — only passed for the roles that saw the valuation summary at run
+    time (invest_judge, risk_manager), so the lesson can call out whether
+    the DCF anchored them well or poorly.
+    """
+    valuation_part = (
+        f"Deterministic valuation check: {valuation_note}\n" if valuation_note else ""
+    )
+    return (
+        f"You are reflecting on the {role_prefix}'s past contribution to a trading "
+        f"decision so future {role_prefix.lower()}s on similar setups make better "
+        f"calls.\n\n"
+        f"{role_prefix} analysis/decision:\n{role_input[:4000]}\n\n"
+        f"Realized return: {realized.realized_return:+.2f}%\n"
+        f"Benchmark (SPY): {realized.benchmark_return:+.2f}%\n"
+        f"Alpha: {realized.alpha:+.2f}%\n"
+        f"Outcome: {realized.outcome}\n"
+        f"{valuation_part}\n"
+        f"In 2-3 sentences, write a concrete lesson SPECIFICALLY for the "
+        f"{role_prefix}. Reference what they argued or recommended; don't "
+        f"speak about the overall trade. Output the lesson only — no preamble."
+    )
+
+
 async def _write_role_reflection(
-    role_prefix: str, role_input: str, realized: RealizedReturn
+    role_prefix: str,
+    role_input: str,
+    realized: RealizedReturn,
+    valuation_note: str | None = None,
 ) -> str:
     """Ask the quick LLM for a role-specific 2-3 sentence lesson.
 
@@ -358,19 +477,7 @@ async def _write_role_reflection(
         return f"[{role_prefix} did not run for this decision; no input to reflect on]"
 
     chat = _build_chat_for_quick_model()
-    prompt = (
-        f"You are reflecting on the {role_prefix}'s past contribution to a trading "
-        f"decision so future {role_prefix.lower()}s on similar setups make better "
-        f"calls.\n\n"
-        f"{role_prefix} analysis/decision:\n{role_input[:4000]}\n\n"
-        f"Realized return: {realized.realized_return:+.2f}%\n"
-        f"Benchmark (SPY): {realized.benchmark_return:+.2f}%\n"
-        f"Alpha: {realized.alpha:+.2f}%\n"
-        f"Outcome: {realized.outcome}\n\n"
-        f"In 2-3 sentences, write a concrete lesson SPECIFICALLY for the "
-        f"{role_prefix}. Reference what they argued or recommended; don't "
-        f"speak about the overall trade. Output the lesson only — no preamble."
-    )
+    prompt = _role_reflection_prompt(role_prefix, role_input, realized, valuation_note)
     msg = await chat.ainvoke(prompt)
     content = msg.content if isinstance(msg.content, str) else str(msg.content)
     return content.strip()
@@ -415,6 +522,14 @@ async def reflect_pending(
                     n += 1
                 continue
 
+            # Valuation feedback: compare the decision-time DCF fair value
+            # (closest stored snapshot) against the realized price at the
+            # horizon. None when no snapshot exists — reflections proceed
+            # exactly as before.
+            valuation_note = await _valuation_note_for_decision(
+                conn, row["symbol"], row["created_at"], realized, horizon_days
+            )
+
             final_state = row["final_state"] or {}
             # ``final_state`` is jsonb; asyncpg may surface it as dict OR
             # str depending on codec registration. Coerce to dict.
@@ -426,8 +541,11 @@ async def reflect_pending(
                     final_state = {}
             for role, source_field, role_prefix in _REFLECTION_ROLES:
                 role_input = _role_input(final_state, source_field)
+                note = valuation_note if role in _VALUATION_NOTE_ROLES else None
                 try:
-                    text = await _write_role_reflection(role_prefix, role_input, realized)
+                    text = await _write_role_reflection(
+                        role_prefix, role_input, realized, valuation_note=note
+                    )
                 except Exception as e:  # noqa: BLE001
                     text = f"[{role_prefix} reflection failed: {e}]"
                 await _insert_reflection(
