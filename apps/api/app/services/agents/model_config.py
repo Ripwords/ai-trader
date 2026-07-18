@@ -7,9 +7,11 @@ from datetime import date
 
 logger = logging.getLogger(__name__)
 
-LEGACY_DEEPSEEK_SUNSET = date(2026, 7, 24)
-# Names DeepSeek will retire on LEGACY_DEEPSEEK_SUNSET. We log a deprecation
-# warning when the user explicitly picks one but DO NOT auto-rewrite to the
+LEGACY_DEEPSEEK_SUNSET = date(2026, 9, 30)
+# Names DeepSeek has announced it will retire around LEGACY_DEEPSEEK_SUNSET.
+# We log a deprecation warning on EVERY parse (loudly so it shows up in logs
+# both before and after the date) but never hard-fail: the legacy pin is
+# load-bearing, and DO NOT auto-rewrite to the
 # v4 equivalents — DeepSeek's v4 models default to thinking mode, which
 # LangChain+LiteLLM doesn't round-trip cleanly through LangGraph's
 # tool-calling loop (the API rejects multi-turn requests that drop
@@ -57,17 +59,25 @@ def parse_model_spec(spec: str) -> ModelSpec:
     model_id = model_id.strip()
 
     if provider == "deepseek" and model_id in LEGACY_DEEPSEEK_NAMES:
+        # Loud warning, never a hard failure. The legacy non-thinking models
+        # are the only DeepSeek models that work with LangGraph's tool-calling
+        # loop today (LiteLLM doesn't round-trip ``reasoning_content`` for v4
+        # thinking models), so refusing to parse would brick every DeepSeek
+        # run with no working alternative to point at.
         if date.today() >= LEGACY_DEEPSEEK_SUNSET:
-            raise ValueError(
-                f"DeepSeek model {model_id!r} was retired on "
-                f"{LEGACY_DEEPSEEK_SUNSET.isoformat()}; pick a v4 model "
-                "(but note v4 models are thinking-mode and don't currently "
-                "round-trip through LangGraph's tool-calling loop)"
+            logger.warning(
+                "DeepSeek model %r is PAST its announced retirement date (%s) "
+                "and may stop working at any moment. It stays pinned because "
+                "v4 thinking models don't round-trip reasoning_content "
+                "through LiteLLM/LangGraph tool calling; migrate as soon as "
+                "that integration is fixed.",
+                model_id, LEGACY_DEEPSEEK_SUNSET.isoformat(),
             )
-        logger.warning(
-            "DeepSeek model %r will be retired on %s.",
-            model_id, LEGACY_DEEPSEEK_SUNSET.isoformat(),
-        )
+        else:
+            logger.warning(
+                "DeepSeek model %r will be retired on %s.",
+                model_id, LEGACY_DEEPSEEK_SUNSET.isoformat(),
+            )
 
     return ModelSpec(provider=provider, model_id=model_id)
 

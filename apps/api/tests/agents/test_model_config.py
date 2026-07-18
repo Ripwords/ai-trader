@@ -37,6 +37,38 @@ def test_default_quick_deepseek_v4():
     assert default_quick_for("deepseek", "deepseek-v4-pro") == "deepseek-v4-flash"
 
 
+def test_legacy_deepseek_past_sunset_warns_but_still_parses(monkeypatch, caplog):
+    """The sunset date must NOT hard-fail parsing. DeepSeek's legacy
+    ``deepseek-chat`` is still the only model that works with LangGraph's
+    tool-calling loop (v4 thinking models don't round-trip
+    ``reasoning_content`` through LiteLLM), so past the sunset date we keep
+    parsing and log a loud warning instead of raising."""
+    import datetime as _dt
+
+    from app.services.agents import model_config as mc
+
+    class _FakeDate(_dt.date):
+        @classmethod
+        def today(cls) -> "_FakeDate":
+            return cls(2026, 12, 1)  # well past the sunset
+
+    monkeypatch.setattr(mc, "date", _FakeDate)
+    caplog.set_level(logging.WARNING, logger="app.services.agents.model_config")
+
+    spec = mc.parse_model_spec("deepseek/deepseek-chat")
+    assert spec.provider == "deepseek"
+    assert spec.model_id == "deepseek-chat"  # parsed, not raised
+    assert "retire" in caplog.text.lower()
+
+
+def test_legacy_deepseek_sunset_extended_to_2026_09_30():
+    from datetime import date
+
+    from app.services.agents.model_config import LEGACY_DEEPSEEK_SUNSET
+
+    assert LEGACY_DEEPSEEK_SUNSET == date(2026, 9, 30)
+
+
 def test_legacy_deepseek_name_warns_but_does_not_rewrite(caplog):
     """Earlier we auto-rewrote deepseek-chat -> deepseek-v4-flash. That broke
     LangGraph runs because v4 defaults to thinking mode (LiteLLM doesn't
