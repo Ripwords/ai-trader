@@ -41,6 +41,36 @@ vi.mock('../../server/lib/portfolio-correlation', () => ({
   getPortfolioCorrelationCached: portfolioCorrelationMock.getPortfolioCorrelationCached,
 }))
 
+const portfolioHistoryMock = vi.hoisted(() => ({
+  getPortfolioPerformance: vi.fn(async () => ({
+    series: [
+      { t: '2026-07-01T08:00:00.000Z', source: 'auto', netWorth: 100000, cash: 20000, positionsValue: 80000, currency: 'MYR' },
+      { t: '2026-07-17T08:00:00.000Z', source: 'auto', netWorth: 110000, cash: 21000, positionsValue: 89000, currency: 'MYR' },
+    ],
+    stats: {
+      count: 2,
+      firstAt: '2026-07-01T08:00:00.000Z',
+      lastAt: '2026-07-17T08:00:00.000Z',
+      currency: 'MYR',
+      totalReturnPct: 10,
+      maxDrawdownPct: -2.5,
+      periodReturns: { d1: null, d7: 4, d30: null },
+    },
+  })),
+}))
+
+vi.mock('../../server/lib/portfolio-history', () => ({
+  getPortfolioPerformance: portfolioHistoryMock.getPortfolioPerformance,
+}))
+
+const paperOrdersMock = vi.hoisted(() => ({
+  recordPaperOrder: vi.fn(async () => true),
+}))
+
+vi.mock('../../server/lib/paper-orders', () => ({
+  recordPaperOrder: paperOrdersMock.recordPaperOrder,
+}))
+
 // Stand-in for ApiClient — only the methods our tools call.
 function fakeClient() {
   return {
@@ -54,6 +84,8 @@ function fakeClient() {
     getPortfolio: vi.fn(async () => ({ cash: 10000, market_val: 5000, total_assets: 15000, positions: [] })),
     listOrders: vi.fn(async () => []),
     listFills: vi.fn(async () => []),
+    listHistoryOrders: vi.fn(async () => [{ order_id: 'ord-h1', code: 'US.NVDA', side: 'BUY' as const, qty: 2, price: 90, status: 'FILLED_ALL', created_at: '2026-07-01 09:30:00' }]),
+    listHistoryFills: vi.fn(async () => [{ fill_id: 'fill-h1', order_id: 'ord-h1', code: 'US.NVDA', side: 'BUY' as const, qty: 2, price: 90, fill_at: '2026-07-01 09:31:00' }]),
     placeOrder: vi.fn(async args => ({ order_id: 'paper-1', status: 'submitted', ...args, acc_id: args.acc_id ?? '1', price: args.price ?? 0, trd_env: args.trd_env ?? 'SIMULATE' })),
     modifyOrder: vi.fn(async args => ({ order_id: args.order_id, status: 'modified' })),
     cancelOrder: vi.fn(async args => ({ order_id: args.order_id, status: 'cancelled' })),
@@ -80,6 +112,7 @@ describe('tool catalogue', () => {
       'market_snapshot',
       'news_pulse',
       'portfolio_mpt_analysis',
+      'portfolio_performance',
       'research_get',
       'research_start',
       'research_status',
@@ -91,8 +124,10 @@ describe('tool catalogue', () => {
       'trade_accounts',
       'trade_cancel_order',
       'trade_fills',
+      'trade_fills_history',
       'trade_modify_order',
       'trade_orders',
+      'trade_orders_history',
       'trade_place_order',
       'trade_portfolio',
       'usage_summary',
@@ -266,5 +301,88 @@ describe('tool catalogue', () => {
       trd_env: 'REAL',
     })
     expect((out as { order_id: string }).order_id).toBe('paper-1')
+  })
+
+  it('trade_orders_history forwards the date range to client.listHistoryOrders', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient)
+    const out = await (tools['trade_orders_history'] as { execute: (args: {
+      acc_id: string
+      trd_env: 'SIMULATE'
+      start: string
+      end: string
+    }) => Promise<unknown> }).execute({ acc_id: '1', trd_env: 'SIMULATE', start: '2026-06-18', end: '2026-07-18' })
+    expect(c.listHistoryOrders).toHaveBeenCalledWith({
+      acc_id: '1', trd_env: 'SIMULATE', start: '2026-06-18', end: '2026-07-18',
+    })
+    expect((out as { orders: unknown[] }).orders).toHaveLength(1)
+  })
+
+  it('trade_fills_history forwards the symbol filter to client.listHistoryFills', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient)
+    const out = await (tools['trade_fills_history'] as { execute: (args: {
+      acc_id: string
+      trd_env: 'REAL'
+      code: string
+    }) => Promise<unknown> }).execute({ acc_id: '1', trd_env: 'REAL', code: 'US.NVDA' })
+    expect(c.listHistoryFills).toHaveBeenCalledWith({
+      acc_id: '1', trd_env: 'REAL', code: 'US.NVDA',
+    })
+    expect((out as { fills: unknown[] }).fills).toHaveLength(1)
+  })
+
+  it('portfolio_performance returns the stored equity curve + stats', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['portfolio_performance'] as { execute: (args: { days: number }) => Promise<unknown> })
+      .execute({ days: 90 })
+    expect(portfolioHistoryMock.getPortfolioPerformance).toHaveBeenCalledWith({ days: 90 })
+    expect(out).toMatchObject({
+      stats: { totalReturnPct: 10, maxDrawdownPct: -2.5 },
+    })
+    expect((out as { series: unknown[] }).series).toHaveLength(2)
+  })
+
+  it('records a paper_orders ledger row after a SIMULATE placement (best-effort)', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient)
+    const out = await (tools['trade_place_order'] as { execute: (args: {
+      code: string
+      side: 'BUY'
+      qty: number
+      price: number
+      order_type: 'NORMAL'
+      trd_env: 'SIMULATE'
+    }) => Promise<unknown> }).execute({
+      code: 'US.NVDA', side: 'BUY', qty: 2, price: 100, order_type: 'NORMAL', trd_env: 'SIMULATE',
+    })
+    expect((out as { order_id: string }).order_id).toBe('paper-1')
+    expect(paperOrdersMock.recordPaperOrder).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'chat',
+      moomooOrderId: 'paper-1',
+      symbol: 'US.NVDA',
+      side: 'BUY',
+      qty: 2,
+      trdEnv: 'SIMULATE',
+    }))
+  })
+
+  it('does not write the paper ledger for REAL placements', async () => {
+    paperOrdersMock.recordPaperOrder.mockClear()
+    const c = fakeClient()
+    const phrase = 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100'
+    const tools = makeTools(c as unknown as ApiClient, { latestUserText: phrase })
+    await (tools['trade_place_order'] as { execute: (args: {
+      code: string
+      side: 'BUY'
+      qty: number
+      price: number
+      order_type: 'NORMAL'
+      trd_env: 'REAL'
+      live_confirmation: string
+    }) => Promise<unknown> }).execute({
+      code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, order_type: 'NORMAL', trd_env: 'REAL', live_confirmation: phrase,
+    })
+    expect(paperOrdersMock.recordPaperOrder).not.toHaveBeenCalled()
   })
 })

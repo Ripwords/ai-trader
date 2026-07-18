@@ -347,7 +347,26 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           provided: live_confirmation,
           latestUserText: options.latestUserText,
         })
-        return client.placeOrder(order)
+        const result = await client.placeOrder(order)
+        // Best-effort paper-orders ledger row. recordPaperOrder never throws
+        // — a ledger failure must not fail the order the user just placed.
+        if (order.trd_env !== 'REAL') {
+          const { recordPaperOrder } = await import('../lib/paper-orders')
+          await recordPaperOrder({
+            source: 'chat',
+            moomooOrderId: result.order_id,
+            accId: result.acc_id,
+            symbol: result.code,
+            side: result.side,
+            qty: result.qty,
+            price: result.price,
+            orderType: order.order_type,
+            trdEnv: 'SIMULATE',
+            status: result.status,
+            raw: result as unknown as Record<string, unknown>,
+          })
+        }
+        return result
       },
     }),
 
@@ -725,6 +744,59 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const { getLlmUsageSummary, getOwnerId } = await import('../db/repo')
         const ownerId = await getOwnerId()
         return getLlmUsageSummary(ownerId)
+      },
+    }),
+
+    // --- Persistence & history -------------------------------------------
+
+    'trade_orders_history': tool({
+      description:
+        'List HISTORICAL orders for an account over a date range (defaults to the last 30 days). ' +
+        'Use when the user asks about orders beyond today — "what did I trade last week/month". ' +
+        'For today\'s orders prefer trade_orders. Dates are YYYY-MM-DD. Defaults to REAL. ' +
+        'Skip accounts where acc_role is "IPO" — moomoo refuses history queries on IPO accounts; ' +
+        'pick a NORMAL acc_id from trade_accounts instead.',
+      inputSchema: z.object({
+        acc_id: z.string(),
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
+        start: z.string().optional().describe('start date YYYY-MM-DD (default: 30 days ago)'),
+        end: z.string().optional().describe('end date YYYY-MM-DD (default: today)'),
+        code: z.string().optional().describe('optional moomoo symbol filter like US.NVDA'),
+      }),
+      execute: async (args) => ({ orders: await client.listHistoryOrders(args) }),
+    }),
+
+    'trade_fills_history': tool({
+      description:
+        'List HISTORICAL fills (executed trades) for an account over a date range (defaults to the ' +
+        'last 30 days). Use for "what actually executed last week/month" or realized-trade reviews. ' +
+        'For today\'s fills prefer trade_fills. Dates are YYYY-MM-DD. Defaults to REAL. ' +
+        'Skip accounts where acc_role is "IPO" — moomoo refuses history queries on IPO accounts; ' +
+        'pick a NORMAL acc_id from trade_accounts instead.',
+      inputSchema: z.object({
+        acc_id: z.string(),
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
+        start: z.string().optional().describe('start date YYYY-MM-DD (default: 30 days ago)'),
+        end: z.string().optional().describe('end date YYYY-MM-DD (default: today)'),
+        code: z.string().optional().describe('optional moomoo symbol filter like US.NVDA'),
+      }),
+      execute: async (args) => ({ fills: await client.listHistoryFills(args) }),
+    }),
+
+    'portfolio_performance': tool({
+      description:
+        'How the user\'s portfolio value has evolved over time, from stored daily snapshots: ' +
+        'equity-curve series (net worth / cash / positions value per snapshot) plus derived stats ' +
+        '(total return vs first snapshot, max drawdown, 1/7/30-day returns). Use for "how has my ' +
+        'portfolio done", "am I up this month", "what\'s my drawdown". If stats.count is 0 there is ' +
+        'no history yet — tell the user snapshots are captured daily (or via the portfolio page\'s ' +
+        'capture button) and the curve will build up over time.',
+      inputSchema: z.object({
+        days: z.number().int().min(1).max(3650).default(365).describe('lookback window in days'),
+      }),
+      execute: async ({ days }) => {
+        const { getPortfolioPerformance } = await import('../lib/portfolio-history')
+        return getPortfolioPerformance({ days })
       },
     }),
   }
