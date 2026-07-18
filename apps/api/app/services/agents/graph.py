@@ -79,6 +79,7 @@ from .toolkit import AgentToolkit, OpenDClient, build_toolkit
 from app.services.valuation.compose import apply_veto, value
 from app.services.valuation.fetch import fetch_valuation_input
 from app.services.valuation.models import ValuationResult
+from app.services.valuation.persist import record_valuation_snapshot
 from app.services.valuation.summary import format_valuation_for_agents
 
 
@@ -807,19 +808,31 @@ def _serialize_final_state(state: dict) -> dict:
     return out
 
 
-async def _compute_run_valuation(symbol: str) -> tuple[ValuationResult | None, str]:
+async def _compute_run_valuation(
+    symbol: str, run_id: str | None = None
+) -> tuple[ValuationResult | None, str]:
     """Compute the deterministic valuation for this run, fail-soft.
 
     Returns (result, agent-facing summary markdown). Any data/compute error
     returns (None, "") so a valuation outage never aborts the agent run.
+
+    On success the result is persisted to ``valuation_snapshots``
+    (source='agent_run', linked to ``run_id``) so the reflection job can
+    later compare the DCF fair value against the realized price. The
+    persist call is best-effort and separately guarded — even a raising
+    recorder must not kill the run's valuation context.
     """
     try:
         vi = await fetch_valuation_input(symbol)
         result = value(vi)
-        return result, format_valuation_for_agents(result)
     except Exception as e:  # noqa: BLE001 - valuation is best-effort context
         print(f"[agents] valuation skipped for {symbol}: {e}")
         return None, ""
+    try:
+        await record_valuation_snapshot(result, source="agent_run", run_id=run_id)
+    except Exception as e:  # noqa: BLE001 - snapshot is best-effort
+        print(f"[agents] valuation snapshot failed for {symbol}: {e}")
+    return result, format_valuation_for_agents(result)
 
 
 async def run_graph(
@@ -867,7 +880,7 @@ async def run_graph(
     else:
         _seed_trader_memory(graph, symbol, memory or [])
 
-    run_valuation, valuation_summary = await _compute_run_valuation(symbol)
+    run_valuation, valuation_summary = await _compute_run_valuation(symbol, run_id=run_id)
     if valuation_summary:
         _seed_all_memories(graph, symbol, {
             "invest_judge": [{"text": valuation_summary, "rating": "valuation",
