@@ -124,6 +124,16 @@ function fakeClient() {
     placeOrder: vi.fn(async args => ({ order_id: 'paper-1', status: 'submitted', ...args, acc_id: args.acc_id ?? '1', price: args.price ?? 0, trd_env: args.trd_env ?? 'SIMULATE' })),
     modifyOrder: vi.fn(async args => ({ order_id: args.order_id, status: 'modified' })),
     cancelOrder: vi.fn(async args => ({ order_id: args.order_id, status: 'cancelled' })),
+    valuationScreen: vi.fn(async () => ({
+      rows: [
+        { symbol: 'US.NVDA', fair_value: '150.5', current_price: '100', margin_of_safety_pct: '0.335', data_quality: 'full', veto: false, error: null },
+        { symbol: 'US.TSLA', fair_value: null, current_price: null, margin_of_safety_pct: null, data_quality: null, veto: null, error: 'yahoo down' },
+      ],
+      total_symbols: 2,
+      truncated: false,
+      source: 'watchlist' as const,
+      warnings: [],
+    })),
   }
 }
 
@@ -169,6 +179,7 @@ describe('tool catalogue', () => {
       'trade_place_order',
       'trade_portfolio',
       'usage_summary',
+      'value_screen',
       'value_stock',
       'watchlist_add',
       'watchlist_list',
@@ -464,6 +475,23 @@ describe('tool catalogue', () => {
       .execute({ status: 'active' })
     expect(alertsMock.listAlerts).toHaveBeenCalledWith({ status: 'active' })
     expect(out).toMatchObject({ alerts: [] })
+  })
+
+  it('value_screen forwards optional symbols to client.valuationScreen', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient)
+    const out = await (tools['value_screen'] as { execute: (args: { symbols?: string[] }) => Promise<unknown> })
+      .execute({ symbols: ['US.NVDA', 'US.TSLA'] })
+    expect(c.valuationScreen).toHaveBeenCalledWith({ symbols: ['US.NVDA', 'US.TSLA'] })
+    expect((out as { rows: unknown[] }).rows).toHaveLength(2)
+    expect((out as { rows: { symbol: string }[] }).rows[0].symbol).toBe('US.NVDA')
+  })
+
+  it('value_screen defaults to the watchlist when no symbols are given', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient)
+    await (tools['value_screen'] as { execute: (args: { symbols?: string[] }) => Promise<unknown> }).execute({})
+    expect(c.valuationScreen).toHaveBeenCalledWith({})
   })
 
   it('alert_cancel reports a missing alert as an error', async () => {

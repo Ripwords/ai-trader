@@ -58,6 +58,8 @@ async def test_buy_correct_when_outperforms_spy() -> None:
     assert res.benchmark_return == pytest.approx(1.0, rel=0.01)
     assert res.alpha == pytest.approx(4.0, rel=0.01)
     assert res.outcome == "correct"
+    # Exit close of the symbol at the horizon — feeds the valuation-error note.
+    assert res.realized_price == pytest.approx(105.0, rel=0.001)
 
 
 @pytest.mark.asyncio
@@ -165,6 +167,61 @@ async def test_compute_raises_when_history_too_short_for_trade_date() -> None:
         )
 
 
+def test_format_valuation_note_too_optimistic() -> None:
+    from app.services.agents.reflection import _format_valuation_note
+
+    note = _format_valuation_note(
+        fair_value=150.0, mos_pct=0.25, realized_price=110.0, horizon_days=7
+    )
+    assert "fair value 150.00" in note
+    assert "MoS 25.0%" in note
+    assert "110.00" in note
+    assert "too optimistic" in note
+
+
+def test_format_valuation_note_too_pessimistic() -> None:
+    from app.services.agents.reflection import _format_valuation_note
+
+    note = _format_valuation_note(
+        fair_value=90.0, mos_pct=-0.1, realized_price=120.0, horizon_days=7
+    )
+    assert "too pessimistic" in note
+
+
+def test_format_valuation_note_about_right() -> None:
+    from app.services.agents.reflection import _format_valuation_note
+
+    note = _format_valuation_note(
+        fair_value=102.0, mos_pct=0.02, realized_price=100.0, horizon_days=7
+    )
+    assert "about right" in note
+
+
+def test_format_valuation_note_without_mos() -> None:
+    from app.services.agents.reflection import _format_valuation_note
+
+    note = _format_valuation_note(
+        fair_value=150.0, mos_pct=None, realized_price=110.0, horizon_days=7
+    )
+    assert "MoS" not in note
+    assert "fair value 150.00" in note
+
+
+def test_role_reflection_prompt_includes_valuation_note() -> None:
+    from app.services.agents.reflection import _role_reflection_prompt
+
+    realized = RealizedReturn(5.0, 1.0, 4.0, "correct", realized_price=105.0)
+    prompt = _role_reflection_prompt(
+        "RESEARCH JUDGE", "some judge decision", realized,
+        valuation_note="valuation called fair value 150.00; ...",
+    )
+    assert "valuation called fair value 150.00" in prompt
+    without = _role_reflection_prompt(
+        "RESEARCH JUDGE", "some judge decision", realized, valuation_note=None
+    )
+    assert "valuation called" not in without
+
+
 def test_classify_neutral_when_alpha_small() -> None:
     assert _classify_outcome("buy", 0.3) == "neutral"
 
@@ -256,7 +313,12 @@ async def test_reflect_pending_writes_rows(
 
     opend.get_kline.side_effect = kline
 
-    async def fake_role_write(role_prefix: str, role_input: str, realized) -> str:
+    async def fake_role_write(
+        role_prefix: str, role_input: str, realized, valuation_note=None
+    ) -> str:
+        # No valuation_snapshots row exists for NVDA — the note must
+        # degrade gracefully to None for every role.
+        assert valuation_note is None
         return f"lesson({role_prefix}): {realized.outcome} {realized.alpha:+.2f}%"
 
     monkeypatch.setattr(reflection_mod, "_write_role_reflection", fake_role_write)
@@ -280,6 +342,94 @@ async def test_reflect_pending_writes_rows(
         assert r["outcome"] == "correct"
         assert r["alpha"] == pytest.approx(8.0, rel=0.01)
         assert r["text"].startswith("lesson(")
+
+
+@pytest.mark.asyncio
+async def test_reflect_pending_valuation_note_for_judge_roles(
+    pg_pool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When a valuation_snapshots row exists for the decision's symbol at/
+    before the decision time, invest_judge and risk_manager reflections get
+    a compact valuation-error note (fair value vs realized price); the
+    other roles don't — they never saw the valuation summary at run time.
+    """
+    from app.services.agents import reflection as reflection_mod
+
+    user_id = "00000000-0000-0000-0000-000000000012"
+    final_state_json = (
+        '{"trader_investment_plan":"buy 50 shares",'
+        '"investment_debate_state":'
+          '{"bull_history":"bull case","bear_history":"bear case","judge_decision":"buy"},'
+        '"risk_debate_state":{"judge_decision":"approve"}}'
+    )
+    trade_date = date.today() - timedelta(days=10)
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO users(id, name) VALUES($1, 'val-noted') "
+            "ON CONFLICT DO NOTHING",
+            user_id,
+        )
+        run_id = await conn.fetchval(
+            "INSERT INTO agent_runs(user_id, symbol, trade_date, config, status, final_state) "
+            "VALUES($1, 'AMD', $3, '{}'::jsonb, 'complete', $2::jsonb) "
+            "RETURNING id",
+            user_id, final_state_json, trade_date,
+        )
+        await conn.execute(
+            "INSERT INTO agent_decisions"
+            "(run_id, user_id, symbol, trade_date, rating, confidence, rationale, "
+            " created_at) "
+            "VALUES($1, $2, 'AMD', $3, 'buy', 70, 'r', "
+            " now() - interval '10 days')",
+            run_id, user_id, trade_date,
+        )
+        # Snapshot written at run time (just before the decision).
+        await conn.execute(
+            "INSERT INTO valuation_snapshots"
+            "(symbol, source, run_id, fair_value, current_price, "
+            " margin_of_safety_pct, data_quality, veto_triggered, result, created_at) "
+            "VALUES('AMD', 'agent_run', $1, 150, 100, 0.5, 'full', false, "
+            " '{}'::jsonb, now() - interval '10 days 1 hour')",
+            run_id,
+        )
+
+    opend = AsyncMock()
+
+    async def kline(ticker: str, ktype: str, num: int) -> list[dict]:
+        if ticker == "AMD":
+            closes = [100, 102, 104, 106, 108, 109, 109.5, 110]
+        else:
+            closes = [100, 100.3, 100.6, 100.9, 101.2, 101.5, 101.8, 102]
+        return [
+            {"time_key": (trade_date + timedelta(days=i)).isoformat(), "close": closes[i]}
+            for i in range(len(closes))
+        ]
+
+    opend.get_kline.side_effect = kline
+
+    notes: dict[str, str | None] = {}
+
+    async def fake_role_write(
+        role_prefix: str, role_input: str, realized, valuation_note=None
+    ) -> str:
+        notes[role_prefix] = valuation_note
+        return f"lesson({role_prefix})"
+
+    monkeypatch.setattr(reflection_mod, "_write_role_reflection", fake_role_write)
+
+    n = await reflection_mod.reflect_pending(pg_pool, opend, horizon_days=7)
+    assert n == 5
+
+    # The two roles that see the valuation summary at run time get the note.
+    for prefix in ("RESEARCH JUDGE", "RISK MANAGER"):
+        note = notes[prefix]
+        assert note is not None
+        assert "fair value 150.00" in note
+        assert "110.00" in note
+        assert "too optimistic" in note
+    # The rest reflect without it.
+    for prefix in ("TRADER", "BULL RESEARCHER", "BEAR RESEARCHER"):
+        assert notes[prefix] is None
 
 
 @pytest.mark.asyncio
@@ -325,7 +475,9 @@ async def test_reflect_pending_skips_already_reflected(
     opend = AsyncMock()
     opend.get_kline.side_effect = AssertionError("must not be called")
 
-    async def fake_role_write(role_prefix: str, role_input: str, realized) -> str:
+    async def fake_role_write(
+        role_prefix: str, role_input: str, realized, valuation_note=None
+    ) -> str:
         raise AssertionError("must not be called")
 
     monkeypatch.setattr(reflection_mod, "_write_role_reflection", fake_role_write)

@@ -277,3 +277,29 @@ export const priceAlerts = pgTable('price_alerts', {
   // Hot path: the evaluation loop only ever loads active alerts.
   activeOnly: index('price_alerts_active_idx').on(t.status).where(sql`status = 'active'`),
 }))
+
+// One row per deterministic valuation-engine invocation. `source` ∈
+// {'chat','agent_run','screener'}: chat rows come from the GET /valuation
+// router (behind the value_stock tool), agent_run rows from the per-run
+// valuation injected into the LangGraph pipeline (`runId` links the run),
+// screener rows from the watchlist sweep. Inserts are best-effort on the
+// api side — a snapshot failure never fails the valuation itself. `result`
+// keeps the full ValuationResult JSON (Decimals serialized as strings by
+// pydantic) so the reflection job and future analytics can replay the
+// engine's view at decision time; the scalar columns are the hot filters.
+export const valuationSnapshots = pgTable('valuation_snapshots', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  symbol: varchar('symbol', { length: 32 }).notNull(),
+  source: varchar('source', { length: 16 }).notNull(),
+  runId: uuid('run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
+  fairValue: numeric('fair_value', { precision: 18, scale: 6 }),
+  currentPrice: numeric('current_price', { precision: 18, scale: 6 }).notNull(),
+  marginOfSafetyPct: numeric('margin_of_safety_pct', { precision: 10, scale: 6 }),
+  dataQuality: varchar('data_quality', { length: 16 }).notNull(),
+  vetoTriggered: boolean('veto_triggered').notNull().default(false),
+  result: jsonb('result').notNull(),
+}, t => ({
+  // Reflection's lookup: latest snapshot for a symbol at/before a decision.
+  bySymbolCreated: index('valuation_snapshots_symbol_created_idx').on(t.symbol, t.createdAt),
+}))
