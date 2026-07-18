@@ -185,6 +185,26 @@ export class ApiClient {
     return this.fetch('/trade/fills', { query: args })
   }
 
+  listHistoryOrders(args: {
+    acc_id: string
+    trd_env?: 'SIMULATE' | 'REAL'
+    start?: string
+    end?: string
+    code?: string
+  }): Promise<Order[]> {
+    return this.fetch('/trade/orders/history', { query: args })
+  }
+
+  listHistoryFills(args: {
+    acc_id: string
+    trd_env?: 'SIMULATE' | 'REAL'
+    start?: string
+    end?: string
+    code?: string
+  }): Promise<Fill[]> {
+    return this.fetch('/trade/fills/history', { query: args })
+  }
+
   placeOrder(args: {
     code: string
     side: 'BUY' | 'SELL'

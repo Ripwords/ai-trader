@@ -126,6 +126,8 @@ services:
     depends_on:
       api:
         condition: service_started
+      web:
+        condition: service_started
     restart: unless-stopped
 
 volumes:

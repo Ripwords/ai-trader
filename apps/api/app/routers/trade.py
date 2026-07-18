@@ -1,4 +1,5 @@
 import logging
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -161,6 +162,49 @@ async def fills(
 ) -> list[Fill]:
     try:
         return opend.list_fills(acc_id=acc_id, trd_env=trd_env)
+    except OpendError as exc:
+        raise _opend_to_http(exc) from exc
+
+
+def _default_history_range(start: str | None, end: str | None) -> tuple[str, str]:
+    """Fill missing bounds: end → today, start → 30 days before end."""
+    end_date = date.fromisoformat(end) if end else date.today()
+    start_date = date.fromisoformat(start) if start else end_date - timedelta(days=30)
+    return start_date.isoformat(), end_date.isoformat()
+
+
+@router.get("/orders/history", response_model=list[Order])
+async def orders_history(
+    acc_id: str = Query(...),
+    trd_env: TrdEnv = Query("REAL"),
+    start: str | None = Query(None, description="YYYY-MM-DD (default: 30 days before end)"),
+    end: str | None = Query(None, description="YYYY-MM-DD (default: today)"),
+    code: str | None = Query(None, description="optional symbol filter like US.NVDA"),
+    opend: OpendAdapter = Depends(get_opend),
+) -> list[Order]:
+    start_s, end_s = _default_history_range(start, end)
+    try:
+        return opend.list_history_orders(
+            acc_id=acc_id, trd_env=trd_env, start=start_s, end=end_s, code=code or ""
+        )
+    except OpendError as exc:
+        raise _opend_to_http(exc) from exc
+
+
+@router.get("/fills/history", response_model=list[Fill])
+async def fills_history(
+    acc_id: str = Query(...),
+    trd_env: TrdEnv = Query("REAL"),
+    start: str | None = Query(None, description="YYYY-MM-DD (default: 30 days before end)"),
+    end: str | None = Query(None, description="YYYY-MM-DD (default: today)"),
+    code: str | None = Query(None, description="optional symbol filter like US.NVDA"),
+    opend: OpendAdapter = Depends(get_opend),
+) -> list[Fill]:
+    start_s, end_s = _default_history_range(start, end)
+    try:
+        return opend.list_history_fills(
+            acc_id=acc_id, trd_env=trd_env, start=start_s, end=end_s, code=code or ""
+        )
     except OpendError as exc:
         raise _opend_to_http(exc) from exc
 
