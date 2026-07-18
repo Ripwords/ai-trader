@@ -23,3 +23,30 @@ export function fireRunNotification(run: FinishedRun): void {
     n.close()
   }
 }
+
+// --- Price alerts ----------------------------------------------------------
+
+import type { PriceAlert } from '../../server/lib/alerts-core'
+
+function fmtAlertNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(value)
+}
+
+/** "US.NVDA hit 151.2 (price_above 150)" — pure so it's unit-testable. */
+export function alertNotificationTitle(alert: PriceAlert): string {
+  const price = alert.triggeredPrice ?? alert.threshold
+  const suffix = alert.kind === 'pct_move_day' ? '%' : ''
+  return `${alert.symbol} hit ${fmtAlertNumber(price)} (${alert.kind} ${fmtAlertNumber(alert.threshold)}${suffix})`
+}
+
+export function fireAlertNotification(alert: PriceAlert): void {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+  const n = new Notification(alertNotificationTitle(alert), {
+    body: alert.note ?? 'price alert triggered',
+    tag: `alert-${alert.id}`,
+  })
+  n.onclick = () => {
+    window.focus()
+    n.close()
+  }
+}
