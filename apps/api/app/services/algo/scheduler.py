@@ -22,9 +22,11 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, TypedDict
+from zoneinfo import ZoneInfo
 
 
 class AccountSummary(TypedDict):
@@ -58,6 +60,53 @@ CADENCE_SECS: dict[str, int] = {
     "1h": 60 * 60,
     "1d": 24 * 60 * 60,
 }
+
+# Max orders each strategy may place per UTC day (env-overridable). Once the
+# cap is hit, further intents are recorded as blocked signals, not placed.
+DEFAULT_MAX_ORDERS_PER_DAY = 20
+
+
+def _max_orders_per_day() -> int:
+    raw = os.environ.get("ALGO_MAX_ORDERS_PER_DAY", "").strip()
+    try:
+        return int(raw) if raw else DEFAULT_MAX_ORDERS_PER_DAY
+    except ValueError:
+        logger.warning("bad ALGO_MAX_ORDERS_PER_DAY=%r; using default %s",
+                       raw, DEFAULT_MAX_ORDERS_PER_DAY)
+        return DEFAULT_MAX_ORDERS_PER_DAY
+
+
+def _market_hours_bypassed() -> bool:
+    """ALGO_MARKET_HOURS_BYPASS=1 skips the session check (tests / dev)."""
+    return os.environ.get("ALGO_MARKET_HOURS_BYPASS", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def market_is_open(symbol: str, now: datetime | None = None) -> bool:
+    """Regular-session check for the symbol's market, by moomoo prefix.
+
+    Deliberately simple: weekday + session windows in the exchange's local
+    time, no holiday calendar (a closed-market kline fetch just yields stale
+    bars and the strategy sees no new signal — the guard only needs to stop
+    the 24/7 firing loop). Unknown prefixes are never blocked."""
+    now = now or datetime.now(timezone.utc)
+    prefix = symbol.split(".", 1)[0].upper() if "." in symbol else ""
+
+    def _minutes(tz: str) -> tuple[int, int]:
+        local = now.astimezone(ZoneInfo(tz))
+        return local.weekday(), local.hour * 60 + local.minute
+
+    if prefix == "US":
+        wd, t = _minutes("America/New_York")
+        return wd < 5 and 9 * 60 + 30 <= t < 16 * 60
+    if prefix == "HK":
+        wd, t = _minutes("Asia/Hong_Kong")
+        return wd < 5 and (9 * 60 + 30 <= t < 12 * 60 or 13 * 60 <= t < 16 * 60)
+    if prefix in ("SH", "SZ"):
+        wd, t = _minutes("Asia/Shanghai")
+        return wd < 5 and (9 * 60 + 30 <= t < 11 * 60 + 30 or 13 * 60 <= t < 15 * 60)
+    return True
 
 
 class _Ctx:
@@ -142,6 +191,11 @@ class Scheduler:
         self._tick_sec = tick_sec
         # Last-fire timestamp per strategy (monotonic seconds).
         self._last_fire: dict[str, float] = {}
+        # Live pyramiding state: BUY adds since the position was last seen
+        # flat, per strategy (mirrors the backtester's adds_since_flat).
+        # In-memory only — a process restart with an open position forgets
+        # prior adds and allows up to pyramiding_max fresh ones.
+        self._adds_since_flat: dict[str, int] = {}
         # Compiled strategy cache, keyed by code-hash.
         self._compiled: dict[str, Callable[[Any], None]] = {}
         self._task: asyncio.Task[None] | None = None
@@ -201,6 +255,13 @@ class Scheduler:
 
     async def _fire(self, s: Strategy, *, kill_active: bool) -> None:
         """Run one strategy tick: fetch bars, run on_bar, route intent."""
+        if not _market_hours_bypassed() and not market_is_open(s.symbol):
+            # Quiet skip — no signal row; one would land every cadence tick
+            # all night long. Set ALGO_MARKET_HOURS_BYPASS=1 to fire anyway.
+            logger.debug("strategy %s: market closed for %s, skipping tick",
+                         s.id, s.symbol)
+            return
+
         try:
             bars = await self._get_klines(s.symbol, 200)
         except Exception as exc:  # noqa: BLE001
@@ -230,8 +291,18 @@ class Scheduler:
 
         try:
             position = await self._get_position(s.symbol)
-        except Exception:  # noqa: BLE001
-            position = 0  # best-effort; strategy can still emit
+        except Exception as exc:  # noqa: BLE001
+            # Never assume flat on a failed position query — a strategy that
+            # believes it holds nothing will happily re-buy. Record the
+            # failure and sit this tick out.
+            await repo.append_signal(
+                s.id, _now_naive_utc(), "BUY", 0, None, None,
+                f"get_position failed: {exc}",
+            )
+            return
+        if position <= 0:
+            # Observed flat → pyramiding counter resets (backtester parity).
+            self._adds_since_flat[s.id] = 0
 
         # Pull live paper-account totals so strategies can gate on
         # cash / allocation_pct. If the OpenD bridge is missing or the
@@ -303,11 +374,33 @@ class Scheduler:
             )
             return
 
+        if side == "BUY":
+            adds = self._adds_since_flat.get(s.id, 0)
+            if adds >= s.pyramiding_max:
+                await repo.append_signal(
+                    s.id, ts, side, qty, last_close, None,
+                    f"blocked: pyramiding cap reached ({adds}/{s.pyramiding_max})",
+                )
+                return
+
+        max_orders = _max_orders_per_day()
+        orders_today = await repo.count_orders_today(s.id)
+        if orders_today >= max_orders:
+            await repo.append_signal(
+                s.id, ts, side, qty, last_close, None,
+                f"blocked: daily order cap reached ({orders_today}/{max_orders})",
+            )
+            return
+
         try:
             order_id = await self._place(s.symbol, side, qty)
             await repo.append_signal(
                 s.id, ts, side, qty, last_close, order_id, None,
             )
+            if side == "BUY":
+                self._adds_since_flat[s.id] = (
+                    self._adds_since_flat.get(s.id, 0) + 1
+                )
         except Exception as exc:  # noqa: BLE001
             await repo.append_signal(
                 s.id, ts, side, qty, last_close, None, f"place_order: {exc}",

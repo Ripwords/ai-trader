@@ -280,6 +280,24 @@ async def append_signal(
     )
 
 
+async def count_orders_today(strategy_id: str) -> int:
+    """Number of signals that actually became orders (order_id set) since
+    UTC midnight. Feeds the scheduler's max-orders-per-day guard; blocked
+    and errored signals (order_id NULL) don't count. `ts` is stored as a
+    naive UTC timestamp, matching `now() AT TIME ZONE 'UTC'`."""
+    async with get_pool().acquire() as conn:
+        val = await conn.fetchval(
+            """
+            SELECT count(*) FROM algo_signals
+            WHERE strategy_id = $1
+              AND order_id IS NOT NULL
+              AND ts >= date_trunc('day', now() AT TIME ZONE 'UTC')
+            """,
+            strategy_id,
+        )
+    return int(val or 0)
+
+
 async def list_signals(
     strategy_id: str | None = None, limit: int = 50
 ) -> list[SignalRecord]:
