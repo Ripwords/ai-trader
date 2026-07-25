@@ -785,6 +785,10 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         'Lead with total_day_change_pct for "how did I do today" and pair it with unrealized P&L for ' +
         '"am I up overall". Amounts in by_currency are NATIVE — never add them together; the blended ' +
         'total_*_reporting figures are already FX-converted into reporting_currency. ' +
+        'day_change_coverage_pct is the share of market value the day change actually covers: some ' +
+        'holdings are in markets the account has no quote entitlement for and have no previous close. ' +
+        'When it is below 100, say so and name day_change_missing_symbols — quoting the day change as ' +
+        'if it covered everything overstates it. ' +
         'If status is "unavailable" the moomoo live account could not be read: say so plainly and DO ' +
         'NOT substitute net worth (portfolio_performance / Ghostfolio) — those measure a different ' +
         'thing. Always surface anything in caveats.',

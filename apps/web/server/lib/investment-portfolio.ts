@@ -59,8 +59,21 @@ export interface InvestmentPortfolio {
   by_currency: CurrencyTotals[]
   total_market_value_reporting: number | null
   total_day_change_reporting: number | null
-  /** FX-weighted blend — comparable to an index move. */
+  /**
+   * FX-weighted blend over the positions that HAVE a previous close —
+   * comparable to an index move. Not every holding is quotable (a market the
+   * account lacks data entitlement for, e.g. MY listings), and letting one
+   * such position null the whole figure would make the headline number
+   * useless. Always read alongside day_change_coverage_pct.
+   */
   total_day_change_pct: number | null
+  /**
+   * Share of FX-normalised market value that had a previous close. 100 means
+   * the day change covers everything; below that, day_change_missing_symbols
+   * names what is excluded and the answer must say so.
+   */
+  day_change_coverage_pct: number | null
+  day_change_missing_symbols: string[]
   total_unrealized_pl_reporting: number | null
   /**
    * Total cost basis in the reporting currency. Carried so downstream history
@@ -91,6 +104,8 @@ function empty(status: InvestmentPortfolio['status'], caveats: string[]): Invest
     total_market_value_reporting: null,
     total_day_change_reporting: null,
     total_day_change_pct: null,
+    day_change_coverage_pct: null,
+    day_change_missing_symbols: [],
     total_unrealized_pl_reporting: null,
     total_cost_basis_reporting: null,
     cash_by_currency: {},
@@ -253,18 +268,25 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
 
   // --- Per-currency buckets. Native amounts are only ever added to amounts in
   // the same currency; the cross-currency blend happens once, below, via FX.
-  const buckets = new Map<string, { mv: number; day: number; dayKnown: boolean; prev: number; pl: number; cost: number }>()
+  // `covered` tracks the subset with a known previous close. A holding in a
+  // market the account has no quote entitlement for (e.g. MY listings) has no
+  // baseline, and excluding only that holding beats nulling the whole figure.
+  const buckets = new Map<string, {
+    mv: number; day: number; prev: number; covered: number; pl: number; cost: number
+  }>()
+  const missingBaseline: string[] = []
   for (const p of positions) {
     const key = p.currency ?? UNKNOWN_CURRENCY
-    const b = buckets.get(key) ?? { mv: 0, day: 0, dayKnown: true, prev: 0, pl: 0, cost: 0 }
+    const b = buckets.get(key) ?? { mv: 0, day: 0, prev: 0, covered: 0, pl: 0, cost: 0 }
     b.mv += p.market_value
     b.pl += p.unrealized_pl
     b.cost += p.cost_basis
     if (p.day_change_value == null) {
-      b.dayKnown = false
+      missingBaseline.push(p.symbol)
     } else {
       b.day += p.day_change_value
       b.prev += p.market_value - p.day_change_value
+      b.covered += p.market_value
     }
     buckets.set(key, b)
   }
@@ -272,8 +294,8 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
   const by_currency: CurrencyTotals[] = [...buckets.entries()].map(([currency, b]) => ({
     currency,
     market_value: b.mv,
-    day_change_value: b.dayKnown ? b.day : null,
-    day_change_pct: b.dayKnown && b.prev > 0 ? (b.day / b.prev) * 100 : null,
+    day_change_value: b.covered > 0 ? b.day : null,
+    day_change_pct: b.covered > 0 && b.prev > 0 ? (b.day / b.prev) * 100 : null,
     unrealized_pl: b.pl,
   }))
 
@@ -299,8 +321,8 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
   let totalPrev = 0
   let totalPl = 0
   let totalCost = 0
+  let coveredMv = 0
   let fxComplete = true
-  let dayComplete = true
   for (const [ccy, b] of buckets.entries()) {
     const rate = rates.get(ccy) ?? null
     if (rate == null) {
@@ -315,12 +337,9 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
     totalMv += b.mv * rate
     totalPl += b.pl * rate
     totalCost += b.cost * rate
-    if (b.dayKnown) {
-      totalDay += b.day * rate
-      totalPrev += (b.mv - b.day) * rate
-    } else {
-      dayComplete = false
-    }
+    totalDay += b.day * rate
+    totalPrev += b.prev * rate
+    coveredMv += b.covered * rate
   }
 
   if (fxComplete) {
@@ -331,7 +350,15 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
     }
   }
 
-  const blendedDayKnown = fxComplete && dayComplete && totalPrev > 0
+  const blendedDayKnown = fxComplete && totalPrev > 0
+  const coveragePct = fxComplete && totalMv > 0 ? (coveredMv / totalMv) * 100 : null
+  if (missingBaseline.length > 0 && coveragePct != null && coveragePct > 0) {
+    caveats.push(
+      `The day change covers ${coveragePct.toFixed(1)}% of market value; `
+      + `${missingBaseline.join(', ')} had no previous close and ${missingBaseline.length === 1 ? 'is' : 'are'} excluded from it. `
+      + 'State this when quoting the day change.',
+    )
+  }
 
   return {
     source: 'moomoo_live',
@@ -344,6 +371,8 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
     total_market_value_reporting: fxComplete ? totalMv : null,
     total_day_change_reporting: blendedDayKnown ? totalDay : null,
     total_day_change_pct: blendedDayKnown ? (totalDay / totalPrev) * 100 : null,
+    day_change_coverage_pct: coveragePct,
+    day_change_missing_symbols: missingBaseline,
     total_unrealized_pl_reporting: fxComplete ? totalPl : null,
     total_cost_basis_reporting: fxComplete ? totalCost : null,
     cash_by_currency,

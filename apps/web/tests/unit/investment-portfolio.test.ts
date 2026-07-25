@@ -239,6 +239,47 @@ describe('investment portfolio (Moomoo live layer)', () => {
     expect(broken.market_value).toBeCloseTo(100, 6)
     expect(result.caveats.join(' ')).toContain('US.BROKEN')
     expect(result.status).toBe('ok')
+
+    // One unquotable holding must NOT wipe out the headline day change for the
+    // other 99% of the book — report the covered part and disclose the gap.
+    expect(result.total_day_change_pct).toBeCloseTo(10, 6)
+    expect(result.day_change_missing_symbols).toEqual(['US.BROKEN'])
+    // 1100 of 1200 native (both USD) has a baseline.
+    expect(result.day_change_coverage_pct).toBeCloseTo(91.6667, 3)
+  })
+
+  it('reports full coverage when every position has a baseline', async () => {
+    const { result } = await setup({
+      accounts: [{ acc_id: 'live', trd_env: 'REAL', acc_role: 'OWNER' }],
+      portfolios: {
+        live: portfolio({
+          positions: [pos({ code: 'US.NVDA', qty: 10, cost_price: 90, current_price: 110, market_val: 1100 })],
+        }),
+      },
+      snapshots: { 'US.NVDA': { prevClosePrice: 100 } },
+      fx: { USDMYR: 4 },
+    })
+
+    expect(result.day_change_coverage_pct).toBeCloseTo(100, 6)
+    expect(result.day_change_missing_symbols).toEqual([])
+  })
+
+  it('nulls the day change only when nothing has a baseline', async () => {
+    const { result } = await setup({
+      accounts: [{ acc_id: 'live', trd_env: 'REAL', acc_role: 'OWNER' }],
+      portfolios: {
+        live: portfolio({
+          positions: [pos({ code: 'MY.1066', qty: 100, cost_price: 5, current_price: 6, market_val: 600, currency: 'MYR' })],
+        }),
+      },
+      snapshots: { 'MY.1066': new Error('No permission to get quotes for MY.1066') },
+      fx: {},
+    })
+
+    expect(result.total_day_change_pct).toBeNull()
+    expect(result.day_change_coverage_pct).toBe(0)
+    expect(result.day_change_missing_symbols).toEqual(['MY.1066'])
+    expect(result.caveats.join(' ')).toContain('MY.1066')
   })
 
   it('guards against a zero previous close', async () => {

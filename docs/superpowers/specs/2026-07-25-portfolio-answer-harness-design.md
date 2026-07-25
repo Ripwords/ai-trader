@@ -189,7 +189,7 @@ Partial data degrades; it never throws and never silently falls back to the othe
 
 | Failure | Behaviour |
 | --- | --- |
-| Quote snapshot fails for a symbol | `day_change_value` / `day_change_pct` null for that position; caveat naming the symbol; totals computed from the rest and flagged as partial |
+| Quote snapshot fails for a symbol | `day_change_value` / `day_change_pct` null for that position; the blended day change is computed over the covered subset only (see below); caveat naming the symbol |
 | FX rate unresolved | `total_*_reporting` fields null; `by_currency` blocks still returned in full; caveat names the pair |
 | One account errors | Remaining accounts still aggregate; caveat names the failed `acc_id` |
 | No live non-IPO account | `status: 'unavailable'` with an explicit reason, so the model says so rather than reaching for net worth |
@@ -197,6 +197,21 @@ Partial data degrades; it never throws and never silently falls back to the othe
 
 The rule the harness enforces: an unavailable investments layer produces an honest "I can't see your
 Moomoo live account right now", never a net-worth number dressed up as portfolio performance.
+
+### Day-change coverage (found in live testing)
+
+The first live capture returned a null day change for the whole portfolio. Cause: `MY.1066` is in a
+market the account has no quote entitlement for, so it has no previous close — and the original
+all-or-nothing rule let that single holding null the headline figure for the other 96% of the book.
+
+The blended day change is now computed over the positions that *have* a baseline, with
+`day_change_coverage_pct` (share of FX-normalised market value covered) and
+`day_change_missing_symbols` alongside it. Both the tool description and the system prompt require
+stating the coverage and naming the excluded symbols whenever coverage is below 100 — quoting the
+number as if it covered everything would overstate it. The figure is null only when nothing is
+quotable.
+
+Measured on the live account: −2.04% over 96% coverage, with `MY.1066` excluded and named.
 
 ## Testing
 

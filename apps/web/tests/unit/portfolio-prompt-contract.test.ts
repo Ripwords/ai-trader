@@ -37,6 +37,15 @@ describe('portfolio prompt contract', () => {
     expect(desc).toMatch(/my portfolio|how am i doing|default/)
   })
 
+  it('requires disclosing partial day-change coverage', () => {
+    const desc = toolDescription('investment_portfolio')
+    expect(desc).toContain('day_change_coverage_pct')
+    expect(desc).toContain('day_change_missing_symbols')
+    const prompt = buildSystemPrompt('ok')
+    expect(prompt).toContain('day_change_coverage_pct')
+    expect(prompt).toContain('day_change_missing_symbols')
+  })
+
   it('warns that investment_performance value change is not a return', () => {
     const desc = toolDescription('investment_performance')
     expect(desc).toContain('flowsDetected')
