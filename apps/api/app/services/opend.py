@@ -13,6 +13,22 @@ class OpendError(RuntimeError):
     """Raised when OpenD returns a non-success result."""
 
 
+# Currencies moomoo can report account scalars in (mirrors the SDK `Currency`
+# enum, minus NONE). Hardcoded rather than imported so the adapter stays
+# importable without the SDK installed, the way the rest of this module does it.
+_SUPPORTED_REPORT_CURRENCIES = frozenset(
+    {"AUD", "CAD", "CNH", "HKD", "JPY", "MYR", "SGD", "USD"}
+)
+
+# moomoo's accinfo_query signature defaults to currency='HKD'. Leaving it
+# unpassed silently converts every account scalar into HKD and stamps
+# currency='HKD' — which is wrong for any account not reporting in HKD, and
+# there is no per-account base currency to detect (get_acc_list exposes none).
+# The reporting currency is a caller-supplied setting, so we default it to the
+# user's own reporting currency instead of the SDK's.
+_DEFAULT_REPORT_CURRENCY = "MYR"
+
+
 _KTYPE_TO_SDK = {
     "1m": "K_1M",
     "3m": "K_3M",
@@ -40,12 +56,20 @@ class OpendAdapter:
         port: int,
         *,
         rsa_key_path: str | None = None,
+        report_currency: str = _DEFAULT_REPORT_CURRENCY,
         _ctx_factory: Callable[[], Any] | None = None,
         _trade_ctx_factory: Callable[[], Any] | None = None,
     ) -> None:
+        normalized = (report_currency or "").strip().upper()
+        if normalized not in _SUPPORTED_REPORT_CURRENCIES:
+            raise ValueError(
+                f"unsupported report_currency {report_currency!r}; "
+                f"expected one of {sorted(_SUPPORTED_REPORT_CURRENCIES)}"
+            )
         self._host = host
         self._port = port
         self._rsa_key_path = rsa_key_path
+        self._report_currency = normalized
         self._ctx_factory = _ctx_factory or self._default_ctx_factory
         self._trade_ctx_factory = _trade_ctx_factory or self._default_trade_ctx_factory
 
@@ -374,7 +398,14 @@ class OpendAdapter:
             except ImportError:
                 env = trd_env
             ret_p, positions_df = ctx.position_list_query(acc_id=int(acc_id), trd_env=env, refresh_cache=True)
-            ret_a, accinfo_df = ctx.accinfo_query(acc_id=int(acc_id), trd_env=env, refresh_cache=True)
+            # currency= MUST be passed: the SDK default is HKD, which would
+            # convert every scalar below into a currency the user may not hold.
+            ret_a, accinfo_df = ctx.accinfo_query(
+                acc_id=int(acc_id),
+                trd_env=env,
+                refresh_cache=True,
+                currency=self._report_currency,
+            )
         finally:
             try:
                 ctx.close()
@@ -444,7 +475,10 @@ class OpendAdapter:
             market_val=_to_float(a.get("market_val", 0)),
             total_assets=_to_float(a.get("total_assets", 0)),
             positions=positions,
-            currency=_currency(a.get("currency")),
+            # OpenD echoes the currency we requested. Fall back to it directly
+            # so the field is never null just because the column was absent.
+            currency=_currency(a.get("currency")) or self._report_currency,
+            reporting_currency_source="requested",
             cash_by_currency=cash_by_currency,
         )
 

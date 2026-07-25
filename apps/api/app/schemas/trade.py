@@ -42,11 +42,18 @@ class Portfolio(BaseModel):
     market_val: float
     total_assets: float
     positions: list[Position]
-    # Account BASE/reporting currency for the scalar cash/market_val/total_assets
-    # figures. For moomoo margin accounts this is the account's home currency
-    # (often HKD) and the scalar `cash` is every currency's cash CONVERTED into
-    # it — NOT a native balance. Do not present it as money the user holds.
+    # REPORTING currency of the scalar cash/market_val/total_assets figures.
+    # This is NOT a broker fact: moomoo exposes no per-account base currency
+    # (get_acc_list has no currency column), and accinfo_query converts the
+    # scalars into whatever currency the caller asks for. We request
+    # MOOMOO_REPORT_CURRENCY and OpenD echoes it here. The scalar `cash` is
+    # therefore every currency's cash CONVERTED into this unit — NOT a native
+    # balance. Do not present it as money the user holds; use cash_by_currency.
     currency: str | None = None
+    # Always "requested" — a marker that `currency` reflects our request rather
+    # than a currency the account intrinsically reports in, so no consumer
+    # mistakes the converted total for a native balance.
+    reporting_currency_source: Literal["requested"] = "requested"
     # Native cash the user actually holds, keyed by real currency
     # (e.g. {"USD": 1634.12}). Built from moomoo's per-currency *_cash columns.
     # This is the truth about what currencies are held; prefer it over the

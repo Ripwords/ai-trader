@@ -27,6 +27,7 @@ class FakeTradeCtx:
         self._fail = fail
         self.place_calls: list[dict] = []
         self.modify_calls: list[dict] = []
+        self.accinfo_calls: list[dict] = []
 
     def get_acc_list(self):
         if self._fail:
@@ -38,10 +39,17 @@ class FakeTradeCtx:
             return -1, "boom"
         return 0, pd.DataFrame(self._positions)
 
-    def accinfo_query(self, acc_id, trd_env, refresh_cache=False):
+    def accinfo_query(self, acc_id, trd_env, refresh_cache=False, currency=None):
         if self._fail:
             return -1, "boom"
-        return 0, pd.DataFrame(self._accinfo)
+        self.accinfo_calls.append({"acc_id": acc_id, "trd_env": trd_env, "currency": currency})
+        rows = [dict(r) for r in self._accinfo]
+        # Mirror OpenD: the account scalars come back converted into whatever
+        # reporting currency the caller requested, and `currency` echoes it.
+        if currency is not None:
+            for r in rows:
+                r["currency"] = currency
+        return 0, pd.DataFrame(rows)
 
     def order_list_query(self, acc_id, trd_env, refresh_cache=False):
         if self._fail:
@@ -146,6 +154,41 @@ def test_get_portfolio_merges_positions_and_account():
     assert pos.pl_ratio == pytest.approx(0.10)  # SDK returned 10.0 (percentage) → normalized to 0.10
 
 
+def test_get_portfolio_requests_configured_reporting_currency():
+    """moomoo's accinfo_query defaults to currency='HKD'. Left unpassed it
+    converts every account scalar into HKD and stamps currency='HKD',
+    regardless of what the user actually reports in. The adapter must pass
+    its configured reporting currency explicitly."""
+    _set_ctx(FakeTradeCtx(
+        positions_payload=[],
+        accinfo_payload=[{"cash": 1000.0, "market_val": 0.0, "total_assets": 1000.0}],
+    ))
+    adapter = OpendAdapter(
+        host="ignored", port=0, report_currency="MYR", _trade_ctx_factory=lambda: _ctx
+    )
+    portfolio = adapter.get_portfolio(acc_id=12345, trd_env="REAL")
+    assert _ctx.accinfo_calls[0]["currency"] == "MYR"
+    assert portfolio.currency == "MYR"
+    assert portfolio.reporting_currency_source == "requested"
+
+
+def test_get_portfolio_defaults_reporting_currency_to_myr():
+    """The default must not be the SDK's HKD."""
+    _set_ctx(FakeTradeCtx(
+        positions_payload=[],
+        accinfo_payload=[{"cash": 1000.0, "market_val": 0.0, "total_assets": 1000.0}],
+    ))
+    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    adapter.get_portfolio(acc_id=12345, trd_env="REAL")
+    assert _ctx.accinfo_calls[0]["currency"] == "MYR"
+
+
+def test_get_portfolio_rejects_unsupported_reporting_currency():
+    """A typo'd config must fail loudly, not silently fall back to HKD."""
+    with pytest.raises(ValueError, match="MYRR"):
+        OpendAdapter(host="ignored", port=0, report_currency="MYRR")
+
+
 def test_get_portfolio_preserves_currency():
     """moomoo returns a per-position `currency` column and a per-account
     settlement `currency`; both must survive into the typed schema so
@@ -172,18 +215,22 @@ def test_get_portfolio_preserves_currency():
             }
         ],
     ))
-    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    adapter = OpendAdapter(
+        host="ignored", port=0, report_currency="HKD", _trade_ctx_factory=lambda: _ctx
+    )
     portfolio = adapter.get_portfolio(acc_id=12345, trd_env="REAL")
     assert portfolio.currency == "HKD"
+    # Per-position settlement currency is native and must NOT be rewritten by
+    # the account-level reporting currency.
     assert portfolio.positions[0].currency == "HKD"
 
 
 def test_get_portfolio_reports_native_cash_not_base_currency():
-    """The scalar `cash`/`currency` from accinfo is the BASE-currency (HKD)
-    aggregate — every currency's cash converted into the account's home
-    currency. The native holdings live in the per-currency *_cash columns.
-    A USD-only margin account must report USD cash, never a phantom HKD balance.
-    Mirrors the real moomoo accinfo shape (base HKD, native us_cash)."""
+    """The scalar `cash`/`currency` from accinfo is the REPORTING-currency
+    aggregate — every currency's cash converted into the currency we asked for.
+    The native holdings live in the per-currency *_cash columns. A USD-only
+    account must report USD cash, never a phantom balance in the reporting
+    currency. Mirrors the real moomoo accinfo shape (native us_cash)."""
     _set_ctx(FakeTradeCtx(
         positions_payload=[],
         accinfo_payload=[
@@ -200,18 +247,21 @@ def test_get_portfolio_reports_native_cash_not_base_currency():
             }
         ],
     ))
-    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    adapter = OpendAdapter(
+        host="ignored", port=0, report_currency="HKD", _trade_ctx_factory=lambda: _ctx
+    )
     portfolio = adapter.get_portfolio(acc_id=12345, trd_env="REAL")
     # Native holdings: only USD, no phantom HKD/MYR.
     assert portfolio.cash_by_currency == {"USD": 1634.12}
-    # Base-currency scalar is preserved but clearly labelled as HKD (home ccy).
+    # Reporting-currency scalar is preserved but labelled as the unit we asked for.
     assert portfolio.currency == "HKD"
     assert portfolio.cash == 12806.63
 
 
-def test_get_portfolio_currency_absent_is_none():
-    """Paper accounts / older SDKs may omit the currency column; coerce to None
-    rather than the string 'N/A' or a hardcoded default."""
+def test_get_portfolio_currency_falls_back_to_requested_when_column_absent():
+    """Paper accounts / older SDKs may omit the currency column. Since we
+    explicitly requested a reporting currency, the correct fallback is that
+    currency — not None, and never a hardcoded HKD."""
     _set_ctx(FakeTradeCtx(
         positions_payload=[
             {"code": "US.NVDA", "qty": 1, "average_cost": 1.0, "nominal_price": 1.0,
@@ -219,9 +269,13 @@ def test_get_portfolio_currency_absent_is_none():
         ],
         accinfo_payload=[{"cash": 1.0, "market_val": 1.0, "total_assets": 2.0}],
     ))
-    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    adapter = OpendAdapter(
+        host="ignored", port=0, report_currency="MYR", _trade_ctx_factory=lambda: _ctx
+    )
     portfolio = adapter.get_portfolio(acc_id=12345, trd_env="SIMULATE")
-    assert portfolio.currency is None
+    assert portfolio.currency == "MYR"
+    # Per-position settlement currency stays None when the broker omits it —
+    # that one really is an unknown broker fact, not something we supply.
     assert portfolio.positions[0].currency is None
 
 

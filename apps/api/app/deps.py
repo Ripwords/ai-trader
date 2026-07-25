@@ -17,9 +17,21 @@ def require_internal_bearer(
 
 
 @lru_cache(maxsize=1)
-def _build_adapter(host: str, port: int, rsa_key_path: str | None) -> OpendAdapter:
-    return OpendAdapter(host=host, port=port, rsa_key_path=rsa_key_path)
+def _build_adapter(
+    host: str, port: int, rsa_key_path: str | None, report_currency: str
+) -> OpendAdapter:
+    return OpendAdapter(
+        host=host,
+        port=port,
+        rsa_key_path=rsa_key_path,
+        report_currency=report_currency,
+    )
 
 
 def get_opend(settings: Settings = Depends(get_settings)) -> OpendAdapter:
-    return _build_adapter(settings.OPEND_HOST, settings.OPEND_PORT, settings.OPEND_RSA_KEY_PATH)
+    return _build_adapter(
+        settings.OPEND_HOST,
+        settings.OPEND_PORT,
+        settings.OPEND_RSA_KEY_PATH,
+        settings.MOOMOO_REPORT_CURRENCY,
+    )

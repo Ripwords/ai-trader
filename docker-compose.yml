@@ -39,6 +39,9 @@ services:
       OPEND_PORT: ${OPEND_PORT}
       # RSA key baked into the image at build (see apps/api/Dockerfile + apps/api/secrets/).
       OPEND_RSA_KEY_PATH: ${OPEND_RSA_KEY_PATH:-/app/secrets/futu_rsa.key}
+      # Reporting currency for moomoo account scalars. Unset, the SDK silently
+      # converts them into HKD (its accinfo_query default).
+      MOOMOO_REPORT_CURRENCY: ${MOOMOO_REPORT_CURRENCY:-MYR}
       # Same DB Drizzle migrates — algo persistence (strategies/runs/signals)
       # is read/written from this side via asyncpg.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}

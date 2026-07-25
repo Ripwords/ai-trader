@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     # bridge); quote RPCs work without it. Leave unset for in-process /
     # 127.0.0.1 dev.
     OPEND_RSA_KEY_PATH: str | None = None
+    # Currency the moomoo account scalars (cash / market_val / total_assets)
+    # are reported in. moomoo's accinfo_query defaults to HKD and exposes no
+    # per-account base currency to detect, so this must be set to whatever the
+    # user's account actually reports in. One of AUD/CAD/CNH/HKD/JPY/MYR/SGD/USD.
+    MOOMOO_REPORT_CURRENCY: str = "MYR"
     # postgresql://user:pass@host:port/db — points at the same DB the web
     # app uses (Drizzle owns the schema; algo persistence reads/writes via asyncpg).
     DATABASE_URL: str = ""
