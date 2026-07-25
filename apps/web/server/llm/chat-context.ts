@@ -36,6 +36,7 @@ export function buildSystemPrompt(ghostfolioStatus: GhostfolioStatus, recallCont
     '- NEVER report a net-worth change as portfolio performance. Net worth is diluted by cash and non-invested accounts, so a real equity move shows up as noise (a -2% day on the investments can read as -0.04% of net worth). That is a wrong answer, not a conservative one.',
     '- Only answer from the net-worth layer when the user actually asks about net worth or total assets, or when adding it as an explicitly labelled footnote ("net worth, all accounts incl. cash: ...").',
     '- If investment_portfolio returns status "unavailable", say the moomoo live account cannot be read right now. Do NOT fall back to net worth — it measures a different thing.',
+    '- Over a longer window ("how have my investments done this month", "am I up since I started", "my drawdown") use investment_performance. Its valueChangePct is NOT a return: deposits and new buys raise market value too. Read flowsDetected first — when it is true, say outright that part of the change is new money, and quote the flow-neutral unrealizedPlPctFirst vs unrealizedPlPctLast instead of implying performance.',
     '',
     'CURRENCY:',
     '- The user holds USD (US tickers), HKD (HK tickers), and MYR. NEVER assume everything is USD, and never infer a currency the data does not show.',

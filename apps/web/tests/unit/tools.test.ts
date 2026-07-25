@@ -162,6 +162,7 @@ describe('tool catalogue', () => {
       'convert_fx',
       'dyp_ask',
       'holdings_context',
+      'investment_performance',
       'investment_portfolio',
       'investment_research',
       'market_kline',

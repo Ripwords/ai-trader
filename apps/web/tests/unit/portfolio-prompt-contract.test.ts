@@ -37,6 +37,22 @@ describe('portfolio prompt contract', () => {
     expect(desc).toMatch(/my portfolio|how am i doing|default/)
   })
 
+  it('warns that investment_performance value change is not a return', () => {
+    const desc = toolDescription('investment_performance')
+    expect(desc).toContain('flowsDetected')
+    expect(desc).toMatch(/NOT a return/i)
+    // It must not be confused with the net-worth curve or with today's read.
+    expect(desc).toContain('portfolio_performance')
+    expect(desc).toContain('investment_portfolio')
+  })
+
+  it('tells the model to disclose flows rather than narrate deposits as gains', () => {
+    const prompt = buildSystemPrompt('ok')
+    expect(prompt).toContain('investment_performance')
+    expect(prompt).toContain('flowsDetected')
+    expect(prompt).toMatch(/new money/i)
+  })
+
   it('labels portfolio_performance as net-worth history, not investment performance', () => {
     const desc = toolDescription('portfolio_performance').toLowerCase()
     expect(desc).toContain('net worth')

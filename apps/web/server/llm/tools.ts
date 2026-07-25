@@ -795,6 +795,27 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'investment_performance': tool({
+      description:
+        'History of the INVESTMENTS layer over time (moomoo live), from stored daily snapshots: ' +
+        'market value / cost basis / unrealized P&L per snapshot, plus max drawdown and 1/7/30-day ' +
+        'changes. Use for "how have my investments done this week/month", "am I up since I started", ' +
+        '"what is my drawdown". For today only, use investment_portfolio instead; for total net ' +
+        'worth over time, use portfolio_performance. ' +
+        'CRITICAL: valueChangePct is NOT a return — depositing money or buying more raises market ' +
+        'value too. Check flowsDetected and costBasisChangePct first: when flowsDetected is true, say ' +
+        'plainly that part of the change is new money, and lean on unrealizedPlPctFirst vs ' +
+        'unrealizedPlPctLast, which are flow-neutral. If count is 0 there is no history yet — ' +
+        'snapshots are captured daily and the curve builds up over time.',
+      inputSchema: z.object({
+        days: z.number().int().min(1).max(3650).default(365).describe('lookback window in days'),
+      }),
+      execute: async ({ days }) => {
+        const { getInvestmentPerformance } = await import('../lib/investment-history')
+        return getInvestmentPerformance({ days })
+      },
+    }),
+
     'holdings_context': tool({
       description:
         "Get the user's current holdings for a symbol with moomoo as broker data and Ghostfolio as tracker/reconciliation data. Returns broker_quantity (moomoo live), paper_quantity (moomoo paper), tracker_quantity (Ghostfolio), owned_quantity, reconciliation status, allocation % of net worth, and cash. Use when the user asks vague questions like 'how many NVDA shares do I have', 'what's my NVDA exposure', 'do I already own X', or before recommending a trade size. Never add tracker_quantity to broker_quantity; if they differ, explain it as a reconciliation mismatch. If Ghostfolio is misconfigured the response will indicate that explicitly via ghostfolio_status — surface it to the user.",

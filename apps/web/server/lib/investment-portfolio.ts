@@ -62,6 +62,13 @@ export interface InvestmentPortfolio {
   /** FX-weighted blend — comparable to an index move. */
   total_day_change_pct: number | null
   total_unrealized_pl_reporting: number | null
+  /**
+   * Total cost basis in the reporting currency. Carried so downstream history
+   * can tell a price move apart from a deposit or a new buy — market value
+   * alone cannot, and calling a deposit "performance" is the same class of
+   * error as calling a net-worth delta portfolio performance.
+   */
+  total_cost_basis_reporting: number | null
   cash_by_currency: Record<string, number>
   caveats: string[]
 }
@@ -85,6 +92,7 @@ function empty(status: InvestmentPortfolio['status'], caveats: string[]): Invest
     total_day_change_reporting: null,
     total_day_change_pct: null,
     total_unrealized_pl_reporting: null,
+    total_cost_basis_reporting: null,
     cash_by_currency: {},
     caveats,
   }
@@ -245,12 +253,13 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
 
   // --- Per-currency buckets. Native amounts are only ever added to amounts in
   // the same currency; the cross-currency blend happens once, below, via FX.
-  const buckets = new Map<string, { mv: number; day: number; dayKnown: boolean; prev: number; pl: number }>()
+  const buckets = new Map<string, { mv: number; day: number; dayKnown: boolean; prev: number; pl: number; cost: number }>()
   for (const p of positions) {
     const key = p.currency ?? UNKNOWN_CURRENCY
-    const b = buckets.get(key) ?? { mv: 0, day: 0, dayKnown: true, prev: 0, pl: 0 }
+    const b = buckets.get(key) ?? { mv: 0, day: 0, dayKnown: true, prev: 0, pl: 0, cost: 0 }
     b.mv += p.market_value
     b.pl += p.unrealized_pl
+    b.cost += p.cost_basis
     if (p.day_change_value == null) {
       b.dayKnown = false
     } else {
@@ -289,6 +298,7 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
   let totalDay = 0
   let totalPrev = 0
   let totalPl = 0
+  let totalCost = 0
   let fxComplete = true
   let dayComplete = true
   for (const [ccy, b] of buckets.entries()) {
@@ -304,6 +314,7 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
     }
     totalMv += b.mv * rate
     totalPl += b.pl * rate
+    totalCost += b.cost * rate
     if (b.dayKnown) {
       totalDay += b.day * rate
       totalPrev += (b.mv - b.day) * rate
@@ -334,6 +345,7 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
     total_day_change_reporting: blendedDayKnown ? totalDay : null,
     total_day_change_pct: blendedDayKnown ? (totalDay / totalPrev) * 100 : null,
     total_unrealized_pl_reporting: fxComplete ? totalPl : null,
+    total_cost_basis_reporting: fxComplete ? totalCost : null,
     cash_by_currency,
     caveats,
   }

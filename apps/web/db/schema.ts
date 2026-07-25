@@ -230,6 +230,30 @@ export const portfolioSnapshots = pgTable('portfolio_snapshots', {
   byCapturedAt: index('portfolio_snapshots_captured_at_idx').on(t.capturedAt),
 }))
 
+// Equity curve for the INVESTMENTS layer (moomoo live positions), kept in its
+// own table rather than sharing portfolio_snapshots with the NET WORTH layer.
+// The two measure different things and must never be mixed; a separate table
+// makes that structural instead of depending on every query remembering a
+// filter. costBasis is stored alongside marketValue so a deposit or a new buy
+// can be told apart from a price move — value change alone is not a return.
+export const investmentSnapshots = pgTable('investment_snapshots', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+  source: varchar('source', { length: 16 }).notNull().default('auto'),
+  // Currency the totals below are denominated in (MOOMOO_REPORT_CURRENCY).
+  reportingCurrency: varchar('reporting_currency', { length: 8 }).notNull(),
+  marketValue: numeric('market_value', { precision: 18, scale: 2 }).notNull(),
+  costBasis: numeric('cost_basis', { precision: 18, scale: 2 }).notNull(),
+  unrealizedPl: numeric('unrealized_pl', { precision: 18, scale: 2 }).notNull(),
+  dayChange: numeric('day_change', { precision: 18, scale: 2 }),
+  dayChangePct: numeric('day_change_pct', { precision: 10, scale: 4 }),
+  byCurrency: jsonb('by_currency').notNull().default([]),
+  positions: jsonb('positions').notNull().default([]),
+  accounts: jsonb('accounts').notNull().default([]),
+}, t => ({
+  byCapturedAt: index('investment_snapshots_captured_at_idx').on(t.capturedAt),
+}))
+
 // Ledger of every paper order the system places, regardless of origin.
 // `source` ∈ {'agent_decision','chat','algo'}. `decisionId` links back to the
 // agent decision that motivated the order (the FK agentDecisions.paperOrderId

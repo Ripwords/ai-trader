@@ -242,11 +242,34 @@ covered by row 1 and row 2.
 - A configured `MYR` surfaces as `Portfolio.currency == 'MYR'`.
 - An invalid configured currency is rejected at startup.
 
+## Investments history (added after the initial four steps)
+
+The investments layer gets its own equity curve, in its own `investment_snapshots` table rather than
+sharing `portfolio_snapshots` with net worth. A separate table makes the layer split structural
+instead of depending on every query remembering a filter — a missed filter would silently mix the
+layers, which is the exact failure this harness exists to prevent.
+
+**Cost basis is stored next to market value.** Market value rises when money is deposited or more
+shares are bought, so a value change is *not* a return. `computeInvestmentPerformance` therefore
+reports `valueChangePct` (flows included), `costBasisChangePct`, a `flowsDetected` flag, and the
+flow-neutral `unrealizedPlPctFirst` / `unrealizedPlPctLast`. The `investment_performance` tool
+description and the system prompt both require the model to disclose flows rather than narrate a
+deposit as a gain — the same class of error as narrating a net-worth delta as performance.
+
+Capture refuses to write when the layer is `unavailable` or FX left the total unknown: storing a null
+as 0 would read back as a crash to zero and poison every derived stat.
+
+**Timeouts.** The api client is constructed without one, so when OpenD is down the underlying HTTP
+call hangs on OpenD's reconnect loop. Measured: the capture endpoint ran past 240s. Both capture
+routes now bound their reads (`withDeadline`) — 30s for investments, 60s for net worth, the looser
+budget because Ghostfolio can legitimately be slow. Measured after: 90s and a 503 naming which read
+timed out. A missed snapshot is acceptable; a wedged cron is not.
+
 ## Out of scope
 
-- Moomoo-scoped daily snapshot history (would enable 7d/30d/drawdown on the investments layer). The
-  user chose day-change + since-cost for now; snapshot history is a later spec.
 - Any change to how Ghostfolio computes net worth.
+- A general client-side timeout on the api client. Only the two capture routes are bounded; chat
+  tools that legitimately run long (research, agents) are untouched.
 - Reconciliation UX between the two layers beyond the existing `holdings_context` behaviour.
 - The `/portfolio` page. This spec covers the chat answer path only.
 
