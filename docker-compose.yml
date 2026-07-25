@@ -90,6 +90,9 @@ services:
       SEARCH_PROVIDER: ${SEARCH_PROVIDER:-brave}
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      # Reporting currency for the investments layer's blended totals. Must
+      # match the api service's value so both layers report the same unit.
+      MOOMOO_REPORT_CURRENCY: ${MOOMOO_REPORT_CURRENCY:-MYR}
       # Ghostfolio MCP — point at your remote MCP endpoint.
       # Leave empty to disable (the agent simply won't see ghostfolio_* tools).
       GHOSTFOLIO_MCP_URL: ${GHOSTFOLIO_MCP_URL:-}
