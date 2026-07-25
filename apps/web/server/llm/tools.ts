@@ -226,9 +226,10 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const currencies = Object.keys(totals_by_currency)
         const mixed_currency = currencies.filter(c => c !== 'UNKNOWN').length > 1
         // Native cash the user actually holds, aggregated across accounts. The
-        // per-currency totals above are in each account's BASE currency (moomoo
-        // reports HKD-converted scalars); this map is the real per-currency
-        // cash. Report cash from here, not from the base-currency totals.
+        // per-currency totals above are in the server's configured REPORTING
+        // currency (MOOMOO_REPORT_CURRENCY — moomoo converts the scalars into
+        // whatever we request); this map is the real per-currency cash. Report
+        // cash from here, not from the reporting-currency totals.
         const native_cash_by_currency: Record<string, number> = {}
         for (const row of rows) {
           for (const [ccy, amt] of Object.entries(row.portfolio.cash_by_currency ?? {})) {
@@ -245,7 +246,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           // Explicit guardrail for the model: don't add across currencies, and
           // don't present base-currency figures as native holdings.
           currency_note:
-            'The totals fields are in each account\'s BASE/reporting currency (moomoo margin accounts report in HKD). native_cash_by_currency is the actual cash the user holds — report cash from it. Do not add amounts across currencies without convert_fx.',
+            'The totals fields are in the server\'s configured REPORTING currency, named in each account\'s `currency` field — moomoo converts its scalars into whatever currency the server requests, so this is a display unit we chose, not a currency the user necessarily holds. native_cash_by_currency is the actual cash held — report cash from it. Do not add amounts across currencies without convert_fx.',
           accounts: rows,
           skipped,
         }
@@ -773,6 +774,27 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'investment_portfolio': tool({
+      description:
+        'THE DEFAULT for any unqualified portfolio question: "check my portfolio", "how am I doing", ' +
+        '"how did my portfolio do overnight/today", "what moved", "what do I hold", "what is my ' +
+        'portfolio worth". Returns the user\'s INVESTMENTS layer — moomoo LIVE positions only (never ' +
+        'paper, never Ghostfolio) — with per-position day change vs previous close, since-cost ' +
+        'unrealized P&L, per-currency totals in the currency actually held, and one FX-blended ' +
+        'total_day_change_pct that is directly comparable to an index move. ' +
+        'Lead with total_day_change_pct for "how did I do today" and pair it with unrealized P&L for ' +
+        '"am I up overall". Amounts in by_currency are NATIVE — never add them together; the blended ' +
+        'total_*_reporting figures are already FX-converted into reporting_currency. ' +
+        'If status is "unavailable" the moomoo live account could not be read: say so plainly and DO ' +
+        'NOT substitute net worth (portfolio_performance / Ghostfolio) — those measure a different ' +
+        'thing. Always surface anything in caveats.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getInvestmentPortfolio } = await import('../lib/investment-portfolio')
+        return getInvestmentPortfolio()
+      },
+    }),
+
     'holdings_context': tool({
       description:
         "Get the user's current holdings for a symbol with moomoo as broker data and Ghostfolio as tracker/reconciliation data. Returns broker_quantity (moomoo live), paper_quantity (moomoo paper), tracker_quantity (Ghostfolio), owned_quantity, reconciliation status, allocation % of net worth, and cash. Use when the user asks vague questions like 'how many NVDA shares do I have', 'what's my NVDA exposure', 'do I already own X', or before recommending a trade size. Never add tracker_quantity to broker_quantity; if they differ, explain it as a reconciliation mismatch. If Ghostfolio is misconfigured the response will indicate that explicitly via ghostfolio_status — surface it to the user.",
@@ -849,12 +871,14 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'portfolio_performance': tool({
       description:
-        'How the user\'s portfolio value has evolved over time, from stored daily snapshots: ' +
-        'equity-curve series (net worth / cash / positions value per snapshot) plus derived stats ' +
-        '(total return vs first snapshot, max drawdown, 1/7/30-day returns). Use for "how has my ' +
-        'portfolio done", "am I up this month", "what\'s my drawdown". If stats.count is 0 there is ' +
-        'no history yet — tell the user snapshots are captured daily (or via the portfolio page\'s ' +
-        'capture button) and the curve will build up over time.',
+        'NET WORTH history — NOT investment performance. Equity curve of the user\'s total net worth ' +
+        '(Ghostfolio: every account, cash and non-investment assets included) from stored daily ' +
+        'snapshots, plus derived stats (total return vs first snapshot, max drawdown, 1/7/30-day ' +
+        'returns). Use ONLY when the user asks about net worth or total assets over time. For "how ' +
+        'has my portfolio done", "am I up", "what moved" — use investment_portfolio instead; a ' +
+        'net-worth delta is diluted by cash and non-invested accounts and must never be reported as ' +
+        'portfolio performance. If stats.count is 0 there is no history yet — tell the user ' +
+        'snapshots are captured daily (or via the portfolio page\'s capture button).',
       inputSchema: z.object({
         days: z.number().int().min(1).max(3650).default(365).describe('lookback window in days'),
       }),

@@ -85,9 +85,11 @@ export interface Portfolio {
   market_val: number
   total_assets: number
   positions: Position[]
-  // Account BASE/reporting currency (often HKD). The scalar `cash` is every
-  // currency's cash converted into it — NOT a native balance. Don't present it
-  // as money the user holds.
+  // REPORTING currency of the scalars, set by the server's
+  // MOOMOO_REPORT_CURRENCY — not a broker fact (moomoo exposes no per-account
+  // base currency and converts into whatever we request). The scalar `cash` is
+  // every currency's cash converted into it — NOT a native balance. Don't
+  // present it as money the user holds; use cash_by_currency.
   currency: string | null
   // Native cash actually held, keyed by real currency (e.g. { USD: 1634.12 }).
   // Prefer this over cash/currency when reporting what the user owns.

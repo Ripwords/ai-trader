@@ -450,11 +450,11 @@ class OpendAdapter:
             for _, r in positions_df.iterrows()
         ]
         a = accinfo_df.iloc[0].to_dict() if not accinfo_df.empty else {}
-        # moomoo exposes native per-currency cash alongside the base-currency
-        # aggregate. The base `cash` field is every currency converted into the
-        # account's home currency (accinfo `currency`, often HKD), so it must
-        # NOT be read as a native balance. These *_cash columns are the real
-        # per-currency holdings. Only non-zero balances are surfaced.
+        # moomoo exposes native per-currency cash alongside the converted
+        # aggregate. The scalar `cash` field is every currency converted into
+        # the reporting currency we requested (echoed in accinfo `currency`),
+        # so it must NOT be read as a native balance. These *_cash columns are
+        # the real per-currency holdings. Only non-zero balances are surfaced.
         cash_col_to_ccy = {
             "us_cash": "USD",
             "hk_cash": "HKD",
