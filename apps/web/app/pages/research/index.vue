@@ -129,15 +129,17 @@ function toIso(s: string | null): string | null {
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
-    <header class="page-header">
-      <nav class="crumb" aria-label="breadcrumb">
-        <span class="crumb__link crumb__link--leaf" aria-current="page">research</span>
-      </nav>
-      <div class="page-header__actions">
-        <NuxtLink to="/research/runs" class="page-header__link">runs →</NuxtLink>
-        <NuxtLink to="/algo" class="page-header__link">algo →</NuxtLink>
-      </div>
-    </header>
+    <PageHeader>
+      <template #lead>
+        <nav class="crumb" aria-label="breadcrumb">
+          <span class="crumb__link crumb__link--leaf" aria-current="page">research</span>
+        </nav>
+      </template>
+      <template #actions>
+        <NuxtLink to="/research/runs" class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors">runs →</NuxtLink>
+        <NuxtLink to="/algo" class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors">algo →</NuxtLink>
+      </template>
+    </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden landing">
       <div class="landing__inner">
@@ -299,23 +301,13 @@ function toIso(s: string | null): string | null {
 </template>
 
 <style scoped>
-/* ─── Header / breadcrumb ─── */
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  height: 4rem;
-  padding: 0 1.75rem;
-  border-bottom: 1px solid var(--ink-line);
-  flex-shrink: 0;
-}
+/* ─── Breadcrumb ─── */
 .crumb {
   display: flex;
   align-items: baseline;
   gap: 0.7rem;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   letter-spacing: 0.2em;
   text-transform: uppercase;
 }
@@ -324,22 +316,6 @@ function toIso(s: string | null): string | null {
   text-decoration: none;
 }
 .crumb__link--leaf { color: var(--paper-0); }
-.page-header__actions {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-shrink: 0;
-}
-.page-header__link {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--paper-3);
-  text-decoration: none;
-  transition: color 140ms ease;
-}
-.page-header__link:hover { color: var(--accent); }
 
 /* ─── Layout ─── */
 .landing {
@@ -350,7 +326,7 @@ function toIso(s: string | null): string | null {
 .landing__inner {
   max-width: 1080px;
   margin: 0 auto;
-  padding: 2.5rem 1.75rem 4rem;
+  padding: 2.5rem var(--page-x) 4rem;
   display: flex;
   flex-direction: column;
   gap: 2rem;
@@ -693,7 +669,9 @@ function toIso(s: string | null): string | null {
 .tile__time { color: var(--paper-2); }
 
 @media (max-width: 760px) {
-  .intel__stats,
+  .intel__stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
   .intel__queue {
     grid-template-columns: 1fr;
   }
@@ -702,6 +680,30 @@ function toIso(s: string | null): string | null {
   }
   .intel__note {
     grid-column: 1 / -1;
+  }
+}
+@media (max-width: 640px) {
+  /* Three 0.62rem tracked labels ("failed 7d") no longer fit their cell once
+     the card padding is subtracted from a 320px viewport. */
+  .intel__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (pointer: coarse) {
+  .search__btn { min-height: 44px; }
+  /* .tiles__head is baseline-aligned, so a 44px-tall button would drag the
+     row's baseline. Grow the hit area with an overlay, not the box. */
+  .tiles__refresh { position: relative; }
+  .tiles__refresh::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    min-width: 44px;
+    height: 44px;
   }
 }
 </style>

@@ -399,6 +399,30 @@ function onStart() {
   flex-shrink: 0;
   margin: 0;
 }
+
+@media (pointer: coarse) {
+  /* A 13px checkbox and a 16px-tall slider track are unhittable with a thumb.
+     Grow the controls themselves rather than padding the row, so the target
+     and the thing it toggles stay the same shape. */
+  .cost__check {
+    width: 1.15rem;
+    height: 1.15rem;
+  }
+  /* The checkbox is tapped through its label, so that is the box that has to
+     clear the floor. */
+  .cost__analyst label,
+  .cost__deep {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+  .cost__slider {
+    height: 44px;
+  }
+  .cost__select {
+    min-height: 44px;
+  }
+}
 .cost__warn {
   font-size: 0.7rem;
   color: var(--tape-down);

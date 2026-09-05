@@ -177,8 +177,15 @@ header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
   padding: 1rem 1.2rem;
   border-bottom: 1px solid var(--ink-line);
+}
+
+@media (max-width: 400px) {
+  header { padding: 0.85rem 1rem; }
+  .legend { flex-wrap: wrap; gap: 0.35rem 0.7rem; }
 }
 .eyebrow {
   font-family: var(--font-mono);

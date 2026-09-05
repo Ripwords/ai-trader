@@ -4,7 +4,9 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 
 **Current end-to-end flow:**
 
-- Log in (single password), see your moomoo watchlist in the sidebar.
+- Log in (single password), see your moomoo watchlist in the sidebar — or in the
+  navigation drawer on a phone, where the same rail (watchlist + past
+  conversations) moves behind the ☰ button.
 - Ask `show NVDA daily` → real candlestick chart inline.
 - Ask `what's on my watchlist?` → list pulled from your real moomoo account.
 - Ask `add US.AAPL to my watchlist` / `remove US.NVDA` → mutates moomoo's watchlist.

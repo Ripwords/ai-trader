@@ -336,29 +336,29 @@ async function capturePlanningSnapshot() {
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
-    <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
-      <div class="flex items-baseline gap-4">
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">portfolio</span>
-      </div>
-      <div class="flex items-center gap-5">
-        <NuxtLink to="/research" class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]">
+    <PageHeader>
+      <template #lead>
+        <span>portfolio</span>
+      </template>
+      <template #actions>
+        <NuxtLink to="/research" class="text-[var(--paper-3)] hover:text-[var(--accent)]">
           research
         </NuxtLink>
-        <NuxtLink to="/algo" class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]">
+        <NuxtLink to="/algo" class="text-[var(--paper-3)] hover:text-[var(--accent)]">
           algo →
         </NuxtLink>
         <button
-          class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]"
+          class="text-[var(--paper-3)] hover:text-[var(--accent)]"
           :disabled="pending"
           @click="hardRefresh()"
         >
           {{ pending ? 'refreshing…' : 'refresh' }}
         </button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-6xl mx-auto px-7 py-8 space-y-8">
+      <div class="max-w-6xl mx-auto page-pad space-y-8">
         <div v-if="error" class="surface-1 p-6 font-mono text-sm text-[var(--tape-down)] whitespace-pre-wrap">
           failed to load portfolio: {{ error.message }}
         </div>
@@ -395,34 +395,34 @@ async function capturePlanningSnapshot() {
           </div>
 
           <!-- Top stat cards -->
-          <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <section class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <div class="surface-1 p-5">
-              <div class="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--paper-3)] mb-2">net worth</div>
-              <div class="font-mono text-xl text-[var(--paper-0)]" data-mono>
+              <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)] mb-2">net worth</div>
+              <div class="font-mono stat-value text-[var(--paper-0)]" data-mono>
                 {{ fmtCurrency(data.net_worth_total, baseCcy) }}
               </div>
-              <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">{{ baseCcy }} base</div>
+              <div class="font-mono text-xs text-[var(--paper-3)] mt-1">{{ baseCcy }} base</div>
             </div>
             <div class="surface-1 p-5">
-              <div class="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--paper-3)] mb-2">total cash</div>
-              <div class="font-mono text-xl text-[var(--paper-0)]" data-mono>
+              <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)] mb-2">total cash</div>
+              <div class="font-mono stat-value text-[var(--paper-0)]" data-mono>
                 {{ fmtCurrency(data.cash_total, baseCcy) }}
               </div>
-              <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">across all accounts</div>
+              <div class="font-mono text-xs text-[var(--paper-3)] mt-1">across all accounts</div>
             </div>
             <div class="surface-1 p-5">
-              <div class="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--paper-3)] mb-2">positions value</div>
-              <div class="font-mono text-xl text-[var(--paper-0)]" data-mono>
+              <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)] mb-2">positions value</div>
+              <div class="font-mono stat-value text-[var(--paper-0)]" data-mono>
                 {{ fmtCurrency(data.positions_value, baseCcy) }}
               </div>
-              <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">{{ data.positions.length }} positions</div>
+              <div class="font-mono text-xs text-[var(--paper-3)] mt-1">{{ data.positions.length }} positions</div>
             </div>
             <div class="surface-1 p-5">
-              <div class="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--paper-3)] mb-2">total p&amp;l</div>
-              <div class="font-mono text-xl" :class="pnlClass(data.total_pnl_pct)" data-mono>
+              <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)] mb-2">total p&amp;l</div>
+              <div class="font-mono stat-value" :class="pnlClass(data.total_pnl_pct)" data-mono>
                 {{ fmtPct(data.total_pnl_pct) }}
               </div>
-              <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">since cost basis</div>
+              <div class="font-mono text-xs text-[var(--paper-3)] mt-1">since cost basis</div>
               </div>
           </section>
 
@@ -461,37 +461,37 @@ async function capturePlanningSnapshot() {
               loading planning…
             </div>
             <div v-else-if="planning" class="space-y-6">
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                 <div class="bg-[var(--ink-2)] border hairline p-3">
-                  <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">adjusted net worth</div>
-                  <div class="mt-1 font-mono text-lg text-[var(--paper-0)]" data-mono>
+                  <div class="font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)]">adjusted net worth</div>
+                  <div class="mt-1 font-mono stat-value text-[var(--paper-0)]" data-mono>
                     {{ fmtCurrency(planning.net_worth_adjusted, planning.base_currency) }}
                   </div>
                 </div>
                 <div class="bg-[var(--ink-2)] border hairline p-3">
-                  <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">liabilities</div>
-                  <div class="mt-1 font-mono text-lg" :class="planning.liabilities.total_balance > 0 ? 'text-[var(--accent)]' : 'text-[var(--paper-0)]'" data-mono>
+                  <div class="font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)]">liabilities</div>
+                  <div class="mt-1 font-mono stat-value" :class="planning.liabilities.total_balance > 0 ? 'text-[var(--accent)]' : 'text-[var(--paper-0)]'" data-mono>
                     {{ fmtCurrency(planning.liabilities.total_balance, planning.base_currency) }}
                   </div>
                 </div>
                 <div class="bg-[var(--ink-2)] border hairline p-3">
-                  <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">monthly surplus</div>
-                  <div class="mt-1 font-mono text-lg" :class="pnlClass(planning.cashflow.monthly_surplus)" data-mono>
+                  <div class="font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)]">monthly surplus</div>
+                  <div class="mt-1 font-mono stat-value" :class="pnlClass(planning.cashflow.monthly_surplus)" data-mono>
                     {{ fmtCurrency(planning.cashflow.monthly_surplus, planning.base_currency) }}
                   </div>
                 </div>
                 <div class="bg-[var(--ink-2)] border hairline p-3">
-                  <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">savings rate</div>
-                  <div class="mt-1 font-mono text-lg text-[var(--paper-0)]" data-mono>
+                  <div class="font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)]">savings rate</div>
+                  <div class="mt-1 font-mono stat-value text-[var(--paper-0)]" data-mono>
                     {{ planning.cashflow.savings_rate_pct == null ? '—' : `${planning.cashflow.savings_rate_pct.toFixed(1)}%` }}
                   </div>
                 </div>
               </div>
 
-              <div class="grid lg:grid-cols-[1.1fr_1fr] gap-8">
+              <div class="grid lg:grid-cols-[1.1fr_1fr] gap-8 [&>*]:min-w-0">
                 <div class="space-y-6">
                 <div>
-                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">allocation drift</div>
+                  <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">allocation drift</div>
                   <div class="space-y-3">
                     <div
                       v-for="row in planningRows"
@@ -509,7 +509,7 @@ async function capturePlanningSnapshot() {
                             }"
                           />
                         </div>
-                        <div class="mt-1 font-mono text-[10px] text-[var(--paper-3)]">
+                        <div class="mt-1 font-mono text-xs text-[var(--paper-3)]">
                           actual {{ row.actual_pct.toFixed(1) }}% · target {{ row.target_pct.toFixed(1) }}%
                         </div>
                       </div>
@@ -521,7 +521,7 @@ async function capturePlanningSnapshot() {
                 </div>
 
                 <div>
-                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">next actions</div>
+                  <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">next actions</div>
                   <div v-if="planningActions.length === 0" class="font-mono text-xs text-[var(--paper-3)]">
                     allocation is inside drift bands
                   </div>
@@ -529,10 +529,10 @@ async function capturePlanningSnapshot() {
                     <div
                       v-for="row in planningActions"
                       :key="`action-${row.key}`"
-                      class="grid grid-cols-[92px_1fr_auto] gap-3 items-center border-b hairline last:border-0 pb-2 last:pb-0"
+                      class="grid grid-cols-[64px_1fr_auto] gap-2 min-[380px]:grid-cols-[92px_1fr_auto] min-[380px]:gap-3 items-center border-b hairline last:border-0 pb-2 last:pb-0"
                     >
                       <div class="font-mono text-xs text-[var(--paper-1)]">{{ row.label }}</div>
-                      <div class="font-mono text-[11px] text-[var(--paper-3)]">
+                      <div class="font-mono text-xs text-[var(--paper-3)]">
                         {{ row.current_value > row.target_value ? 'above target' : 'below target' }}
                       </div>
                       <div class="font-mono text-xs text-right" :class="actionClass(row.action)" data-mono>
@@ -545,7 +545,7 @@ async function capturePlanningSnapshot() {
 
                 <div class="space-y-6">
                   <div>
-                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">goals</div>
+                  <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">goals</div>
                   <div class="space-y-4">
                     <div v-for="goal in planning.goals" :key="goal.key">
                       <div class="flex items-baseline justify-between gap-3">
@@ -563,7 +563,7 @@ async function capturePlanningSnapshot() {
                           }"
                         />
                       </div>
-                      <div class="mt-1 font-mono text-[10px] text-[var(--paper-3)]">
+                      <div class="mt-1 font-mono text-xs text-[var(--paper-3)]">
                         {{ goal.note }}
                       </div>
                     </div>
@@ -571,20 +571,20 @@ async function capturePlanningSnapshot() {
                 </div>
 
                   <div>
-                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">concentration</div>
+                  <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">concentration</div>
                   <div v-if="planning.concentration.top_position" class="grid grid-cols-3 gap-3">
                     <div>
-                      <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">top</div>
+                      <div class="font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)]">top</div>
                       <div class="font-mono text-lg text-[var(--paper-0)] mt-1" data-mono>{{ planning.concentration.top_position.symbol }}</div>
                     </div>
                     <div>
-                      <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">weight</div>
+                      <div class="font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)]">weight</div>
                       <div class="font-mono text-lg mt-1" :class="severityClass(planning.concentration.top_position.severity)" data-mono>
                         {{ planning.concentration.top_position.allocation_pct.toFixed(1) }}%
                       </div>
                     </div>
                     <div>
-                      <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">over 20%</div>
+                      <div class="font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)]">over 20%</div>
                       <div class="font-mono text-lg mt-1" :class="planning.concentration.positions_over_20_pct > 0 ? 'text-[var(--tape-down)]' : 'text-[var(--paper-0)]'" data-mono>
                         {{ planning.concentration.positions_over_20_pct }}
                       </div>
@@ -597,9 +597,9 @@ async function capturePlanningSnapshot() {
 
                   <div>
                     <div class="flex items-baseline justify-between gap-3 mb-3">
-                      <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--paper-3)]">history</div>
+                      <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">history</div>
                       <button
-                        class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--paper-3)]"
+                        class="tap font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--paper-3)]"
                         :disabled="historySaving"
                         @click="capturePlanningSnapshot()"
                       >
@@ -630,7 +630,7 @@ async function capturePlanningSnapshot() {
                         </div>
                       </div>
                     </div>
-                    <div v-if="historyMessage" class="mt-2 font-mono text-[10px] text-[var(--paper-3)] truncate">
+                    <div v-if="historyMessage" class="mt-2 font-mono text-xs text-[var(--paper-3)] truncate">
                       {{ historyMessage }}
                     </div>
                   </div>
@@ -644,7 +644,7 @@ async function capturePlanningSnapshot() {
             <div class="flex items-baseline justify-between gap-4">
               <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">planning · settings</div>
               <div
-                class="font-mono text-[10px] uppercase tracking-[0.18em]"
+                class="font-mono text-xs uppercase tracking-[0.18em]"
                 :class="settingsMessage === 'saved'
                   ? 'text-[var(--tape-up)]'
                   : (settingsMessage && settingsMessage !== 'saved') ? 'text-[var(--tape-down)]' : 'text-[var(--paper-3)]'"
@@ -664,10 +664,10 @@ async function capturePlanningSnapshot() {
               <!-- Target allocation — the hero control -->
               <div class="space-y-4">
                 <div class="flex items-baseline justify-between gap-3">
-                  <span class="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--paper-3)]">target allocation</span>
+                  <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">target allocation</span>
                   <button
                     v-if="!targetTotalOk"
-                    class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)] hover:underline underline-offset-4 decoration-[var(--accent)]"
+                    class="font-mono text-xs uppercase tracking-[0.16em] text-[var(--accent)] hover:underline underline-offset-4 decoration-[var(--accent)]"
                     @click="normalizeTargets()"
                   >
                     normalize to 100%
@@ -710,7 +710,7 @@ async function capturePlanningSnapshot() {
                 </div>
 
                 <div class="flex items-center justify-between border-t hairline pt-3">
-                  <span class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--paper-3)]">total</span>
+                  <span class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">total</span>
                   <div class="flex items-baseline gap-2.5">
                     <span
                       class="font-mono text-lg tabular-nums"
@@ -720,7 +720,7 @@ async function capturePlanningSnapshot() {
                       {{ targetTotal.toFixed(targetTotal % 1 === 0 ? 0 : 1) }}%
                     </span>
                     <span
-                      class="font-mono text-[10px] uppercase tracking-[0.14em]"
+                      class="font-mono text-xs uppercase tracking-[0.14em]"
                       :class="targetTotalOk ? 'text-[var(--paper-3)]' : 'text-[var(--tape-down)]'"
                     >
                       {{ targetState }}
@@ -731,9 +731,9 @@ async function capturePlanningSnapshot() {
 
               <!-- Reserve & contributions -->
               <div class="space-y-4">
-                <span class="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--paper-3)]">reserve &amp; contributions</span>
+                <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">reserve &amp; contributions</span>
                 <label class="block">
-                  <span class="block font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)] mb-1.5">monthly expenses</span>
+                  <span class="block font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)] mb-1.5">monthly expenses</span>
                   <input
                     v-model.number="settingsDraft.monthly_expenses"
                     type="number"
@@ -745,7 +745,7 @@ async function capturePlanningSnapshot() {
                 </label>
                 <div class="grid grid-cols-2 gap-3">
                   <label class="block">
-                    <span class="block font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)] mb-1.5">emergency · months</span>
+                    <span class="block font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)] mb-1.5">emergency · months</span>
                     <input
                       v-model.number="settingsDraft.emergency_fund_months"
                       type="number"
@@ -757,7 +757,7 @@ async function capturePlanningSnapshot() {
                     >
                   </label>
                   <label class="block">
-                    <span class="block font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)] mb-1.5">monthly contribution</span>
+                    <span class="block font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)] mb-1.5">monthly contribution</span>
                     <input
                       v-model.number="settingsDraft.monthly_contribution"
                       type="number"
@@ -768,7 +768,7 @@ async function capturePlanningSnapshot() {
                     >
                   </label>
                 </div>
-                <p class="font-mono text-[10px] leading-relaxed text-[var(--paper-3)]">
+                <p class="font-mono text-xs leading-relaxed text-[var(--paper-3)]">
                   Drives the cash-reserve goal and contribution projection. Add explicit cashflow lines below to override these monthly assumptions.
                 </p>
               </div>
@@ -776,9 +776,9 @@ async function capturePlanningSnapshot() {
               <!-- Liabilities -->
               <div class="lg:col-span-2 border-t hairline pt-7 space-y-3">
                 <div class="flex items-baseline justify-between gap-3">
-                  <span class="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--paper-3)]">liabilities</span>
+                  <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">liabilities</span>
                   <button
-                    class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)] hover:text-[var(--accent)] hover:border-[var(--accent)] border hairline px-2.5 py-1 transition-colors"
+                    class="min-h-11 font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)] hover:text-[var(--accent)] hover:border-[var(--accent)] border hairline px-2.5 py-1 transition-colors"
                     @click="addLiability()"
                   >
                     + add
@@ -794,7 +794,7 @@ async function capturePlanningSnapshot() {
                     class="grid grid-cols-2 md:grid-cols-[1fr_120px_92px_120px_auto] gap-2.5 items-end"
                   >
                     <label class="block">
-                      <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">name</span>
+                      <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">name</span>
                       <input
                         v-model="liability.name"
                         type="text"
@@ -802,7 +802,7 @@ async function capturePlanningSnapshot() {
                       >
                     </label>
                     <label class="block">
-                      <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">balance</span>
+                      <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">balance</span>
                       <input
                         v-model.number="liability.balance"
                         type="number"
@@ -813,7 +813,7 @@ async function capturePlanningSnapshot() {
                       >
                     </label>
                     <label class="block">
-                      <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">rate %</span>
+                      <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">rate %</span>
                       <input
                         v-model.number="liability.interest_rate_pct"
                         type="number"
@@ -825,7 +825,7 @@ async function capturePlanningSnapshot() {
                       >
                     </label>
                     <label class="block">
-                      <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">min pay</span>
+                      <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">min pay</span>
                       <input
                         v-model.number="liability.minimum_payment"
                         type="number"
@@ -836,7 +836,7 @@ async function capturePlanningSnapshot() {
                       >
                     </label>
                     <button
-                      class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--tape-down)] md:pb-2.5 transition-colors"
+                      class="font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--tape-down)] md:pb-2.5 transition-colors"
                       @click="removeLiability(liability.id)"
                     >
                       remove
@@ -848,12 +848,12 @@ async function capturePlanningSnapshot() {
               <!-- Cashflow -->
               <div class="lg:col-span-2 border-t hairline pt-7 space-y-3">
                 <div class="flex flex-col md:flex-row md:items-baseline md:justify-between gap-3">
-                  <span class="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--paper-3)]">cashflow lines</span>
+                  <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">cashflow lines</span>
                   <div class="flex items-center gap-2">
                     <button
                       v-for="kind in cashflowKinds"
                       :key="kind"
-                      class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)] hover:text-[var(--accent)] hover:border-[var(--accent)] border hairline px-2.5 py-1 transition-colors"
+                      class="min-h-11 font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)] hover:text-[var(--accent)] hover:border-[var(--accent)] border hairline px-2.5 py-1 transition-colors"
                       @click="addCashflowItem(kind)"
                     >
                       + {{ kind }}
@@ -870,7 +870,7 @@ async function capturePlanningSnapshot() {
                     class="grid grid-cols-2 md:grid-cols-[110px_1fr_130px_auto] gap-2.5 items-end"
                   >
                     <label class="block">
-                      <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">kind</span>
+                      <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">kind</span>
                       <select
                         v-model="item.kind"
                         class="w-full bg-[var(--ink-2)] border hairline px-3 py-2 font-mono text-xs text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"
@@ -881,7 +881,7 @@ async function capturePlanningSnapshot() {
                       </select>
                     </label>
                     <label class="block">
-                      <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">name</span>
+                      <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">name</span>
                       <input
                         v-model="item.name"
                         type="text"
@@ -889,7 +889,7 @@ async function capturePlanningSnapshot() {
                       >
                     </label>
                     <label class="block">
-                      <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">amount / mo</span>
+                      <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">amount / mo</span>
                       <input
                         v-model.number="item.amount"
                         type="number"
@@ -900,7 +900,7 @@ async function capturePlanningSnapshot() {
                       >
                     </label>
                     <button
-                      class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--tape-down)] md:pb-2.5 transition-colors"
+                      class="font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--tape-down)] md:pb-2.5 transition-colors"
                       @click="removeCashflowItem(item.id)"
                     >
                       remove
@@ -911,7 +911,7 @@ async function capturePlanningSnapshot() {
 
               <!-- Save -->
               <div class="lg:col-span-2 border-t hairline pt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <span class="font-mono text-[11px] text-[var(--paper-3)]">
+                <span class="font-mono text-xs text-[var(--paper-3)]">
                   {{ settingsSaving
                     ? 'saving…'
                     : targetTotalOk
@@ -919,7 +919,7 @@ async function capturePlanningSnapshot() {
                       : 'balance targets to 100% to enable save' }}
                 </span>
                 <button
-                  class="font-mono text-xs uppercase tracking-[0.18em] px-6 py-2.5 border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  class="min-h-11 font-mono text-xs uppercase tracking-[0.18em] px-6 py-2.5 border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   :class="(!settingsSaving && targetTotalOk)
                     ? 'border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--ink-0)]'
                     : 'hairline text-[var(--paper-3)]'"
@@ -978,7 +978,7 @@ async function capturePlanningSnapshot() {
               <div
                 v-for="p in topAllocations"
                 :key="`alloc-${p.symbol}`"
-                class="grid grid-cols-[120px_1fr_80px_70px] gap-3 items-center"
+                class="grid grid-cols-[76px_1fr_56px_56px] gap-2 md:grid-cols-[120px_1fr_80px_70px] md:gap-3 items-center"
               >
                 <div class="font-mono text-sm text-[var(--paper-1)] truncate" data-mono>{{ p.symbol }}</div>
                 <div class="h-2 bg-[var(--ink-2)] rounded-sm overflow-hidden">
@@ -1051,7 +1051,7 @@ async function capturePlanningSnapshot() {
           </section>
 
           <!-- Moomoo paper + live (broken out) -->
-          <section v-if="data.moomoo_paper.length > 0 || data.moomoo_live.length > 0" class="grid md:grid-cols-2 gap-4">
+          <section v-if="data.moomoo_paper.length > 0 || data.moomoo_live.length > 0" class="grid md:grid-cols-2 gap-4 min-w-0 [&>*]:min-w-0">
             <div class="surface-1 p-6">
               <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)] mb-4">
                 moomoo · paper <span class="text-[var(--paper-3)] normal-case">({{ data.moomoo_paper.length }})</span>

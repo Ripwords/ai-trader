@@ -34,6 +34,10 @@ const drawerOpen = useState('shell.drawerOpen', () => false)
   background: var(--ink-0);
   color: var(--paper-0);
   overflow: hidden;
+  /* Landscape notch. Vertical insets are applied by the header and the chat
+     footer themselves, since those are the elements that touch the edges. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 .app-body {
   flex: 1;

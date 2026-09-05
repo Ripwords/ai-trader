@@ -35,20 +35,20 @@ function fmt(n: number): string {
       </div>
     </header>
 
-    <div class="grid grid-cols-4 divide-x hairline">
-      <div class="px-5 py-3">
+    <div class="grid grid-cols-2 sm:grid-cols-4 hairline">
+      <div class="px-4 py-3 sm:px-5 sm:border-r">
         <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">code</div>
         <div class="font-mono text-base text-[var(--paper-0)] mt-1.5" data-mono>{{ props.result.code }}</div>
       </div>
-      <div class="px-5 py-3">
+      <div class="px-4 py-3 sm:px-5 border-l sm:border-l-0 sm:border-r">
         <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">qty</div>
         <div class="font-mono text-base text-[var(--paper-0)] mt-1.5" data-mono>{{ props.result.qty }}</div>
       </div>
-      <div class="px-5 py-3">
+      <div class="px-4 py-3 sm:px-5 border-t sm:border-t-0 sm:border-r">
         <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">price</div>
         <div class="font-mono text-base text-[var(--paper-0)] mt-1.5" data-mono>{{ fmt(props.result.price) }}</div>
       </div>
-      <div class="px-5 py-3 bg-[var(--ink-2)]">
+      <div class="px-4 py-3 sm:px-5 bg-[var(--ink-2)] border-l border-t sm:border-l-0 sm:border-t-0">
         <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--accent)]">status</div>
         <div class="font-mono text-base text-[var(--paper-0)] mt-1.5" data-mono>{{ props.result.status }}</div>
       </div>

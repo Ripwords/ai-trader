@@ -35,28 +35,30 @@ function fmtMargin(v: number | null): string {
       <div class="count" data-mono>{{ rows.length }} quarters</div>
     </header>
     <div v-if="rows.length === 0" class="empty">no quarterly data available</div>
-    <table v-else>
-      <thead>
-        <tr>
-          <th class="th-period">period</th>
-          <th class="th-num">revenue</th>
-          <th class="th-num">yoy</th>
-          <th class="th-num">eps</th>
-          <th class="th-num">yoy</th>
-          <th class="th-num">op margin</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="(r, i) in rows" :key="i">
-          <td class="period">{{ r.period }}</td>
-          <td class="num" data-mono>{{ fmtRev(r.revenue) }}</td>
-          <td class="num" data-mono :data-tone="pctTone(r.revenue_yoy)">{{ fmtPct(r.revenue_yoy) }}</td>
-          <td class="num" data-mono>{{ fmtEps(r.eps) }}</td>
-          <td class="num" data-mono :data-tone="pctTone(r.eps_yoy)">{{ fmtPct(r.eps_yoy) }}</td>
-          <td class="num" data-mono>{{ fmtMargin(r.margin) }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-else class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th class="th-period">period</th>
+            <th class="th-num">revenue</th>
+            <th class="th-num">yoy</th>
+            <th class="th-num">eps</th>
+            <th class="th-num">yoy</th>
+            <th class="th-num">op margin</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(r, i) in rows" :key="i">
+            <td class="period">{{ r.period }}</td>
+            <td class="num" data-mono>{{ fmtRev(r.revenue) }}</td>
+            <td class="num" data-mono :data-tone="pctTone(r.revenue_yoy)">{{ fmtPct(r.revenue_yoy) }}</td>
+            <td class="num" data-mono>{{ fmtEps(r.eps) }}</td>
+            <td class="num" data-mono :data-tone="pctTone(r.eps_yoy)">{{ fmtPct(r.eps_yoy) }}</td>
+            <td class="num" data-mono>{{ fmtMargin(r.margin) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 </template>
 
@@ -116,5 +118,12 @@ tbody tr:hover { background: var(--ink-2); }
   color: var(--paper-3);
   text-align: center;
   letter-spacing: 0.04em;
+}
+
+@media (max-width: 640px) {
+  .head { padding: 1rem 0.6rem; }
+  .empty { padding: 2rem 0.6rem; }
+  th { padding: 0.65rem 0.6rem; }
+  td { padding: 0.7rem 0.6rem; }
 }
 </style>

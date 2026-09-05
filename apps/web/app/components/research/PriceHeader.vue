@@ -92,6 +92,13 @@ const generatedAgo = computed(() => {
   color: var(--paper-2);
   letter-spacing: 0.02em;
 }
+@media (max-width: 640px) {
+  /* The 1fr column loses to the price beside it, leaving the ticker 57px for
+     80px of wide-tracked type. Tighten the tracking rather than clip. */
+  .price-header { padding: 0.9rem 1rem; gap: 0.4rem 0.75rem; }
+  .sym { font-size: 1.25rem; letter-spacing: 0.1em; }
+}
+
 .tape {
   display: inline-flex;
   align-items: baseline;

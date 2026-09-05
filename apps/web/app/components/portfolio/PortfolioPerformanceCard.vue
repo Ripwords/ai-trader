@@ -120,7 +120,7 @@ const sinceLabel = computed(() => {
           {{ stats.count }} snapshot{{ stats.count === 1 ? '' : 's' }}
         </span>
         <button
-          class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--paper-3)]"
+          class="tap font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--paper-3)]"
           :disabled="capturing"
           @click="emit('capture')"
         >
@@ -145,36 +145,36 @@ const sinceLabel = computed(() => {
     </div>
 
     <div v-else class="space-y-5">
-      <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div class="grid grid-cols-1 min-[380px]:grid-cols-2 md:grid-cols-5 gap-3">
         <div class="bg-[var(--ink-2)] border hairline p-3">
           <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">total return</div>
-          <div class="mt-1 font-mono text-lg" :class="pnlClass(stats?.totalReturnPct)" data-mono>
+          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.totalReturnPct)" data-mono>
             {{ fmtPct(stats?.totalReturnPct) }}
           </div>
           <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">{{ sinceLabel }}</div>
         </div>
         <div class="bg-[var(--ink-2)] border hairline p-3">
           <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">max drawdown</div>
-          <div class="mt-1 font-mono text-lg" :class="pnlClass(stats?.maxDrawdownPct)" data-mono>
+          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.maxDrawdownPct)" data-mono>
             {{ fmtPct(stats?.maxDrawdownPct) }}
           </div>
           <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">peak to trough</div>
         </div>
         <div class="bg-[var(--ink-2)] border hairline p-3">
           <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">1d</div>
-          <div class="mt-1 font-mono text-lg" :class="pnlClass(stats?.periodReturns.d1)" data-mono>
+          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.periodReturns.d1)" data-mono>
             {{ fmtPct(stats?.periodReturns.d1) }}
           </div>
         </div>
         <div class="bg-[var(--ink-2)] border hairline p-3">
           <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">7d</div>
-          <div class="mt-1 font-mono text-lg" :class="pnlClass(stats?.periodReturns.d7)" data-mono>
+          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.periodReturns.d7)" data-mono>
             {{ fmtPct(stats?.periodReturns.d7) }}
           </div>
         </div>
         <div class="bg-[var(--ink-2)] border hairline p-3">
           <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">30d</div>
-          <div class="mt-1 font-mono text-lg" :class="pnlClass(stats?.periodReturns.d30)" data-mono>
+          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.periodReturns.d30)" data-mono>
             {{ fmtPct(stats?.periodReturns.d30) }}
           </div>
         </div>
