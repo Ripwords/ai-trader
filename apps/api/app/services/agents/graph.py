@@ -713,7 +713,8 @@ def _format_memory_recommendation(row: dict) -> str:
     outcome = row.get("outcome") or "?"
     alpha = row.get("alpha")
     text = row.get("text") or ""
-    alpha_str = f"{alpha:+.2%}" if isinstance(alpha, (int, float)) else "n/a"
+    # alpha is already in percentage points (see compute_realized_return).
+    alpha_str = f"{alpha:+.2f}%" if isinstance(alpha, (int, float)) else "n/a"
     return f"Past {rating} -> alpha {alpha_str}, outcome {outcome}: {text}"
 
 

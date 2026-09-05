@@ -169,7 +169,9 @@ async function fetchMoomooSlice(symbol: string): Promise<MoomooSlice> {
             avg_cost: p.cost_price,
             current_price: p.current_price,
             market_value: p.market_val,
-            unrealized_pnl_pct: p.pl_ratio,
+            // moomoo reports pl_ratio as a fraction (0.125); this field is a
+            // percent so it lines up with the Ghostfolio rows in the same list.
+            unrealized_pnl_pct: p.pl_ratio * 100,
             account_label: isPaper ? 'Moomoo Paper' : 'Moomoo Live',
             // Prefer the position's own currency; fall back to the account
             // settlement currency.
@@ -645,10 +647,11 @@ async function fetchGhostfolioFullSlice(): Promise<GhostfolioFullSlice> {
     const allocPct = allocRaw != null
       ? (allocRaw <= 1 ? allocRaw * 100 : allocRaw)
       : 0
+    // Ghostfolio returns a fraction (0.4753 for +47.53%, 1.5 for +150%).
     const pnlRaw = toNumber(h.netPerformancePercent)
       ?? toNumber(h.netPerformancePercentWithCurrencyEffect)
       ?? 0
-    const pnlPct = pnlRaw <= 1 && pnlRaw >= -1 ? pnlRaw * 100 : pnlRaw
+    const pnlPct = pnlRaw * 100
     positions.push({
       symbol: sym,
       name: typeof h.name === 'string' ? h.name : sym,
@@ -712,7 +715,7 @@ async function fetchMoomooFullSlice(): Promise<MoomooFullSlice> {
             symbol: p.code,
             quantity: p.qty,
             market_value: p.market_val ?? 0,
-            pnl_pct: p.pl_ratio ?? 0,
+            pnl_pct: (p.pl_ratio ?? 0) * 100,
             account_id: acc.acc_id,
             currency: p.currency ?? portfolio.currency ?? null,
           })

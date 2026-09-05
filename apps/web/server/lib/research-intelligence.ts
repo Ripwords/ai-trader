@@ -100,7 +100,8 @@ export function buildResearchIntelligence(rows: ResearchRunSignal[], now = new D
     const failedRecent = sorted.some(row => row.status === 'failed' && (toTime(row.startedAt) ?? 0) >= sevenDaysAgo)
     const isRunning = sorted.some(row => row.status === 'running')
     const isStale = daysSinceComplete !== null && daysSinceComplete > STALE_DAYS
-    const weakReflection = outcome === 'wrong' || (alpha !== null && alpha < -0.02)
+    // alpha is stored in percentage points (reflection.py multiplies by 100).
+    const weakReflection = outcome === 'wrong' || (alpha !== null && alpha < -2)
 
     for (const row of sorted) {
       const started = toTime(row.startedAt) ?? 0
@@ -124,7 +125,7 @@ export function buildResearchIntelligence(rows: ResearchRunSignal[], now = new D
     } else if (weakReflection) {
       action = 'review_thesis'
       severity = 'medium'
-      note = alpha !== null ? `Latest reflection alpha is ${round(alpha * 100, 2)}%.` : 'Latest reflection marked the call wrong.'
+      note = alpha !== null ? `Latest reflection alpha is ${round(alpha, 2)}%.` : 'Latest reflection marked the call wrong.'
     } else if (isStale) {
       action = 'refresh_stale'
       severity = 'medium'

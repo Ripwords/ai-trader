@@ -46,8 +46,9 @@ function fmtAlpha(a?: number | string | null): string {
   if (a === null || a === undefined) return '—'
   const n = typeof a === 'number' ? a : Number(a)
   if (!Number.isFinite(n)) return '—'
+  // alpha arrives in percentage points (reflection.py already scaled it).
   const sign = n >= 0 ? '+' : ''
-  return `${sign}${(n * 100).toFixed(2)}%`
+  return `${sign}${n.toFixed(2)}%`
 }
 
 function fmtCost(c?: number | string | null): string {

@@ -78,6 +78,10 @@ describe('holdings summary', () => {
     expect(out.total_quantity).toBe(10)
     expect(out.reconciliation.status).toBe('matched')
     expect(out.allocation_pct).toBe(50)
+    // moomoo reports pl_ratio as a fraction, Ghostfolio as a fraction too;
+    // both land in the same list as percents.
+    expect(out.positions.find(p => p.source === 'moomoo_live')?.unrealized_pnl_pct).toBeCloseTo(12.5)
+    expect(out.positions.find(p => p.source === 'ghostfolio')?.unrealized_pnl_pct).toBeCloseTo(25)
   })
 
   it('preserves per-position and cash currency instead of assuming USD', async () => {
