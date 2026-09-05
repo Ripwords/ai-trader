@@ -262,23 +262,33 @@ async function fetchGhostfolioSlice(): Promise<GhostfolioSlice> {
   const positions: FullPortfolioPosition[] = []
   for (const h of listFrom(holdingsRaw, ['holdings', 'positions', 'items', 'data'])) {
     if (!isRecord(h)) continue
-    const sym = String(h.symbol ?? h.code ?? h.ticker ?? '')
+    // Ghostfolio (via mhajder/ghostfolio-mcp) nests the instrument fields
+    // under assetProfile: { symbol, name, currency, assetClass, sectors }.
+    // The numbers (quantity, valueInBaseCurrency, investment, marketPrice,
+    // netPerformancePercent, allocationInPercentage) stay top-level. Older
+    // forks flatten everything, so both layouts are read.
+    const profile = isRecord(h.assetProfile) ? h.assetProfile : {}
+    const str = (key: string): string | null => {
+      const v = h[key] ?? profile[key]
+      return typeof v === 'string' && v ? v : null
+    }
+    const sym = str('symbol') ?? str('code') ?? str('ticker')
     if (!sym) continue
     const allocRaw = toNumber(h.allocationInPercentage)
     // Ghostfolio returns fractions (0.4753 for +47.53%, 1.5 for +150%).
     const pnlRaw = toNumber(h.netPerformancePercent) ?? toNumber(h.netPerformancePercentWithCurrencyEffect) ?? 0
     positions.push({
       symbol: sym,
-      name: typeof h.name === 'string' ? h.name : sym,
+      name: str('name') ?? sym,
       quantity: toNumber(h.quantity) ?? toNumber(h.qty) ?? 0,
       market_price: toNumber(h.marketPrice) ?? toNumber(h.currentPrice) ?? 0,
       market_value: toNumber(h.valueInBaseCurrency) ?? toNumber(h.marketValue) ?? toNumber(h.value) ?? 0,
       investment: toNumber(h.investment) ?? 0,
       allocation_pct: allocRaw != null ? (allocRaw <= 1 ? allocRaw * 100 : allocRaw) : 0,
       pnl_pct: pnlRaw * 100,
-      asset_class: typeof h.assetClass === 'string' ? h.assetClass : 'UNKNOWN',
-      sectors: toStringArray(h.sectors),
-      currency: typeof h.currency === 'string' ? h.currency : baseCurrency,
+      asset_class: str('assetClass') ?? 'UNKNOWN',
+      sectors: toStringArray(h.sectors ?? profile.sectors),
+      currency: str('currency') ?? baseCurrency,
     })
   }
 
@@ -468,6 +478,10 @@ export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummar
     : hasTrackerPosition ? 'ghostfolio_tracker' : 'none'
 
   const quantityDelta = hasBrokerPosition && hasTrackerPosition ? tracker_quantity - broker_quantity : null
+  // Ghostfolio books dividend reinvestment as fractional shares moomoo does
+  // not report (10.0129 vs 10), so a sliver of a share is agreement, not a
+  // reconciliation problem.
+  const matchTolerance = Math.max(0.01, broker_quantity * 0.01)
   const reconciliation: HoldingSummary['reconciliation'] = quantityDelta == null
     ? {
         status: 'not_compared',
@@ -476,8 +490,8 @@ export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummar
           ? 'Only Ghostfolio tracker data was found for this symbol.'
           : 'Need both moomoo live and Ghostfolio tracker positions to compare quantities.',
       }
-    : Math.abs(quantityDelta) < 0.000001
-      ? { status: 'matched', quantity_delta: 0, note: 'Ghostfolio tracker quantity matches the moomoo live broker quantity.' }
+    : Math.abs(quantityDelta) <= matchTolerance
+      ? { status: 'matched', quantity_delta: quantityDelta, note: 'Ghostfolio tracker quantity matches the moomoo live broker quantity (fractional dividend reinvestment aside).' }
       : {
           status: 'mismatch',
           quantity_delta: quantityDelta,

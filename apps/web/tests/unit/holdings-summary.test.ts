@@ -84,6 +84,66 @@ describe('holdings summary', () => {
     expect(out.positions.find(p => p.source === 'ghostfolio')?.unrealized_pnl_pct).toBeCloseTo(25)
   })
 
+  it('reads the live Ghostfolio shape, where instrument fields sit under assetProfile', async () => {
+    // Captured from mhajder/ghostfolio-mcp get_portfolio_holdings on
+    // 2026-09-05. The top-level symbol the parser used to require is absent,
+    // so every holding was silently dropped: no positions on /portfolio, no
+    // allocation buckets, no tracker quantity in holdings_context.
+    vi.doMock('../../server/llm/mcp', () => ({
+      getGhostfolioStatus: vi.fn(async () => 'ok'),
+      callGhostfolioTool: vi.fn(async (name: string) => {
+        if (name === 'get_portfolio_holdings') {
+          return {
+            holdings: [{
+              activitiesCount: 34,
+              marketPrice: 230.36,
+              allocationInPercentage: 0.0637,
+              investment: 6755.98,
+              netPerformancePercent: 0.6193,
+              quantity: 10.0129,
+              valueInBaseCurrency: 9319.93,
+              assetProfile: {
+                assetClass: 'EQUITY', assetSubClass: 'STOCK', currency: 'USD', dataSource: 'YAHOO',
+                name: 'NVIDIA Corporation', sectors: [{ name: 'Technology', weight: 1 }], symbol: 'NVDA',
+              },
+            }],
+          }
+        }
+        if (name === 'get_portfolio_details') {
+          return { summary: { totalValueInBaseCurrency: 146_306.76, baseCurrency: 'MYR', cash: 5_482.35 } }
+        }
+        if (name === 'get_accounts') return { accounts: [{ name: 'Moomoo' }] }
+        return null
+      }),
+    }))
+    vi.doMock('../../server/llm/http', () => ({
+      getApiClient: () => ({
+        listAccounts: vi.fn(async () => [{ acc_id: 'live', trd_env: 'REAL', acc_role: 'OWNER' }]),
+        getPortfolio: vi.fn(async () => ({
+          cash: 1_118, market_val: 2_306, total_assets: 3_424, currency: 'MYR',
+          cash_by_currency: { USD: 1_118 },
+          positions: [{ code: 'US.NVDA', qty: 10, cost_price: 167, current_price: 230.6, market_val: 2_306.76, pl_val: 635, pl_ratio: 0.38, currency: 'USD' }],
+        })),
+      }),
+    }))
+
+    const { getFullPortfolio, getHoldingForSymbol } = await import('../../server/lib/holdings')
+    const full = await getFullPortfolio()
+    expect(full.positions).toHaveLength(1)
+    expect(full.positions[0]).toMatchObject({
+      symbol: 'NVDA', name: 'NVIDIA Corporation', quantity: 10.0129, market_value: 9319.93,
+      asset_class: 'EQUITY', sectors: ['Technology'], currency: 'USD',
+    })
+    expect(full.positions[0]!.pnl_pct).toBeCloseTo(61.93)
+
+    const out = await getHoldingForSymbol('US.NVDA')
+    expect(out.tracker_quantity).toBeCloseTo(10.0129)
+    expect(out.broker_quantity).toBe(10)
+    // A fractional dividend-reinvestment sliver is agreement, not a mismatch.
+    expect(out.reconciliation.status).toBe('matched')
+    expect(out.allocation_pct).toBeCloseTo(6.37, 1)
+  })
+
   it('preserves per-position and cash currency instead of assuming USD', async () => {
     vi.doMock('../../server/llm/mcp', () => ({
       getGhostfolioStatus: vi.fn(async () => 'ok'),
