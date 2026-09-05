@@ -38,6 +38,8 @@ from app.services.algo.validator import ValidationError, validate
         ("import pandas as x\ndef on_bar(c): x.io.parsers.read_csv('/etc/passwd')", "io"),
         ("def on_bar(c): np.load('/tmp/evil.npy', allow_pickle=True)", "load"),
         ("def on_bar(c): np.savetxt('/tmp/out.txt', [1])", "savetxt"),
+        ("def on_bar(c): pd.HDFStore('/tmp/x.h5')", "HDFStore"),
+        ("def on_bar(c): np.DataSource('/tmp').open('http://x/y')", "DataSource"),
     ],
 )
 def test_validator_blocks_dangerous(src: str, needle: str) -> None:

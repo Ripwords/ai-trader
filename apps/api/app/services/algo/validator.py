@@ -61,6 +61,8 @@ BANNED_ATTRS: frozenset[str] = frozenset(
         # numpy file IO
         "load", "save", "savez", "savez_compressed", "loadtxt", "savetxt",
         "genfromtxt", "fromfile", "tofile", "memmap", "fromregex",
+        # file/url handles constructed as objects
+        "HDFStore", "ExcelWriter", "ExcelFile", "DataSource", "open",
         # module internals that reach the interpreter
         "io", "compat", "ctypeslib", "testing", "util",
     }

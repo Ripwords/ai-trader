@@ -144,6 +144,32 @@ describe('holdings summary', () => {
     expect(out.allocation_pct).toBeCloseTo(6.37, 1)
   })
 
+  it('still flags a whole-share difference as a mismatch', async () => {
+    vi.doMock('../../server/llm/mcp', () => ({
+      getGhostfolioStatus: vi.fn(async () => 'ok'),
+      callGhostfolioTool: vi.fn(async (name: string) => {
+        if (name === 'get_portfolio_holdings') {
+          return { holdings: [{ quantity: 1010, valueInBaseCurrency: 1, assetProfile: { symbol: 'NVDA' } }] }
+        }
+        if (name === 'get_portfolio_details') return { summary: { totalValueInBaseCurrency: 1, baseCurrency: 'MYR' } }
+        return null
+      }),
+    }))
+    vi.doMock('../../server/llm/http', () => ({
+      getApiClient: () => ({
+        listAccounts: vi.fn(async () => [{ acc_id: 'live', trd_env: 'REAL', acc_role: 'OWNER' }]),
+        getPortfolio: vi.fn(async () => ({
+          cash: 0, market_val: 0, total_assets: 0, currency: 'MYR', cash_by_currency: {},
+          positions: [{ code: 'US.NVDA', qty: 1000, cost_price: 1, current_price: 1, market_val: 1000, pl_val: 0, pl_ratio: 0, currency: 'USD' }],
+        })),
+      }),
+    }))
+    const { getHoldingForSymbol } = await import('../../server/lib/holdings')
+    const out = await getHoldingForSymbol('US.NVDA')
+    expect(out.reconciliation.status).toBe('mismatch')
+    expect(out.reconciliation.quantity_delta).toBe(10)
+  })
+
   it('preserves per-position and cash currency instead of assuming USD', async () => {
     vi.doMock('../../server/llm/mcp', () => ({
       getGhostfolioStatus: vi.fn(async () => 'ok'),

@@ -480,8 +480,9 @@ export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummar
   const quantityDelta = hasBrokerPosition && hasTrackerPosition ? tracker_quantity - broker_quantity : null
   // Ghostfolio books dividend reinvestment as fractional shares moomoo does
   // not report (10.0129 vs 10), so a sliver of a share is agreement, not a
-  // reconciliation problem.
-  const matchTolerance = Math.max(0.01, broker_quantity * 0.01)
+  // reconciliation problem. Half a percent covers DRIP drift; a whole-share
+  // difference on any normal position is still a mismatch.
+  const matchTolerance = Math.max(0.02, broker_quantity * 0.005)
   const reconciliation: HoldingSummary['reconciliation'] = quantityDelta == null
     ? {
         status: 'not_compared',

@@ -76,6 +76,12 @@ export async function getGhostfolioTools(): Promise<Record<string, McpTool>> {
 
   try {
     const list = await withSessionRetry(c => c.listTools())
+    const advertised = new Set(list.tools.map(t => t.name))
+    const missing = [...GHOSTFOLIO_TOOL_ALLOWLIST].filter(name => !advertised.has(name))
+    if (missing.length > 0) {
+      // A server upgrade that renames a tool would otherwise degrade chat silently.
+      console.warn('[mcp] ghostfolio server no longer advertises allowlisted tools:', missing.join(', '))
+    }
     const out: Record<string, McpTool> = {}
     for (const t of list.tools) {
       if (!GHOSTFOLIO_TOOL_ALLOWLIST.has(t.name)) continue
