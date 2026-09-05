@@ -30,6 +30,21 @@ def test_derive_growth_caps_and_haircut():
     assert g.quantize(D("0.0001")) == D("0.0579")
 
 
+def test_derive_growth_compounds_over_calendar_years_not_point_count():
+    """A gap (or a loss year that is filtered out) must not shorten the
+    exponent: 80 -> 100 over 2021..2024 is three years of compounding
+    whichever middle years survive the positive-FCF filter."""
+    gapped = [HistoryPeriod(period="2024", fcf=D("100")), HistoryPeriod(period="2021", fcf=D("80"))]
+    with_loss_year = [
+        HistoryPeriod(period="2024", fcf=D("100")),
+        HistoryPeriod(period="2023", fcf=D("-5")),
+        HistoryPeriod(period="2022", fcf=D("90")),
+        HistoryPeriod(period="2021", fcf=D("80")),
+    ]
+    assert derive_growth(gapped).quantize(D("0.0001")) == D("0.0579")
+    assert derive_growth(with_loss_year).quantize(D("0.0001")) == D("0.0579")
+
+
 def test_derive_growth_fallback_when_sparse():
     assert derive_growth([HistoryPeriod(period="2024", fcf=D("100"))]) == D("0.03")
 

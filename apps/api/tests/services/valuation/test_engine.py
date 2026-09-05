@@ -23,6 +23,16 @@ def test_margin_of_safety_overvalued_is_negative():
     assert mos < 0
 
 
+def test_margin_of_safety_rejects_non_positive_fair_value():
+    """(fair - price) / fair with fair < 0 flips the sign and calls an
+    insolvent equity maximally undervalued."""
+    import pytest
+    with pytest.raises(ValueError):
+        margin_of_safety(D("-9832.16"), D("150"))
+    with pytest.raises(ValueError):
+        margin_of_safety(D("0"), D("150"))
+
+
 def test_reverse_dcf_roundtrip():
     # dcf at 12% flat growth -> fair value F; reverse_dcf(F) ~= 0.12
     fv = dcf(D("100"), [D("0.12")] * 5, D("0.10"), D("0.025"), D("0"), D("10"))

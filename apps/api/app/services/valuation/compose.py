@@ -39,6 +39,18 @@ def value(
     avg_price_by_period: dict[str, Decimal] | None = None,
 ) -> ValuationResult:
     warnings: list[str] = []
+    if vi.current_price <= 0:
+        # No price feed means no margin of safety, no multiples and no
+        # screener rank; a zero price would otherwise produce MoS +100% and
+        # sort to the top as the cheapest stock on the list.
+        return ValuationResult(
+            symbol=vi.symbol, current_price=vi.current_price, fair_value=None,
+            margin_of_safety_pct=None, scenarios=[], assumptions_used=None,
+            multiples=None, historical_multiples=None,
+            reverse_dcf_implied_growth=None, data_quality="unavailable",
+            veto=Veto(triggered=False, reason=None, rating_cap=None),
+            warnings=["no current price available; valuation not computed"],
+        )
     cur_mult = current_multiples(vi.metrics, vi.current_price)
     hist_mult = None
     eff_avg = avg_price_by_period or vi.avg_price_by_period
@@ -64,8 +76,16 @@ def value(
 
     a = overrides or build_default_assumptions(vi.history, vi.beta)
     fair_value = _safe_dcf(vi, a.growth_rates, a)
+    if fair_value is not None and fair_value <= 0:
+        warnings.append(
+            f"DCF equity value is non-positive ({fair_value:.2f}/share: net debt "
+            "exceeds the discounted cash flows); no fair value or margin of "
+            "safety can be stated, multiples-only"
+        )
+        fair_value = None
     if fair_value is None:
-        warnings.append("DCF computation failed; multiples-only")
+        if not warnings:
+            warnings.append("DCF computation failed; multiples-only")
         return ValuationResult(
             symbol=vi.symbol, current_price=vi.current_price, fair_value=None,
             margin_of_safety_pct=None, scenarios=[], assumptions_used=a,

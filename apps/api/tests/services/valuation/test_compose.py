@@ -25,6 +25,35 @@ def test_value_full_quality_produces_three_scenarios():
     assert res.reverse_dcf_implied_growth is not None
 
 
+def test_value_negative_equity_is_multiples_only_not_maximally_undervalued():
+    """Net debt far above the discounted cash flows gives a negative equity
+    value. That must not surface as MoS +100% with the veto silent."""
+    vi = ValuationInput(symbol="X", current_price=D("150"), fcf_base=D("100"),
+                        net_debt=D("100000"), shares_outstanding=D("10"), beta=D("1.0"),
+                        history=_history(),
+                        metrics=Metrics(market_cap=D("1500"), ps_ratio=D("2"),
+                                        free_cash_flow=D("100"), shares_outstanding=D("10")))
+    res = value(vi)
+    assert res.data_quality == "multiples_only"
+    assert res.fair_value is None
+    assert res.margin_of_safety_pct is None
+    assert any("non-positive" in w for w in res.warnings)
+
+
+def test_value_without_price_is_unavailable_not_a_bargain():
+    """A missing price feed used to become current_price=0, MoS +100%, and
+    the top row of the screener with data_quality='full'."""
+    vi = ValuationInput(symbol="X", current_price=D("0"), fcf_base=D("100"),
+                        net_debt=D("0"), shares_outstanding=D("10"), beta=D("1.0"),
+                        history=_history(),
+                        metrics=Metrics(market_cap=D("1000"), ps_ratio=D("2"),
+                                        free_cash_flow=D("100"), shares_outstanding=D("10")))
+    res = value(vi)
+    assert res.data_quality == "unavailable"
+    assert res.fair_value is None
+    assert res.margin_of_safety_pct is None
+
+
 def test_value_negative_fcf_is_multiples_only_no_fabrication():
     vi = ValuationInput(symbol="X", current_price=D("100"), fcf_base=D("-50"),
                         net_debt=D("0"), shares_outstanding=D("10"), beta=D("1.0"),

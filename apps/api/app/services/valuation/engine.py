@@ -52,9 +52,13 @@ def dcf(
 
 
 def margin_of_safety(fair_value: Decimal, price: Decimal) -> Decimal:
-    """(fair - price) / fair. Positive = undervalued, negative = overvalued."""
-    if fair_value == 0:
-        raise ValueError("fair_value must be non-zero")
+    """(fair - price) / fair. Positive = undervalued, negative = overvalued.
+
+    A non-positive fair value (net debt above enterprise value) has no
+    margin of safety: dividing by it flips the sign and reports an insolvent
+    equity as maximally undervalued."""
+    if fair_value <= 0:
+        raise ValueError("fair_value must be positive")
     return (fair_value - price) / fair_value
 
 
