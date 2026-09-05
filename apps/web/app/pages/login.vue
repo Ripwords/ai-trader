@@ -20,14 +20,14 @@ async function submit() {
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center bg-[var(--ink-0)] text-[var(--paper-0)] relative overflow-hidden">
+  <div class="min-h-[100dvh] flex items-center justify-center bg-[var(--ink-0)] text-[var(--paper-0)] relative overflow-hidden">
     <!-- Decorative wide hairline cross — anchors the empty space -->
     <div class="absolute inset-0 pointer-events-none">
       <div class="absolute left-1/2 top-0 bottom-0 w-px bg-[var(--ink-line-strong)] opacity-50" />
       <div class="absolute top-1/2 left-0 right-0 h-px bg-[var(--ink-line-strong)] opacity-50" />
     </div>
 
-    <div class="relative z-10 w-[420px] px-8 rise-in">
+    <div class="relative z-10 w-full max-w-[420px] px-6 sm:px-8 rise-in">
       <div class="mb-12 text-center">
         <div class="brand-mark" style="font-size: 2.25rem;">
           <span>ai</span><span class="text-[var(--paper-0)]">·trader</span>
@@ -45,6 +45,8 @@ async function submit() {
           <input
             v-model="password"
             type="password"
+            name="password"
+            autocomplete="current-password"
             autofocus
             spellcheck="false"
             class="w-full bg-transparent border-b hairline-strong border-b py-3 px-1 font-mono text-base text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"

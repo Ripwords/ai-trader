@@ -95,8 +95,8 @@ async function logout(): Promise<void> {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  height: 56px;
-  padding: 0 1.25rem;
+  height: calc(56px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) var(--page-x) 0;
   border-bottom: 1px solid var(--hairline, rgba(255,255,255,0.06));
   background: var(--ink-0);
   flex-shrink: 0;
@@ -104,7 +104,7 @@ async function logout(): Promise<void> {
 }
 
 @media (min-width: 1024px) {
-  .app-header { height: 64px; padding: 0 1.75rem; }
+  .app-header { height: calc(64px + env(safe-area-inset-top)); }
 }
 
 /* ---------------- left: hamburger + brand ---------------- */
@@ -114,8 +114,9 @@ async function logout(): Promise<void> {
   display: inline-flex;
   flex-direction: column;
   gap: 4px;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
+  margin-left: -0.5rem;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
@@ -145,6 +146,9 @@ async function logout(): Promise<void> {
   gap: 0.85rem;
   text-decoration: none;
   min-width: 0;
+  min-height: 44px;
+  align-content: center;
+  flex-wrap: wrap;
 }
 .brand-mark {
   font-family: var(--font-display, ui-serif, Georgia, serif);
@@ -223,6 +227,7 @@ async function logout(): Promise<void> {
 .signout {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.7rem;
@@ -230,6 +235,9 @@ async function logout(): Promise<void> {
   text-transform: uppercase;
   color: var(--paper-3);
   padding: 0.4rem 0.55rem;
+  min-height: 44px;
+  min-width: 44px;
+  margin-right: -0.55rem;
   border-radius: 6px;
   transition: color 160ms ease, background-color 160ms ease;
 }

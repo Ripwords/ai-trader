@@ -46,7 +46,19 @@
   --tape-up: #7ec99c;          /* muted teal — gains */
   --tape-down: #e07a5f;        /* muted coral — losses */
 
+  /* Page gutter. Pages read these instead of hardcoding px-7, so one edit
+     retunes every content column across the breakpoint range. */
+  --page-x: 1rem;
+  --page-y: 1.25rem;
+
   color-scheme: dark;
+}
+
+@media (min-width: 640px) {
+  :root { --page-x: 1.5rem; --page-y: 1.75rem; }
+}
+@media (min-width: 1024px) {
+  :root { --page-x: 1.75rem; --page-y: 2rem; }
 }
 
 html, body, #__nuxt {
@@ -55,6 +67,15 @@ html, body, #__nuxt {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* Stop the rubber-band bounce revealing the browser chrome behind a shell
+     that already owns the full viewport height. */
+  overscroll-behavior-y: none;
 }
 
 /* Hairline grid texture — printed across the entire page background.
@@ -140,6 +161,57 @@ body::before {
   width: 0;
   height: 0;
   display: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Responsive primitives
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Page gutters. `.page-pad` is the content-column default; `.page-x` is for
+   bars that set their own vertical rhythm (headers, footers). */
+.page-x { padding-left: var(--page-x); padding-right: var(--page-x); }
+.page-pad { padding: var(--page-y) var(--page-x); }
+
+/* Stat numerals. A phone cannot fit `MYR 146,306.78` at a fixed text-xl, and
+   truncating a net-worth figure is worse than shrinking it. `anywhere` is the
+   last resort for a single unbroken token wider than its column. */
+.stat-value {
+  font-size: clamp(1.05rem, 5vw, 1.25rem);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.stat-value-lg {
+  font-size: clamp(1.5rem, 7vw, 1.875rem);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Wide-table escape hatch. Wraps a table that legitimately needs more columns
+   than a phone is wide, so it scrolls sideways instead of being clipped. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.table-scroll::-webkit-scrollbar { height: 0; display: none; }
+.table-scroll > table { min-width: max-content; }
+
+/* Touch tap-target floor. Scoped to coarse pointers so the desktop layout
+   keeps its compact hit boxes — this grows the touch area, not the design. */
+@media (pointer: coarse) {
+  .tap {
+    min-height: 44px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* iOS zooms the viewport when focusing any field under 16px. */
+  input, select, textarea { font-size: max(16px, 1em); }
 }
 
 /* Refine focus rings — Nuxt UI's default is too loud for a dark dashboard */

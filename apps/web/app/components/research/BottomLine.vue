@@ -155,4 +155,16 @@ header {
   color: var(--paper-3);
 }
 .stop[data-active="true"] .label { color: var(--paper-1); }
+
+/* .stop centers a fit-content column, so the label needs an explicit clamp to
+   wrap inside its track instead of overflowing it. */
+@media (max-width: 640px) {
+  .label {
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    line-height: 1.25;
+    text-align: center;
+    max-width: 100%;
+  }
+}
 </style>
