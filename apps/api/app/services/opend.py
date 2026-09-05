@@ -558,6 +558,10 @@ class OpendAdapter:
             raise OpendError(f"price is required for {order_type} orders")
         if order_type in ("STOP", "STOP_LIMIT") and trigger_price is None:
             raise OpendError(f"trigger_price is required for {order_type} orders")
+        if trd_env == "REAL" and acc_id is None:
+            # The acc_id fallback resolves a SIMULATE account; submitting that
+            # id under REAL is never what a caller means.
+            raise OpendError("acc_id is required for REAL orders")
         # STOP is trigger-only; a stray limit price would be rejected or
         # silently misread by the SDK, so drop it.
         if order_type in ("MARKET", "STOP"):

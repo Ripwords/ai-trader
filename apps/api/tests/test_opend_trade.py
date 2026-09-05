@@ -352,6 +352,18 @@ def test_place_limit_order_maps_fields():
     assert result.side == "BUY"
 
 
+def test_place_real_order_without_acc_id_is_refused():
+    """The acc_id fallback resolves a SIMULATE account; submitting that id
+    under REAL must never happen, however the adapter is called."""
+    ctx = FakeTradeCtx()
+    with pytest.raises(OpendError, match="acc_id is required for REAL"):
+        _adapter_with(ctx).place_order(
+            code="US.NVDA", side="BUY", qty=1, price=100.0,
+            order_type="NORMAL", trd_env="REAL", acc_id=None,
+        )
+    assert ctx.place_calls == []
+
+
 def test_place_market_order_sends_zero_price():
     ctx = FakeTradeCtx()
     _adapter_with(ctx).place_order(

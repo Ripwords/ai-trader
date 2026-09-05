@@ -313,6 +313,75 @@ def test_cancelled_and_failed_real_orders_do_not_count_toward_cap(
     assert res.status_code == 200
 
 
+def test_real_modify_is_checked_against_the_daily_cap(
+    monkeypatch, client_with_bearer_and_fake_trade, fake_trade_adapter
+):
+    """Growing an existing REAL order must obey the same cap as placing one.
+    ord-1 is 10 x $100 = $1000 today; cap $1200. Modifying it to 20 shares
+    would make it $2000 (its old $1000 is swapped out, not added)."""
+    _enable_live(monkeypatch, cap=1200)
+    res = client_with_bearer_and_fake_trade.post("/trade/order/modify", json={
+        "order_id": "ord-1", "acc_id": "12345", "qty": 20, "trd_env": "REAL",
+    })
+    assert res.status_code == 409
+    assert "notional" in res.json()["detail"].lower()
+    assert fake_trade_adapter.modified == []
+    # Shrinking it to 11 shares ($1100) fits.
+    res = client_with_bearer_and_fake_trade.post("/trade/order/modify", json={
+        "order_id": "ord-1", "acc_id": "12345", "qty": 11, "trd_env": "REAL",
+    })
+    assert res.status_code == 200
+    assert fake_trade_adapter.modified[0]["qty"] == 11
+
+
+def test_real_modify_of_unknown_order_fails_closed(
+    monkeypatch, client_with_bearer_and_fake_trade, fake_trade_adapter
+):
+    _enable_live(monkeypatch, cap=100_000)
+    res = client_with_bearer_and_fake_trade.post("/trade/order/modify", json={
+        "order_id": "ord-missing", "acc_id": "12345", "qty": 1, "trd_env": "REAL",
+    })
+    assert res.status_code == 409
+    assert fake_trade_adapter.modified == []
+
+
+def test_open_market_orders_reported_at_price_zero_count_at_snapshot_price(
+    monkeypatch, client_with_bearer_and_fake_trade, fake_trade_adapter
+):
+    """moomoo echoes MARKET orders back with price 0, so summing qty * price
+    let an unlimited number of REAL market orders through the cap."""
+    _enable_live(monkeypatch, cap=1500)
+    fake_trade_adapter.extra_real_orders = [
+        Order(order_id="ord-mkt", code="US.NVDA", side="BUY", qty=10,
+              price=0.0, status="SUBMITTED",
+              created_at=datetime(2026, 5, 8, 9, 30)),
+    ]
+    # Counted: ord-1 $1000 + ord-mkt 10 x snapshot $50 = $1500. Nothing fits.
+    res = client_with_bearer_and_fake_trade.post("/trade/order/place", json={
+        "code": "US.NVDA", "side": "BUY", "qty": 1, "price": 1.0,
+        "trd_env": "REAL", "acc_id": "12345",
+    })
+    assert res.status_code == 409
+    assert fake_trade_adapter.placed == []
+
+
+def test_partially_cancelled_real_orders_still_count_toward_cap(
+    monkeypatch, client_with_bearer_and_fake_trade, fake_trade_adapter
+):
+    _enable_live(monkeypatch, cap=1500)
+    fake_trade_adapter.extra_real_orders = [
+        Order(order_id="ord-part", code="US.NVDA", side="BUY", qty=5,
+              price=100.0, status="CANCELLED_PART",
+              created_at=datetime(2026, 5, 8, 9, 30)),
+    ]
+    # ord-1 $1000 + ord-part $500 = $1500 already at the cap.
+    res = client_with_bearer_and_fake_trade.post("/trade/order/place", json={
+        "code": "US.NVDA", "side": "BUY", "qty": 1, "price": 1.0,
+        "trd_env": "REAL", "acc_id": "12345",
+    })
+    assert res.status_code == 409
+
+
 def test_real_place_requires_acc_id(
     monkeypatch, client_with_bearer_and_fake_trade, fake_trade_adapter
 ):
