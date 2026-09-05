@@ -62,7 +62,7 @@ cat <<'EOF'
 
 # 3. Verify the new image is live:
 #
-#    sudo docker compose exec web ls /app/.output/server/chunks/_/portfolio-snapshot.mjs
+#    sudo docker compose exec web ls /app/.output/server/chunks/_/holdings.mjs
 #    # → should print the path. If "No such file or directory", the swap didn't take.
 
 EOF

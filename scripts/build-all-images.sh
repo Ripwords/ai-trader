@@ -97,7 +97,7 @@ cat <<'EOF'
 
 # 3. Verify (web is the usual canary since iteration happens there most):
 #
-#    sudo docker compose exec web ls /app/.output/server/chunks/_/portfolio-snapshot.mjs
+#    sudo docker compose exec web ls /app/.output/server/chunks/_/holdings.mjs
 #    # → should print the path. If "No such file or directory", the swap didn't take.
 #
 #    sudo docker compose ps
