@@ -237,6 +237,26 @@ def run_backtest(
     )
 
 
+def run_backtest_isolated(
+    code: str,
+    bars: list[Bar],
+    *,
+    timeout_sec: float | None = None,
+    **kwargs: Any,
+) -> BacktestResult:
+    """`run_backtest` in a killable child process. A strategy that never
+    returns comes back as an error result instead of wedging the api."""
+    from app.services.algo.isolation import StrategyTimeout, backtest_timeout_sec, run_isolated
+
+    limit = timeout_sec if timeout_sec is not None else backtest_timeout_sec()
+    try:
+        return run_isolated(run_backtest, code, bars, timeout_sec=limit, **kwargs)
+    except StrategyTimeout as exc:
+        return BacktestResult(run_id="", status="error", error=str(exc))
+    except RuntimeError as exc:
+        return BacktestResult(run_id="", status="error", error=str(exc))
+
+
 def _build_benchmark_curve(df: pd.DataFrame, initial_capital: float) -> list[EquityPoint]:
     """Buy as many shares as possible with initial_capital at bar 0's close,
     mark to market each subsequent close. No costs applied — this is the

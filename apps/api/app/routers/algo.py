@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.deps import get_opend, require_internal_bearer
@@ -18,7 +20,7 @@ from app.schemas.algo import (
 )
 from app.services.agents.toolkit import resolve_symbol
 from app.services.algo import repo
-from app.services.algo.backtester import run_backtest
+from app.services.algo.backtester import run_backtest_isolated
 from app.services.opend import OpendAdapter, OpendError
 
 
@@ -146,7 +148,10 @@ async def backtest(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     run_id = await repo.create_run(strategy_id, "backtest")
-    result = run_backtest(
+    # Off the event loop and in a killable process: strategy code that never
+    # returns must not take the whole api down with it.
+    result = await asyncio.to_thread(
+        run_backtest_isolated,
         strategy.code,
         kline.bars,
         initial_capital=strategy.initial_capital,

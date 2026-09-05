@@ -486,6 +486,31 @@ async def test_bare_sell_flattens_live_position_like_the_backtester(db_pool: Any
     assert len(sigs) == 1 and sigs[0].qty == 10
 
 
+async def test_runaway_strategy_is_killed_and_the_tick_survives(db_pool: Any) -> None:
+    sid = await _make_strategy("def on_bar(c):\n    while True:\n        pass\n")
+    placed: list[tuple[str, str, int]] = []
+
+    async def fake_klines(sym: str, num: int) -> list[Any]:
+        return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
+
+    async def fake_position(sym: str) -> int:
+        return 0
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        placed.append((sym, side, qty))
+        return "ORD-X"
+
+    sch = Scheduler(
+        get_klines=fake_klines, get_position=fake_position,
+        place_paper_order=fake_place, strategy_timeout_sec=3,
+    )
+    await sch._tick()
+    assert placed == []
+    sigs = await repo.list_signals(strategy_id=sid)
+    assert len(sigs) == 1
+    assert "exceeded" in (sigs[0].error or "")
+
+
 async def test_sell_while_flat_places_nothing(db_pool: Any) -> None:
     sid = await _make_strategy("def on_bar(c): c.sell(3)\n")
     placed: list[tuple[str, str, int]] = []

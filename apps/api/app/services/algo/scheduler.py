@@ -157,17 +157,55 @@ class _Ctx:
         return int(qty) * last_close <= self.cash
 
 
-def _bars_to_df(bars: list[Any]) -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "time": [b.time for b in bars],
-            "open": [b.open for b in bars],
-            "high": [b.high for b in bars],
-            "low": [b.low for b in bars],
-            "close": [b.close for b in bars],
-            "volume": [b.volume for b in bars],
-        }
+_BAR_FIELDS = ("time", "open", "high", "low", "close", "volume")
+
+
+def _bar_records(bars: list[Any]) -> list[dict[str, Any]]:
+    """Plain dicts: they pickle across the process boundary, the SDK/pydantic
+    bar objects (and the ad-hoc ones tests use) need not."""
+    return [{k: getattr(b, k) for k in _BAR_FIELDS} for b in bars]
+
+
+def _bars_to_df(records: list[dict[str, Any]]) -> pd.DataFrame:
+    return pd.DataFrame({k: [r[k] for r in records] for k in _BAR_FIELDS})
+
+
+def evaluate_bar(
+    code: str,
+    records: list[dict[str, Any]],
+    *,
+    position: int,
+    qty: int,
+    cash: float,
+    account_value: float,
+    allocation_pct: float,
+) -> tuple[str, int | None] | None:
+    """Compile and run one ``on_bar`` call. Executed in a child process by
+    :func:`evaluate_bar_isolated`, so it takes and returns only picklable
+    values: the strategy's intent, or None for hold."""
+    on_bar = compile_strategy(code)
+    ctx = _Ctx(
+        _bars_to_df(records),
+        position=position,
+        qty=qty,
+        cash=cash,
+        account_value=account_value,
+        allocation_pct=allocation_pct,
     )
+    on_bar(ctx)
+    return ctx.intent
+
+
+def evaluate_bar_isolated(
+    code: str,
+    records: list[dict[str, Any]],
+    *,
+    timeout_sec: float,
+    **ctx_fields: Any,
+) -> tuple[str, int | None] | None:
+    from app.services.algo.isolation import run_isolated
+
+    return run_isolated(evaluate_bar, code, records, timeout_sec=timeout_sec, **ctx_fields)
 
 
 def _code_hash(code: str) -> str:
@@ -194,7 +232,12 @@ class Scheduler:
         place_paper_order: Callable[[str, str, int], Awaitable[str | None]],
         get_account_summary: Callable[[str], Awaitable[AccountSummary]] | None = None,
         tick_sec: int = TICK_SEC,
+        strategy_timeout_sec: float | None = None,
     ) -> None:
+        from app.services.algo.isolation import tick_timeout_sec
+
+        # Wall-clock budget for one on_bar call in its child process.
+        self._strategy_timeout_sec = strategy_timeout_sec if strategy_timeout_sec is not None else tick_timeout_sec()
         self._get_klines = get_klines
         self._get_position = get_position
         self._get_account_summary = get_account_summary
@@ -208,7 +251,7 @@ class Scheduler:
         # prior adds and allows up to pyramiding_max fresh ones.
         self._adds_since_flat: dict[str, int] = {}
         # Compiled strategy cache, keyed by code-hash.
-        self._compiled: dict[str, Callable[[Any], None]] = {}
+        self._validated: set[str] = set()
         self._task: asyncio.Task[None] | None = None
         self._stopping = asyncio.Event()
 
@@ -285,20 +328,20 @@ class Scheduler:
         if len(bars) < 2:
             return
 
-        # Compile on first sight, cache by content hash so editing the code
-        # picks up automatically.
+        # Validate on first sight, remembered by content hash so editing the
+        # code picks up automatically. Execution happens in a child process
+        # (see evaluate_bar_isolated), which compiles again for itself.
         h = _code_hash(s.code)
-        on_bar = self._compiled.get(h)
-        if on_bar is None:
+        if h not in self._validated:
             try:
-                on_bar = compile_strategy(s.code)
+                compile_strategy(s.code)
             except Exception as exc:  # noqa: BLE001
                 await repo.append_signal(
                     s.id, _now_naive_utc(), "BUY", 0, None, None,
                     f"compile failed: {exc}",
                 )
                 return
-            self._compiled[h] = on_bar
+            self._validated.add(h)
 
         try:
             position = await self._get_position(s.symbol)
@@ -352,16 +395,18 @@ class Scheduler:
                 equity=account_value_now, fill_price=last_close,
             ),
         )
-        ctx = _Ctx(
-            _bars_to_df(bars),
-            position=position,
-            qty=default_qty,
-            cash=cash_now,
-            account_value=account_value_now,
-            allocation_pct=allocation_pct,
-        )
         try:
-            on_bar(ctx)
+            intent = await asyncio.to_thread(
+                evaluate_bar_isolated,
+                s.code,
+                _bar_records(bars),
+                timeout_sec=self._strategy_timeout_sec,
+                position=position,
+                qty=default_qty,
+                cash=cash_now,
+                account_value=account_value_now,
+                allocation_pct=allocation_pct,
+            )
         except Exception as exc:  # noqa: BLE001
             await repo.append_signal(
                 s.id, _now_naive_utc(), "BUY", 0, None, None,
@@ -369,10 +414,10 @@ class Scheduler:
             )
             return
 
-        if ctx.intent is None:
+        if intent is None:
             return
 
-        side, explicit_qty = ctx.intent
+        side, explicit_qty = intent
         ts = _now_naive_utc()
 
         if side == "SELL":

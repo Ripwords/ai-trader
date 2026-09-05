@@ -315,6 +315,31 @@ def test_can_afford_returns_false_when_qty_times_price_exceeds_cash() -> None:
     assert decisions == [True, False]
 
 
+def test_infinite_loop_strategy_is_killed_and_reported() -> None:
+    """The validator cannot see a non-terminating loop; the isolated runner
+    must kill it and return an error instead of wedging the api process."""
+    from app.services.algo.backtester import run_backtest_isolated
+
+    bars = _bars(closes=[10.0, 11.0, 12.0])
+    res = run_backtest_isolated(
+        "def on_bar(c):\n    while True:\n        pass\n", bars, timeout_sec=3,
+    )
+    assert res.status == "error"
+    assert "exceeded" in (res.error or "")
+
+
+def test_isolated_runner_returns_a_normal_result() -> None:
+    from app.services.algo.backtester import run_backtest_isolated
+
+    bars = _bars(closes=[99.0, 101.0, 102.0], opens=[99.0, 100.0, 102.0])
+    res = run_backtest_isolated(
+        "def on_bar(c):\n    if len(c.bars) == 1: c.buy(1)\n", bars,
+        timeout_sec=30, slippage_bps=5, commission_bps=0,
+    )
+    assert res.status == "ok"
+    assert len(res.trades) == 1
+
+
 def test_equity_curve_marks_each_bar_before_the_next_bar_fill() -> None:
     """A buy signalled on bar 0 fills at bar 1's open. Bar 0's equity point
     must still be the starting capital: booking the fill into bar 0 and
