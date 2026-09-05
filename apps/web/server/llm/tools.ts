@@ -78,6 +78,19 @@ function assertLiveTradeConfirmed(args: {
   }
 }
 
+const tradeHistoryInput = z.object({
+  acc_id: z.string(),
+  trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
+  start: z.string().optional().describe('history start date YYYY-MM-DD (default: 30 days before end)'),
+  end: z.string().optional().describe('history end date YYYY-MM-DD (default: today)'),
+  code: z.string().optional().describe('optional moomoo symbol filter like US.NVDA (history only)'),
+})
+
+/** Any range or symbol filter means the moomoo history query, else today's list. */
+function isHistoryQuery(args: z.infer<typeof tradeHistoryInput>): boolean {
+  return args.start != null || args.end != null || args.code != null
+}
+
 /**
  * Tool catalogue for the trading copilot. All tools are simple
  * Vercel AI SDK `tool()` definitions — no abstraction layer.
@@ -155,7 +168,9 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
     }),
 
     'search_news': tool({
-      description: 'Search recent news (headlines, market events) for a company or topic.',
+      description:
+        'Search recent news for a TOPIC that is not a single stock (a sector, a macro theme, an event). '
+        + 'For news on a specific ticker use news_pulse instead.',
       inputSchema: z.object({
         query: z.string(),
         maxResults: z.number().int().min(1).max(20).default(5),
@@ -163,13 +178,12 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       execute: async ({ query, maxResults }) => ({ results: await searchWithFallback('news', query, maxResults) }),
     }),
 
-    'ticker_news_context': tool({
+    'news_pulse': tool({
       description:
-        'News for a STOCK plus the macro, sector, and peer/geopolitical news '
-        + 'that explains WHY it moved (Fed/rates, market-wide selloffs, '
-        + 'competitors, supply-chain, commodities). Prefer this over '
-        + 'search_news for any stock question — especially "why did X drop/'
-        + 'rise". Returns three groups: ticker, macro, contextual.',
+        'News for a STOCK plus the macro, sector, and peer/geopolitical news that explains WHY it moved '
+        + '(Fed/rates, market-wide selloffs, competitors, supply-chain, commodities). Use for any stock news '
+        + 'question: "what\'s the news on X", "why did X drop/rise", "news pulse", "latest on X". Returns three '
+        + 'groups: ticker, macro, contextual. Summarize the result; do not dump every headline.',
       inputSchema: z.object({
         symbol: z.string(),
         companyName: z.string().optional(),
@@ -362,26 +376,28 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'trade_orders': tool({
       description:
-        'List today\'s orders for an account. Defaults to REAL. ' +
+        'List orders for an account. With no date range: today\'s orders. Pass start/end (YYYY-MM-DD) ' +
+        'for history ("what did I trade last week/month"; end defaults to today, start to 30 days before) ' +
+        'and code to filter one symbol. Defaults to REAL. ' +
         'Skip accounts where acc_role is "IPO" — moomoo refuses this call on IPO accounts ' +
         '(422 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
-      inputSchema: z.object({
-        acc_id: z.string(),
-        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
+      inputSchema: tradeHistoryInput,
+      execute: async (args) => ({
+        orders: isHistoryQuery(args) ? await client.listHistoryOrders(args) : await client.listOrders(args),
       }),
-      execute: async (args) => ({ orders: await client.listOrders(args) }),
     }),
 
     'trade_fills': tool({
       description:
-        'List today\'s fills (executed trades) for an account. Defaults to REAL. ' +
+        'List fills (executed trades) for an account. With no date range: today\'s fills. Pass start/end ' +
+        '(YYYY-MM-DD) for history ("what actually executed last month"; end defaults to today, start to ' +
+        '30 days before) and code to filter one symbol. Defaults to REAL. ' +
         'Skip accounts where acc_role is "IPO" — moomoo refuses this call on IPO accounts ' +
         '(422 with "does not support" message); pick a NORMAL acc_id from trade_accounts instead.',
-      inputSchema: z.object({
-        acc_id: z.string(),
-        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
+      inputSchema: tradeHistoryInput,
+      execute: async (args) => ({
+        fills: isHistoryQuery(args) ? await client.listHistoryFills(args) : await client.listFills(args),
       }),
-      execute: async (args) => ({ fills: await client.listFills(args) }),
     }),
 
     'trade_place_order': tool({
@@ -646,16 +662,6 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
-    'news_pulse': tool({
-      description:
-        'A grouped news digest for a symbol: ticker-specific + macro + sector/peer context. Use for "what\'s the news on X", "news pulse", "latest on X". Summarize the result; do not dump every headline.',
-      inputSchema: z.object({ symbol: z.string(), companyName: z.string().optional() }),
-      execute: async ({ symbol, companyName }) => {
-        const { getContextualNews } = await import('../lib/contextual-news')
-        return getContextualNews({ symbol, companyName, maxResults: 12 })
-      },
-    }),
-
     'thesis_tracker': tool({
       description:
         "Read-only research history for a symbol: latest agents verdict, run history, confidence trend, staleness (stale after 21 days), and realized alpha. Use for \"how's my thesis on X\", \"thesis tracker\", \"has my research on X aged\". Does not start a run.",
@@ -859,40 +865,6 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
     }),
 
     // --- Persistence & history -------------------------------------------
-
-    'trade_orders_history': tool({
-      description:
-        'List HISTORICAL orders for an account over a date range (defaults to the last 30 days). ' +
-        'Use when the user asks about orders beyond today — "what did I trade last week/month". ' +
-        'For today\'s orders prefer trade_orders. Dates are YYYY-MM-DD. Defaults to REAL. ' +
-        'Skip accounts where acc_role is "IPO" — moomoo refuses history queries on IPO accounts; ' +
-        'pick a NORMAL acc_id from trade_accounts instead.',
-      inputSchema: z.object({
-        acc_id: z.string(),
-        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
-        start: z.string().optional().describe('start date YYYY-MM-DD (default: 30 days ago)'),
-        end: z.string().optional().describe('end date YYYY-MM-DD (default: today)'),
-        code: z.string().optional().describe('optional moomoo symbol filter like US.NVDA'),
-      }),
-      execute: async (args) => ({ orders: await client.listHistoryOrders(args) }),
-    }),
-
-    'trade_fills_history': tool({
-      description:
-        'List HISTORICAL fills (executed trades) for an account over a date range (defaults to the ' +
-        'last 30 days). Use for "what actually executed last week/month" or realized-trade reviews. ' +
-        'For today\'s fills prefer trade_fills. Dates are YYYY-MM-DD. Defaults to REAL. ' +
-        'Skip accounts where acc_role is "IPO" — moomoo refuses history queries on IPO accounts; ' +
-        'pick a NORMAL acc_id from trade_accounts instead.',
-      inputSchema: z.object({
-        acc_id: z.string(),
-        trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
-        start: z.string().optional().describe('start date YYYY-MM-DD (default: 30 days ago)'),
-        end: z.string().optional().describe('end date YYYY-MM-DD (default: today)'),
-        code: z.string().optional().describe('optional moomoo symbol filter like US.NVDA'),
-      }),
-      execute: async (args) => ({ fills: await client.listHistoryFills(args) }),
-    }),
 
     'portfolio_performance': tool({
       description:

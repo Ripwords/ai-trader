@@ -178,15 +178,12 @@ describe('tool catalogue', () => {
       'search_web',
       'technical_analysis',
       'thesis_tracker',
-      'ticker_news_context',
       'trade_account_overview',
       'trade_accounts',
       'trade_cancel_order',
       'trade_fills',
-      'trade_fills_history',
       'trade_modify_order',
       'trade_orders',
-      'trade_orders_history',
       'trade_place_order',
       'trade_portfolio',
       'usage_summary',
@@ -363,25 +360,26 @@ describe('tool catalogue', () => {
     expect((out as { order_id: string }).order_id).toBe('paper-1')
   })
 
-  it('trade_orders_history forwards the date range to client.listHistoryOrders', async () => {
+  it('trade_orders lists today by default and switches to the history query when a range is given', async () => {
     const c = fakeClient()
     const tools = makeTools(c as unknown as ApiClient)
-    const out = await (tools['trade_orders_history'] as { execute: (args: {
-      acc_id: string
-      trd_env: 'SIMULATE'
-      start: string
-      end: string
-    }) => Promise<unknown> }).execute({ acc_id: '1', trd_env: 'SIMULATE', start: '2026-06-18', end: '2026-07-18' })
+    type Exec = { execute: (args: { acc_id: string; trd_env: 'SIMULATE' | 'REAL'; start?: string; end?: string; code?: string }) => Promise<unknown> }
+    const today = await (tools['trade_orders'] as Exec).execute({ acc_id: '1', trd_env: 'REAL' })
+    expect(c.listOrders).toHaveBeenCalledWith({ acc_id: '1', trd_env: 'REAL' })
+    expect(c.listHistoryOrders).not.toHaveBeenCalled()
+    expect((today as { orders: unknown[] }).orders).toEqual([])
+
+    const out = await (tools['trade_orders'] as Exec).execute({ acc_id: '1', trd_env: 'SIMULATE', start: '2026-06-18', end: '2026-07-18' })
     expect(c.listHistoryOrders).toHaveBeenCalledWith({
       acc_id: '1', trd_env: 'SIMULATE', start: '2026-06-18', end: '2026-07-18',
     })
     expect((out as { orders: unknown[] }).orders).toHaveLength(1)
   })
 
-  it('trade_fills_history forwards the symbol filter to client.listHistoryFills', async () => {
+  it('trade_fills treats a symbol filter as a history query', async () => {
     const c = fakeClient()
     const tools = makeTools(c as unknown as ApiClient)
-    const out = await (tools['trade_fills_history'] as { execute: (args: {
+    const out = await (tools['trade_fills'] as { execute: (args: {
       acc_id: string
       trd_env: 'REAL'
       code: string
@@ -389,6 +387,7 @@ describe('tool catalogue', () => {
     expect(c.listHistoryFills).toHaveBeenCalledWith({
       acc_id: '1', trd_env: 'REAL', code: 'US.NVDA',
     })
+    expect(c.listFills).not.toHaveBeenCalled()
     expect((out as { fills: unknown[] }).fills).toHaveLength(1)
   })
 
