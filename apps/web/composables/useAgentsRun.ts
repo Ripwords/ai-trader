@@ -1,4 +1,4 @@
-import { ref, shallowRef } from 'vue'
+import { getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue'
 import type { AgentEvent, Rating } from '../types/agents'
 import type { SymbolResolution } from '../types/symbol'
 
@@ -268,6 +268,9 @@ export function useAgentsRun() {
       pollTimer = null
     }
   }
+  // Leaving /research/AAPL for /research/TSLA used to keep the old 2s poll
+  // alive forever next to the new one.
+  if (getCurrentScope()) onScopeDispose(stopPoll)
 
   interface MessagesResponse {
     runId: string

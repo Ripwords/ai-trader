@@ -78,7 +78,7 @@ const url = computed(() => {
   return `/api/research/deep-report-stream?${p.toString()}`
 })
 
-const { event, data, status, close, open } = useEventSource(
+const { event, data, status, close, open, error: streamError } = useEventSource(
   url,
   STREAM_EVENTS as unknown as string[],
   { immediate: true, autoReconnect: false },
@@ -87,6 +87,14 @@ const { event, data, status, close, open } = useEventSource(
 watch(status, (s) => {
   if (s === 'CLOSED' && phase.value === 'streaming') phase.value = 'done'
   if (s === 'OPEN' && phase.value === 'connecting') phase.value = 'streaming'
+})
+
+// A non-200 (expired session, api down) never reaches OPEN, so the phase
+// stayed 'connecting' with a spinner and no retry button.
+watch(streamError, (err) => {
+  if (!err || phase.value === 'done') return
+  phase.value = 'error'
+  errorMessage.value ??= 'report stream failed to connect'
 })
 
 watch([event, data], ([ev, dat]) => {

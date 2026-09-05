@@ -371,7 +371,8 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         acc_id: z.string(),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('REAL'),
       }),
-      execute: async (args) => client.getPortfolio(args),
+      // Echo the environment so the card can caption live vs paper honestly.
+      execute: async (args) => ({ ...(await client.getPortfolio(args)), trd_env: args.trd_env, acc_id: args.acc_id }),
     }),
 
     'trade_orders': tool({

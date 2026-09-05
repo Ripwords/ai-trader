@@ -16,7 +16,11 @@ const props = defineProps<{
   positions: Position[]
   currency?: string | null
   cash_by_currency?: Record<string, number> | null
+  /** Echoed by the trade_portfolio tool; the tool defaults to REAL. */
+  trd_env?: 'SIMULATE' | 'REAL' | null
 }>()
+
+const envLabel = computed(() => props.trd_env === 'REAL' ? 'live' : props.trd_env === 'SIMULATE' ? 'paper' : 'account')
 
 // Base/reporting currency for the scalar cash / market value / total assets.
 // For moomoo margin accounts this is the home currency (e.g. HKD) that all
@@ -39,7 +43,7 @@ function fmtSigned(n: number): string {
   <div class="surface-1 rounded-md overflow-hidden">
     <header class="px-5 py-4 border-b hairline flex items-baseline justify-between">
       <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">
-        Portfolio · paper
+        Portfolio · {{ envLabel }}
         <span v-if="currencyLabel" class="ml-1 text-[var(--accent)]">· base {{ currencyLabel }}</span>
       </div>
       <div class="font-mono text-sm text-[var(--paper-2)]" data-mono>{{ props.positions.length }} positions</div>

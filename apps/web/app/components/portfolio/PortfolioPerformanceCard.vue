@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import {
   LineSeries,
   createChart,
@@ -70,20 +70,27 @@ function render() {
   chart?.timeScale().fitContent()
 }
 
-onMounted(() => {
-  if (chartEl.value) {
-    chart = createChart(chartEl.value, { ...makeBaseOptions(), height: 220 })
-    netWorthLine = chart.addSeries(LineSeries, {
-      color: ACCENT, lineWidth: 2,
-      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-    })
-    cashLine = chart.addSeries(LineSeries, {
-      color: CASH, lineWidth: 1, lineStyle: 2,
-      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-    })
+function mountChart(el: HTMLElement) {
+  chart = createChart(el, { ...makeBaseOptions(), height: 220 })
+  netWorthLine = chart.addSeries(LineSeries, {
+    color: ACCENT, lineWidth: 2,
+    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+  })
+  cashLine = chart.addSeries(LineSeries, {
+    color: CASH, lineWidth: 1, lineStyle: 2,
+    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+  })
+}
+
+// The container sits behind v-else="hasHistory", so it can appear after
+// mount (first snapshot captured from the empty state). Build the chart
+// whenever the element shows up, not only on mount.
+watch(chartEl, (el) => {
+  if (el && !chart) {
+    mountChart(el)
+    render()
   }
-  render()
-})
+}, { immediate: true })
 
 onUnmounted(() => {
   chart?.remove()

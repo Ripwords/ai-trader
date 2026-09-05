@@ -17,20 +17,25 @@ const props = withDefaults(defineProps<Props>(), { flush: false })
 // we rely on the defaults. ``gfm: true`` enables GitHub-flavoured extras
 // (tables, strikethrough); ``breaks: true`` turns single newlines into <br>
 // because LLMs format reports with soft wraps that they expect to render.
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
 marked.use({
   gfm: true,
   breaks: true,
-  // Disable raw HTML in source — never trust LLM-emitted markup. ``escape``
-  // around any embedded HTML keeps it as visible text.
   async: false,
+  // marked passes raw HTML in the source straight through. Reports quote
+  // scraped web snippets, and this renders into a page that holds the
+  // session cookie, so raw HTML (block or inline) is shown as text instead.
+  renderer: {
+    html({ text }) {
+      return escapeHtml(text)
+    },
+  },
 })
 
-const html = computed(() => {
-  // marked.parse with default escaping is safe for our LLM-as-author use:
-  // it escapes < and & in source, so a model that emits a raw <script> tag
-  // ends up rendered as literal characters, not executed.
-  return marked.parse(props.content || '', { async: false }) as string
-})
+const html = computed(() => marked.parse(props.content || '', { async: false }) as string)
 </script>
 
 <template>

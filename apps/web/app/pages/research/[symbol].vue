@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useAgentsRun } from '../../../composables/useAgentsRun'
 import { requestRunNotificationPermission } from '../../lib/notify'
 
@@ -107,6 +107,11 @@ function recomputeElapsed() {
   }
   elapsedSec.value = Math.max(0, Math.floor((Date.now() - startedAt.value.getTime()) / 1000))
 }
+
+onUnmounted(() => {
+  if (elapsedTimer) clearInterval(elapsedTimer)
+  elapsedTimer = null
+})
 
 watch([status, startedAt], ([s]) => {
   if (s === 'running') {

@@ -165,7 +165,7 @@ function fmt(t: string): string {
                 <span
                   class="font-mono text-xs uppercase tracking-wider"
                   :class="s.enabled ? 'text-[var(--tape-up)]' : 'text-[var(--paper-3)]'"
-                >{{ s.enabled ? '● live' : '○ paused' }}</span>
+                >{{ s.enabled ? '● live (paper)' : '○ paused' }}</span>
               </div>
               <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mt-1">
                 {{ s.symbol }} · {{ s.cadence }} · {{ s.sizing_mode }} {{ s.sizing_value }} · created {{ fmt(s.created_at) }}

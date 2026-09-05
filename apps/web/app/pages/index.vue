@@ -256,11 +256,15 @@ onBeforeUnmount(() => {
 watch(() => route.query.c, async (next) => {
   const nextId = typeof next === 'string' ? next : null
   if (nextId === chatId.value) return
+  // An in-flight stream keeps appending to chat.messages, so switching
+  // threads without stopping it copies the old reply into the new thread.
+  chat.stop()
   chatId.value = nextId
   await loadConversation(nextId)
 })
 
 function startNewChat() {
+  chat.stop()
   chatId.value = null
   chat.messages = []
   activeConversationMetadata.value = null
@@ -274,6 +278,9 @@ function onConversationDeleted(id: string) { if (id === chatId.value) startNewCh
 function onSubmit() {
   const text = input.value.trim()
   if (!text) return
+  // Sending while a reply is still streaming opens a second concurrent
+  // stream (and, on a fresh chat, a second thread).
+  if (chat.status === 'submitted' || chat.status === 'streaming') return
   void requestRunNotificationPermission()
   chat.sendMessage({ text })
   input.value = ''
@@ -504,6 +511,7 @@ function agentsVerdict(output: unknown) {
                 :positions="(getToolOutput(part) as any).positions"
                 :currency="(getToolOutput(part) as any).currency"
                 :cash_by_currency="(getToolOutput(part) as any).cash_by_currency"
+                :trd_env="(getToolOutput(part) as any).trd_env"
               />
               <PortfolioMptCard
                 v-else-if="hasOutput(part) && getToolName(part) === 'portfolio_mpt_analysis'"
@@ -521,7 +529,7 @@ function agentsVerdict(output: unknown) {
                 :running="isToolStreaming(part) && !agentsVerdict(getToolOutput(part))"
               />
               <ValuationCard
-                v-else-if="hasOutput(part) && getToolName(part) === 'value_stock' && (getToolOutput(part) as any)?.veto"
+                v-else-if="hasOutput(part) && getToolName(part) === 'value_stock'"
                 :result="getToolOutput(part) as any"
               />
               <TechnicalsCard

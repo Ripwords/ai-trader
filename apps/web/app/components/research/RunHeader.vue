@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import type { AgentEvent } from '../../../types/agents'
 
 interface Props {
@@ -49,6 +49,11 @@ watch(
   },
   { immediate: true },
 )
+
+onUnmounted(() => {
+  if (tick) clearInterval(tick)
+  tick = null
+})
 
 // ─── Activity readout ──────────────────────────────────────────────
 const activeNode = computed(() => {
