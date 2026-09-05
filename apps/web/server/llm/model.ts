@@ -89,3 +89,28 @@ export function buildModel(spec: string = process.env.LLM_MODEL || DEFAULT_MODEL
       )
   }
 }
+
+/**
+ * DeepSeek's thinking-mode models reject a forced `tool_choice` with a hard
+ * 400 ("Thinking mode does not support this tool_choice"), which aborts the
+ * whole stream — so every slash command dies while plain chat still works.
+ * Verified against the live API 2026-09-05: deepseek-v4-pro, deepseek-v4-flash
+ * and deepseek-reasoner all reject it; only deepseek-chat accepts it.
+ *
+ * The caller's fallback is `tool_choice: "auto"` plus the dispatch directive
+ * naming the tool and its arguments, which those models do honour.
+ *
+ * Unknown deepseek ids are assumed to be thinking-mode: a soft steer degrades
+ * gracefully, a rejected force kills the turn. Set LLM_FORCE_TOOL_CHOICE=true
+ * to force anyway on a model this allowlist does not know yet.
+ */
+const DEEPSEEK_FORCED_TOOL_CHOICE_OK = new Set(['deepseek-chat'])
+
+export function supportsForcedToolChoice(
+  spec: string = process.env.LLM_MODEL || DEFAULT_MODEL_SPEC,
+): boolean {
+  if (process.env.LLM_FORCE_TOOL_CHOICE === 'true') return true
+  const { provider, modelId } = splitModelSpec(spec)
+  if (provider !== 'deepseek') return true
+  return DEEPSEEK_FORCED_TOOL_CHOICE_OK.has(modelId)
+}

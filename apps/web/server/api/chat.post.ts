@@ -9,7 +9,7 @@ import {
 import { getApiClient } from '../llm/http'
 import { getGhostfolioStatus, getGhostfolioTools } from '../llm/mcp'
 import { buildSystemPrompt } from '../llm/chat-context'
-import { buildModel, DEFAULT_MODEL_SPEC } from '../llm/model'
+import { buildModel, DEFAULT_MODEL_SPEC, supportsForcedToolChoice } from '../llm/model'
 import { makeTools } from '../llm/tools'
 import { resolveMaxSteps } from '../llm/chat-steps'
 
@@ -89,7 +89,11 @@ export default defineEventHandler(async (event) => {
     messages: modelMessages,
     tools,
     stopWhen: stepCountIs(maxSteps),
-    ...(dispatch
+    // Only pin the tool when the model accepts a forced tool_choice. DeepSeek's
+    // thinking-mode models reject it with a 400 that aborts the entire stream,
+    // so every slash command would fail; there the dispatch directive in the
+    // system prompt carries the dispatch on its own.
+    ...(dispatch && supportsForcedToolChoice()
       ? {
           prepareStep: ({ stepNumber }: { stepNumber: number }) => {
             const tc = stepToolChoice(dispatch.toolName, stepNumber)
