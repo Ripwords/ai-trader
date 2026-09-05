@@ -38,6 +38,18 @@ def value(
     overrides: Assumptions | None = None,
     avg_price_by_period: dict[str, Decimal] | None = None,
 ) -> ValuationResult:
+    result = _value(vi, overrides, avg_price_by_period)
+    result.currency = vi.currency
+    if vi.price_note:
+        result.warnings.append(vi.price_note)
+    return result
+
+
+def _value(
+    vi: ValuationInput,
+    overrides: Assumptions | None,
+    avg_price_by_period: dict[str, Decimal] | None,
+) -> ValuationResult:
     warnings: list[str] = []
     if vi.current_price <= 0:
         # No price feed means no margin of safety, no multiples and no

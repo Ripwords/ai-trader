@@ -38,6 +38,8 @@ interface ValuationResult {
     rating_cap: string | null
   }
   warnings: string[]
+  /** Currency of every price and fair value; absent on older results. */
+  currency?: string | null
 }
 
 const props = defineProps<{ result: ValuationResult | { error: string } }>()
@@ -54,6 +56,12 @@ const valuationData = computed<ValuationResult | null>(() => {
     return props.result
   }
   return null
+})
+
+// HK and CN listings are not dollars; label with the ISO code when known.
+const ccy = computed(() => {
+  const c = valuationData.value?.currency
+  return c ? `${c} ` : '$'
 })
 
 function toNum(v: string | number | null | undefined): number | null {
@@ -120,11 +128,11 @@ function mosClass(v: string | number | null | undefined): string {
       <div v-if="valuationData.data_quality !== 'unavailable'" class="val-prices">
         <div class="val-stat">
           <span>current price</span>
-          <strong>${{ fmtPrice(valuationData.current_price) }}</strong>
+          <strong>{{ ccy }}{{ fmtPrice(valuationData.current_price) }}</strong>
         </div>
         <div class="val-stat">
           <span>fair value</span>
-          <strong>{{ valuationData.fair_value !== null ? '$' + fmtPrice(valuationData.fair_value) : '--' }}</strong>
+          <strong>{{ valuationData.fair_value !== null ? ccy + fmtPrice(valuationData.fair_value) : '--' }}</strong>
         </div>
         <div class="val-stat">
           <span>margin of safety</span>
@@ -154,7 +162,7 @@ function mosClass(v: string | number | null | undefined): string {
             <tr v-for="(s, i) in valuationData.scenarios" :key="i">
               <td>{{ s.name }}</td>
               <td>{{ fmtPct(s.growth) }}</td>
-              <td>${{ fmtPrice(s.fair_value) }}</td>
+              <td>{{ ccy }}{{ fmtPrice(s.fair_value) }}</td>
               <td>{{ fmtPct(s.probability) }}</td>
             </tr>
           </tbody>

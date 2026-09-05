@@ -22,6 +22,10 @@ export interface FinancialMetrics {
   free_cash_flow: number | null
   beta: number | null
   shares_outstanding: number | null
+  /** Currency the quote trades in (Yahoo `price.currency`). */
+  currency: string | null
+  /** Currency the financial statements are reported in (`financialData.financialCurrency`). */
+  financial_currency: string | null
 }
 
 export interface HistoricalPeriod {
@@ -31,6 +35,8 @@ export interface HistoricalPeriod {
   eps: number | null
   fcf: number | null
   total_debt: number | null
+  /** Cash and equivalents, so net debt can subtract it. */
+  cash: number | null
   total_assets: number | null
   shareholders_equity: number | null
 }
@@ -118,6 +124,7 @@ const EMPTY_METRICS = (symbol: string): FinancialMetrics => ({
   revenue_growth: null, earnings_growth: null,
   debt_to_equity: null, current_ratio: null,
   free_cash_flow: null, beta: null, shares_outstanding: null,
+  currency: null, financial_currency: null,
 })
 
 export function toYahooSymbol(s: string): string {
@@ -177,6 +184,8 @@ const fetchFinancialMetrics = defineCachedFunction(
       free_cash_flow: num(fd?.freeCashflow),
       beta: num(sd?.beta) ?? num(ks?.beta),
       shares_outstanding: num(ks?.sharesOutstanding),
+      currency: typeof p?.currency === 'string' ? p.currency : null,
+      financial_currency: typeof fd?.financialCurrency === 'string' ? fd.financialCurrency : null,
     }
   },
   {
@@ -230,6 +239,7 @@ const fetchHistorical = defineCachedFunction(
         eps: null,
         fcf,
         total_debt: totalDebt,
+        cash: f(bal, 'cash') ?? f(bal, 'cashAndCashEquivalents'),
         total_assets: f(bal, 'totalAssets'),
         shareholders_equity: f(bal, 'totalStockholderEquity'),
       })

@@ -54,6 +54,16 @@ def test_value_without_price_is_unavailable_not_a_bargain():
     assert res.margin_of_safety_pct is None
 
 
+def test_value_carries_currency_and_price_note_into_the_result():
+    vi = ValuationInput(symbol="X", current_price=D("100"), fcf_base=D("100"),
+                        net_debt=D("0"), shares_outstanding=D("10"), beta=D("1.0"),
+                        history=_history(), metrics=Metrics(),
+                        currency="CNY", price_note="quote converted from HKD to CNY at 0.925")
+    res = value(vi)
+    assert res.currency == "CNY"
+    assert any("HKD" in w for w in res.warnings)
+
+
 def test_value_negative_fcf_is_multiples_only_no_fabrication():
     vi = ValuationInput(symbol="X", current_price=D("100"), fcf_base=D("-50"),
                         net_debt=D("0"), shares_outstanding=D("10"), beta=D("1.0"),

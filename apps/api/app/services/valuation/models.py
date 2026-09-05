@@ -16,6 +16,7 @@ class HistoryPeriod(_Model):
     net_income: Decimal | None = None
     fcf: Decimal | None = None
     total_debt: Decimal | None = None
+    cash: Decimal | None = None
     shareholders_equity: Decimal | None = None
 
 
@@ -46,6 +47,12 @@ class ValuationInput(_Model):
     history: list[HistoryPeriod]
     metrics: Metrics
     avg_price_by_period: dict[str, Decimal] | None = None
+    # Currency every price and per-share figure is expressed in (the
+    # statements' currency once the web side has converted the quote).
+    currency: str | None = None
+    # Something the web side did or could not do to the price series that
+    # the result must disclose.
+    price_note: str | None = None
 
 
 class Scenario(_Model):
@@ -82,3 +89,5 @@ class ValuationResult(_Model):
     data_quality: Literal["full", "multiples_only", "unavailable"]
     veto: Veto
     warnings: list[str] = []
+    # Currency of current_price, fair_value and the scenario fair values.
+    currency: str | None = None

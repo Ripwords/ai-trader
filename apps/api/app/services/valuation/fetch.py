@@ -37,6 +37,7 @@ def _history(rows: list[dict]) -> list[HistoryPeriod]:
             net_income=_dec(r.get("net_income")),
             fcf=_dec(r.get("fcf")),
             total_debt=_dec(r.get("total_debt")),
+            cash=_dec(r.get("cash")),
             shareholders_equity=_dec(r.get("shareholders_equity")),
         )
         for r in rows
@@ -67,13 +68,32 @@ def to_valuation_input(symbol: str, payload: dict) -> ValuationInput:
     if fcf_base is None and history and history[0].fcf is not None:
         fcf_base = history[0].fcf
 
-    net_debt = history[0].total_debt if history else None
-    if net_debt is None:
-        net_debt = Decimal("0")
+    # Net debt is debt less cash; a cash-rich balance sheet is net cash and
+    # adds to equity value. Missing figures count as zero, never as debt.
+    latest = history[0] if history else None
+    total_debt = (latest.total_debt if latest else None) or Decimal("0")
+    cash = (latest.cash if latest else None) or Decimal("0")
+    net_debt = total_debt - cash
 
     shares = metrics.shares_outstanding
 
     avg_price_by_period = avg_close_by_year(bars) if bars else None
+
+    # The web side converts the quote into the statements' currency when the
+    # two differ (and says so); every per-share figure here is in that unit.
+    raw_metrics = payload.get("metrics") or {}
+    conversion = payload.get("price_conversion")
+    currency = (
+        conversion.get("to") if isinstance(conversion, dict) else None
+    ) or raw_metrics.get("financial_currency") or raw_metrics.get("currency")
+    price_note: str | None = None
+    if isinstance(conversion, dict):
+        price_note = (
+            f"quote converted from {conversion.get('from')} to {conversion.get('to')} "
+            f"at {conversion.get('rate')} so prices and fair value share the statements' currency"
+        )
+    elif payload.get("price_conversion_error"):
+        price_note = f"{payload['price_conversion_error']}; fair value and price are in different currencies"
 
     return ValuationInput(
         symbol=symbol,
@@ -85,6 +105,8 @@ def to_valuation_input(symbol: str, payload: dict) -> ValuationInput:
         history=history,
         metrics=metrics,
         avg_price_by_period=avg_price_by_period or None,
+        currency=str(currency) if currency else None,
+        price_note=price_note,
     )
 
 
