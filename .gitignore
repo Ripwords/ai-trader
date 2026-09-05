@@ -13,6 +13,13 @@ nvda_kline.png
 # locally installed claude skills (sourced from moomoo zip; not project source)
 .claude/skills/
 
+# agent worktrees — these are live nested git checkouts (see `git worktree
+# list`), not project source. Committing one embeds a checkout in the repo.
+.claude/worktrees/
+
+# node deps
+node_modules/
+
 # editor / OS noise
 .idea/
 .vscode/
