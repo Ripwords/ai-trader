@@ -22,12 +22,40 @@ const llmModel = useRuntimeConfig().public.llmModel || 'unset'
 // is fine — the alternative is a global layout re-hydration.
 const clock = ref<Date | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
+
+// The status strip reflects the real OpenD state instead of a static
+// green dot: down, quote-only, or live. Polled once a minute.
+interface OpendStatus { reachable: boolean; qot_logined: boolean; trd_logined: boolean }
+const opend = ref<OpendStatus | null>(null)
+let opendTimer: ReturnType<typeof setInterval> | null = null
+async function refreshOpend(): Promise<void> {
+  try {
+    opend.value = await $fetch<OpendStatus>('/api/opend-status')
+  } catch {
+    opend.value = { reachable: false, qot_logined: false, trd_logined: false }
+  }
+}
+const opendLabel = computed(() => {
+  if (opend.value === null) return 'opend · checking'
+  if (!opend.value.reachable) return 'opend · down'
+  if (!opend.value.qot_logined) return 'opend · no quotes'
+  return 'live · paper'
+})
+const opendTone = computed(() => {
+  if (opend.value === null) return 'pending'
+  if (!opend.value.reachable || !opend.value.qot_logined) return 'down'
+  return 'up'
+})
+
 onMounted(() => {
   clock.value = new Date()
   timer = setInterval(() => { clock.value = new Date() }, 1000)
+  void refreshOpend()
+  opendTimer = setInterval(() => { void refreshOpend() }, 60_000)
 })
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer)
+  if (opendTimer) clearInterval(opendTimer)
 })
 const clockText = computed(() => {
   if (clock.value === null) return '--:--:--'
@@ -70,9 +98,9 @@ async function logout(): Promise<void> {
     </div>
 
     <div class="right">
-      <div class="status-strip" data-mono>
-        <span class="status-dot" />
-        <span>live · paper</span>
+      <div class="status-strip" data-mono :title="opendLabel">
+        <span class="status-dot" :data-tone="opendTone" />
+        <span>{{ opendLabel }}</span>
       </div>
       <div class="clock" data-mono>{{ clockText }}</div>
       <button class="signout" aria-label="Sign out" title="Sign out" @click="logout">
@@ -203,6 +231,15 @@ async function logout(): Promise<void> {
   background: #5fbf73;
   box-shadow: 0 0 8px rgba(95, 191, 115, 0.55);
   animation: pulse 2.4s ease-in-out infinite;
+}
+.status-dot[data-tone="down"] {
+  background: var(--tape-down);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--tape-down) 55%, transparent);
+  animation: none;
+}
+.status-dot[data-tone="pending"] {
+  background: var(--paper-3);
+  box-shadow: none;
 }
 @keyframes pulse {
   0%, 100% { opacity: 1; }

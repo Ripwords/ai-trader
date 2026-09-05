@@ -27,11 +27,16 @@ defineEmits<{
       <li
         v-for="i in props.items"
         :key="i.id"
-        class="group px-5 py-2 hover:bg-[var(--ink-2)] cursor-pointer flex items-start justify-between gap-2 transition-colors border-l-2 text-sm"
+        class="group px-5 py-2 hover:bg-[var(--ink-2)] focus-within:bg-[var(--ink-2)] cursor-pointer flex items-start justify-between gap-2 transition-colors border-l-2 text-sm outline-none"
         :class="i.id === props.activeId
           ? 'border-[var(--accent)] bg-[var(--ink-2)]'
-          : 'border-transparent hover:border-[var(--accent)]'"
+          : 'border-transparent hover:border-[var(--accent)] focus-visible:border-[var(--accent)]'"
+        role="button"
+        tabindex="0"
+        :aria-current="i.id === props.activeId ? 'true' : undefined"
         @click="$emit('select', i.id)"
+        @keydown.enter.prevent="$emit('select', i.id)"
+        @keydown.space.prevent="$emit('select', i.id)"
       >
         <span class="min-w-0">
           <span class="block truncate text-[var(--paper-0)]">
@@ -44,7 +49,7 @@ defineEmits<{
             {{ i.match?.snippet || i.summary || `${i.decision_count} decision${i.decision_count === 1 ? '' : 's'}` }}
           </span>
         </span>
-        <span class="shrink-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition">
+        <span class="shrink-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition">
           <button
             class="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--paper-3)] hover:text-[var(--accent)]"
             :title="i.pinned ? 'Unpin' : 'Pin'"

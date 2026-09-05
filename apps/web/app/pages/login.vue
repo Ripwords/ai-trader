@@ -39,12 +39,14 @@ async function submit() {
 
       <form class="space-y-6" @submit.prevent="submit">
         <div>
-          <label class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] block mb-3">
+          <label for="password" class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] block mb-3">
             password
           </label>
           <input
+            id="password"
             v-model="password"
             type="password"
+            autocomplete="current-password"
             autofocus
             spellcheck="false"
             class="w-full bg-transparent border-b hairline-strong border-b py-3 px-1 font-mono text-base text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"

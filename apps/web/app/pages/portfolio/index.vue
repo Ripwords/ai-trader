@@ -130,6 +130,11 @@ function sortIndicator(key: SortKey): string {
   return sortDir.value === 'asc' ? '↑' : '↓'
 }
 
+function ariaSort(key: SortKey): 'ascending' | 'descending' | 'none' {
+  if (sortKey.value !== key) return 'none'
+  return sortDir.value === 'asc' ? 'ascending' : 'descending'
+}
+
 const sortedPositions = computed<FullPortfolioPosition[]>(() => {
   const list = data.value?.positions ?? []
   const dir = sortDir.value === 'asc' ? 1 : -1
@@ -1010,18 +1015,46 @@ async function capturePlanningSnapshot() {
               <table class="w-full text-sm">
                 <thead>
                   <tr class="text-left font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] border-b hairline">
-                    <th class="py-2 pr-4 cursor-pointer hover:text-[var(--accent)]" @click="setSort('symbol')">
+                    <th
+                      class="py-2 pr-4 cursor-pointer hover:text-[var(--accent)] focus-visible:text-[var(--accent)] outline-none"
+                      :aria-sort="ariaSort('symbol')"
+                      tabindex="0"
+                      @click="setSort('symbol')"
+                      @keydown.enter.prevent="setSort('symbol')"
+                      @keydown.space.prevent="setSort('symbol')"
+                    >
                       symbol {{ sortIndicator('symbol') }}
                     </th>
                     <th class="py-2 pr-4">name</th>
                     <th class="py-2 pr-4 text-right">qty</th>
-                    <th class="py-2 pr-4 text-right cursor-pointer hover:text-[var(--accent)]" @click="setSort('market_value')">
+                    <th
+                      class="py-2 pr-4 text-right cursor-pointer hover:text-[var(--accent)] focus-visible:text-[var(--accent)] outline-none"
+                      :aria-sort="ariaSort('market_value')"
+                      tabindex="0"
+                      @click="setSort('market_value')"
+                      @keydown.enter.prevent="setSort('market_value')"
+                      @keydown.space.prevent="setSort('market_value')"
+                    >
                       value {{ sortIndicator('market_value') }}
                     </th>
-                    <th class="py-2 pr-4 text-right cursor-pointer hover:text-[var(--accent)]" @click="setSort('allocation_pct')">
+                    <th
+                      class="py-2 pr-4 text-right cursor-pointer hover:text-[var(--accent)] focus-visible:text-[var(--accent)] outline-none"
+                      :aria-sort="ariaSort('allocation_pct')"
+                      tabindex="0"
+                      @click="setSort('allocation_pct')"
+                      @keydown.enter.prevent="setSort('allocation_pct')"
+                      @keydown.space.prevent="setSort('allocation_pct')"
+                    >
                       alloc {{ sortIndicator('allocation_pct') }}
                     </th>
-                    <th class="py-2 text-right cursor-pointer hover:text-[var(--accent)]" @click="setSort('pnl_pct')">
+                    <th
+                      class="py-2 text-right cursor-pointer hover:text-[var(--accent)] focus-visible:text-[var(--accent)] outline-none"
+                      :aria-sort="ariaSort('pnl_pct')"
+                      tabindex="0"
+                      @click="setSort('pnl_pct')"
+                      @keydown.enter.prevent="setSort('pnl_pct')"
+                      @keydown.space.prevent="setSort('pnl_pct')"
+                    >
                       p&amp;l {{ sortIndicator('pnl_pct') }}
                     </th>
                   </tr>
@@ -1076,7 +1109,7 @@ async function capturePlanningSnapshot() {
                   >
                     <td class="py-2 pr-4 font-mono text-[var(--paper-0)]" data-mono>{{ p.symbol }}</td>
                     <td class="py-2 pr-4 text-right font-mono text-[var(--paper-2)]" data-mono>{{ fmtNumber(p.quantity) }}</td>
-                    <td class="py-2 pr-4 text-right font-mono text-[var(--paper-1)]" data-mono>{{ fmtNumber(p.market_value, 2) }}</td>
+                    <td class="py-2 pr-4 text-right font-mono text-[var(--paper-1)]" data-mono>{{ fmtNumber(p.market_value, 2) }} <span class="text-[var(--paper-3)]">{{ p.currency ?? '' }}</span></td>
                     <td class="py-2 text-right font-mono" :class="pnlClass(p.pnl_pct)" data-mono>{{ fmtPct(p.pnl_pct) }}</td>
                   </tr>
                 </tbody>
@@ -1107,7 +1140,7 @@ async function capturePlanningSnapshot() {
                   >
                     <td class="py-2 pr-4 font-mono text-[var(--paper-0)]" data-mono>{{ p.symbol }}</td>
                     <td class="py-2 pr-4 text-right font-mono text-[var(--paper-2)]" data-mono>{{ fmtNumber(p.quantity) }}</td>
-                    <td class="py-2 pr-4 text-right font-mono text-[var(--paper-1)]" data-mono>{{ fmtNumber(p.market_value, 2) }}</td>
+                    <td class="py-2 pr-4 text-right font-mono text-[var(--paper-1)]" data-mono>{{ fmtNumber(p.market_value, 2) }} <span class="text-[var(--paper-3)]">{{ p.currency ?? '' }}</span></td>
                     <td class="py-2 text-right font-mono" :class="pnlClass(p.pnl_pct)" data-mono>{{ fmtPct(p.pnl_pct) }}</td>
                   </tr>
                 </tbody>
