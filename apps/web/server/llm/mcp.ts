@@ -7,35 +7,65 @@ import { z } from 'zod'
 // erase the type to align with how `streamText` consumes the merged tool record.
 type McpTool = Tool
 
+/**
+ * Ghostfolio MCP tools the chat model may call. Everything else the server
+ * advertises is either a write (create/update/delete/import/transfer, which
+ * would let a chat turn mutate the net-worth tracker with no confirmation
+ * gate) or a read the native tools already cover better (symbol lookup,
+ * market data, FX, watchlist). Keeping this list explicit also keeps the
+ * per-request tool schema small: the live server advertises 38 tools.
+ */
+export const GHOSTFOLIO_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
+  'get_accounts',
+  'get_account_balances',
+  'get_portfolio_details',
+  'get_portfolio_holdings',
+  'get_portfolio_performance',
+  'get_position',
+  'get_orders',
+  'get_dividends',
+  'get_investments',
+  'get_benchmarks',
+  'get_benchmark_performance',
+])
+
 /** Cached singleton — opening an MCP connection is non-trivial; we don't
- *  want to do it per request. */
+ *  want to do it per request. The in-flight connect is memoised too, so two
+ *  concurrent first callers share one client instead of opening two. */
 let _client: Client | null = null
+let _connecting: Promise<Client | null> | null = null
 let _toolsCache: Record<string, McpTool> | null = null
 
 async function getClient(): Promise<Client | null> {
   if (_client) return _client
+  if (_connecting) return _connecting
   const url = process.env.GHOSTFOLIO_MCP_URL
   const bearer = process.env.GHOSTFOLIO_MCP_BEARER
   if (!url || !bearer) return null
-  try {
-    const transport = new StreamableHTTPClientTransport(new URL(url), {
-      requestInit: { headers: { Authorization: `Bearer ${bearer}` } },
-    })
-    const client = new Client({ name: 'ai-trader', version: '0.1.0' }, { capabilities: {} })
-    await client.connect(transport)
-    _client = client
-    return client
-  } catch (err) {
-    console.warn('[mcp] ghostfolio connect failed:', err instanceof Error ? err.message : String(err))
-    return null
-  }
+  _connecting = (async () => {
+    try {
+      const transport = new StreamableHTTPClientTransport(new URL(url), {
+        requestInit: { headers: { Authorization: `Bearer ${bearer}` } },
+      })
+      const client = new Client({ name: 'ai-trader', version: '0.1.0' }, { capabilities: {} })
+      await client.connect(transport)
+      _client = client
+      return client
+    } catch (err) {
+      console.warn('[mcp] ghostfolio connect failed:', err instanceof Error ? err.message : String(err))
+      return null
+    } finally {
+      _connecting = null
+    }
+  })()
+  return _connecting
 }
 
 /**
- * Discovers tools exposed by the ghostfolio MCP server and wraps each one
- * as a Vercel AI SDK `tool()` so the agent can call them as if they were
- * native. Tool names are prefixed with `ghostfolio_` to make their origin
- * clear in the chat UI.
+ * Discovers tools exposed by the ghostfolio MCP server, keeps the read-only
+ * subset in GHOSTFOLIO_TOOL_ALLOWLIST, and wraps each one as a Vercel AI SDK
+ * `tool()` so the agent can call them as if they were native. Tool names are
+ * prefixed with `ghostfolio_` to make their origin clear in the chat UI.
  *
  * Returns {} if Ghostfolio isn't configured — the agent simply doesn't
  * see those tools and can't invent calls to them.
@@ -48,6 +78,7 @@ export async function getGhostfolioTools(): Promise<Record<string, McpTool>> {
     const list = await withSessionRetry(c => c.listTools())
     const out: Record<string, McpTool> = {}
     for (const t of list.tools) {
+      if (!GHOSTFOLIO_TOOL_ALLOWLIST.has(t.name)) continue
       const safeName = `ghostfolio_${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`
       // MCP args are dynamic (JSON Schema from the server). Use a permissive
       // record schema and erase the inferred type so this tool slots into the
@@ -83,6 +114,7 @@ export async function getGhostfolioTools(): Promise<Record<string, McpTool>> {
 /** Force a reconnect on next call — useful if the user rotates credentials. */
 export function resetMcp() {
   _client = null
+  _connecting = null
   _toolsCache = null
 }
 

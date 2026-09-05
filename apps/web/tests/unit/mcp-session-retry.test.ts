@@ -68,18 +68,50 @@ describe('ghostfolio MCP session recovery', () => {
   })
 
   it('recovers a cached tool wrapper after a session drop (no stale captured client)', async () => {
-    listToolsMock.mockResolvedValue({ tools: [{ name: 'get_health', description: 'health' }] })
+    listToolsMock.mockResolvedValue({ tools: [{ name: 'get_portfolio_details', description: 'details' }] })
     callToolMock
       .mockRejectedValueOnce(sessionLostError())
       .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"status":"ok"}' }] })
 
     const { getGhostfolioTools } = await loadMcp()
     const tools = await getGhostfolioTools()
-    const wrapped = tools['ghostfolio_get_health']
+    const wrapped = tools['ghostfolio_get_portfolio_details']
     expect(wrapped).toBeTruthy()
 
     const out = await wrapped!.execute!({}, {} as never)
     expect(out).toEqual({ status: 'ok' })
     expect(clientInstances).toBe(2) // wrapper resolved a fresh client, not the captured dead one
+  })
+
+  it('shares one in-flight connect between concurrent first callers', async () => {
+    listToolsMock.mockResolvedValue({ tools: [] })
+    const { getGhostfolioTools, getGhostfolioStatus } = await loadMcp()
+    const [tools, status] = await Promise.all([getGhostfolioTools(), getGhostfolioStatus()])
+    expect(tools).toEqual({})
+    expect(status).toBe('ok')
+    expect(clientInstances).toBe(1)
+  })
+})
+
+describe('ghostfolio MCP tool exposure', () => {
+  it('exposes only the read-only allowlist, never the write tools the server advertises', async () => {
+    listToolsMock.mockResolvedValue({
+      tools: [
+        { name: 'get_portfolio_holdings', description: 'holdings' },
+        { name: 'get_dividends', description: 'dividends' },
+        { name: 'delete_account', description: 'delete' },
+        { name: 'import_transactions', description: 'import' },
+        { name: 'create_activity', description: 'create' },
+        { name: 'transfer_account_balance', description: 'transfer' },
+        { name: 'lookup_symbols', description: 'covered by native symbol resolution' },
+        { name: 'get_health', description: 'noise' },
+      ],
+    })
+    const { getGhostfolioTools, GHOSTFOLIO_TOOL_ALLOWLIST } = await loadMcp()
+    const tools = await getGhostfolioTools()
+    expect(Object.keys(tools).sort()).toEqual(['ghostfolio_get_dividends', 'ghostfolio_get_portfolio_holdings'])
+    for (const name of GHOSTFOLIO_TOOL_ALLOWLIST) {
+      expect(name.startsWith('get_')).toBe(true)
+    }
   })
 })
