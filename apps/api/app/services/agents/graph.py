@@ -74,6 +74,7 @@ from tradingagents.agents.utils import agent_utils as _agent_utils
 from tradingagents.config import TradingAgentsConfig
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
+from .deepseek_compat import install_litellm_thinking_patch
 from .model_config import build_tradingagents_config
 from .toolkit import AgentToolkit, OpenDClient, build_toolkit
 from app.services.valuation.compose import apply_veto, value
@@ -181,6 +182,11 @@ def build_graph(
         max_recur_limit=100,
         results_dir=results_dir or Path("./results"),
     )
+    # DeepSeek's remaining models all run in thinking mode, and LangChain's
+    # reasoning content blocks are rejected if echoed back — which breaks the
+    # second turn of every tool loop. Idempotent, and a no-op for providers
+    # that aren't litellm-routed.
+    install_litellm_thinking_patch()
     toolkit = build_toolkit(opend_client, company_name=company_name)
     _install_toolkit(toolkit)
     # ``selected_analysts`` is forwarded to ``GraphSetup`` via the kwarg of

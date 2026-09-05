@@ -38,11 +38,11 @@ def test_default_quick_deepseek_v4():
 
 
 def test_legacy_deepseek_past_sunset_warns_but_still_parses(monkeypatch, caplog):
-    """The sunset date must NOT hard-fail parsing. DeepSeek's legacy
-    ``deepseek-chat`` is still the only model that works with LangGraph's
-    tool-calling loop (v4 thinking models don't round-trip
-    ``reasoning_content`` through LiteLLM), so past the sunset date we keep
-    parsing and log a loud warning instead of raising."""
+    """The sunset date must NOT hard-fail parsing. The retired aliases still
+    resolve server-side, so someone with one pinned in LLM_MODEL keeps running;
+    past the sunset date we log a loud warning instead of raising. (v4 thinking
+    models now work too — see deepseek_compat — so the warning can point at a
+    real replacement rather than a dead end.)"""
     import datetime as _dt
 
     from app.services.agents import model_config as mc
@@ -70,11 +70,9 @@ def test_legacy_deepseek_sunset_extended_to_2026_09_30():
 
 
 def test_legacy_deepseek_name_warns_but_does_not_rewrite(caplog):
-    """Earlier we auto-rewrote deepseek-chat -> deepseek-v4-flash. That broke
-    LangGraph runs because v4 defaults to thinking mode (LiteLLM doesn't
-    round-trip ``reasoning_content`` cleanly). The legacy non-thinking name
-    is the only DeepSeek model that works today, so we keep it as-is and
-    just log the upcoming retirement."""
+    """We never auto-rewrite a pinned model. Silently swapping deepseek-chat
+    for deepseek-v4-flash changes what the user is billed for and what their
+    run history means, so we parse the name as given and warn."""
     caplog.set_level(logging.WARNING, logger="app.services.agents.model_config")
     spec = parse_model_spec("deepseek/deepseek-chat")
     assert spec.provider == "deepseek"
@@ -119,3 +117,16 @@ def test_build_config_routes_deepseek_via_litellm(monkeypatch):
     assert cfg["llm_provider"] == "litellm"
     assert cfg["deep_think_llm"] == "deepseek/deepseek-v4-pro"
     assert cfg["quick_think_llm"] == "deepseek/deepseek-v4-flash"
+
+
+def test_legacy_deepseek_warning_names_the_v4_replacement(caplog):
+    """The warning has to be actionable. It used to say "migrate when the
+    integration is fixed", which named nothing to migrate to; deepseek_compat
+    fixed that integration, so the warning now points at a concrete model."""
+    caplog.set_level(logging.WARNING, logger="app.services.agents.model_config")
+    parse_model_spec("deepseek/deepseek-chat")
+    assert "deepseek-v4-flash" in caplog.text
+
+    caplog.clear()
+    parse_model_spec("deepseek/deepseek-reasoner")
+    assert "deepseek-v4-pro" in caplog.text

@@ -8,17 +8,28 @@ from datetime import date
 logger = logging.getLogger(__name__)
 
 LEGACY_DEEPSEEK_SUNSET = date(2026, 9, 30)
-# Names DeepSeek has announced it will retire around LEGACY_DEEPSEEK_SUNSET.
-# We log a deprecation warning on EVERY parse (loudly so it shows up in logs
-# both before and after the date) but never hard-fail: the legacy pin is
-# load-bearing, and DO NOT auto-rewrite to the
-# v4 equivalents — DeepSeek's v4 models default to thinking mode, which
-# LangChain+LiteLLM doesn't round-trip cleanly through LangGraph's
-# tool-calling loop (the API rejects multi-turn requests that drop
-# ``reasoning_content``). Until that integration improves, the legacy
-# non-thinking ``deepseek-chat`` is the only DeepSeek model that works with
-# the agents pipeline; an auto-rewrite would silently break user runs.
+# Retired DeepSeek names. As of 2026-09-05 these are gone from ``GET /models``
+# (which lists only deepseek-v4-pro, deepseek-v4-flash and
+# deepseek-v4-flash-vision-exp) though they still resolve server-side, routed
+# to a v4 thinking model.
+#
+# These names used to be load-bearing: v4 runs in thinking mode, and thinking
+# mode broke LangGraph's tool loop, so the non-thinking aliases were the only
+# DeepSeek models the agents pipeline could use. That is fixed —
+# ``deepseek_compat.install_litellm_thinking_patch`` strips the reasoning
+# content blocks that DeepSeek rejects on echo-back, and v4-pro/v4-flash now
+# complete multi-turn tool loops. The aliases are kept parseable so an existing
+# LLM_MODEL keeps working, with a warning pointing at the v4 replacement.
+#
+# Still no auto-rewrite: silently swapping the model someone pinned changes
+# what they are billed for and what their run history means. Warn, don't guess.
 LEGACY_DEEPSEEK_NAMES = {"deepseek-chat", "deepseek-reasoner"}
+
+# What to tell someone still pinning a retired alias.
+LEGACY_DEEPSEEK_REPLACEMENT = {
+    "deepseek-chat": "deepseek-v4-flash",
+    "deepseek-reasoner": "deepseek-v4-pro",
+}
 
 QUICK_FALLBACK_MAP = {
     ("anthropic", "claude-sonnet-4-6"): "claude-haiku-4-5-20251001",
@@ -26,9 +37,9 @@ QUICK_FALLBACK_MAP = {
     ("openai", "gpt-4o"): "gpt-4o-mini",
     ("google", "gemini-2.5-pro"): "gemini-2.5-flash",
     ("deepseek", "deepseek-v4-pro"): "deepseek-v4-flash",
-    # Legacy DeepSeek pair: stays self-consistent so LLM_MODEL=deepseek/deepseek-chat
-    # produces a deepseek-chat quick model too (single-model run, both deep
-    # and quick are non-thinking).
+    # Retired DeepSeek pair: stays self-consistent so a pinned
+    # LLM_MODEL=deepseek/deepseek-chat produces a deepseek-chat quick model too
+    # rather than silently mixing a retired deep model with a v4 quick one.
     ("deepseek", "deepseek-chat"): "deepseek-chat",
     ("deepseek", "deepseek-reasoner"): "deepseek-reasoner",
 }
@@ -59,24 +70,22 @@ def parse_model_spec(spec: str) -> ModelSpec:
     model_id = model_id.strip()
 
     if provider == "deepseek" and model_id in LEGACY_DEEPSEEK_NAMES:
-        # Loud warning, never a hard failure. The legacy non-thinking models
-        # are the only DeepSeek models that work with LangGraph's tool-calling
-        # loop today (LiteLLM doesn't round-trip ``reasoning_content`` for v4
-        # thinking models), so refusing to parse would brick every DeepSeek
-        # run with no working alternative to point at.
+        # Loud warning, never a hard failure and never a silent rewrite: the
+        # alias still resolves, so an existing pin keeps working.
+        replacement = LEGACY_DEEPSEEK_REPLACEMENT.get(model_id, "deepseek-v4-flash")
         if date.today() >= LEGACY_DEEPSEEK_SUNSET:
             logger.warning(
-                "DeepSeek model %r is PAST its announced retirement date (%s) "
-                "and may stop working at any moment. It stays pinned because "
-                "v4 thinking models don't round-trip reasoning_content "
-                "through LiteLLM/LangGraph tool calling; migrate as soon as "
-                "that integration is fixed.",
-                model_id, LEGACY_DEEPSEEK_SUNSET.isoformat(),
+                "DeepSeek model %r is PAST its announced retirement date (%s), "
+                "is no longer listed in GET /models, and may stop resolving at "
+                "any moment. Switch LLM_MODEL to deepseek/%s — v4 thinking "
+                "models now work with the agents pipeline.",
+                model_id, LEGACY_DEEPSEEK_SUNSET.isoformat(), replacement,
             )
         else:
             logger.warning(
-                "DeepSeek model %r will be retired on %s.",
-                model_id, LEGACY_DEEPSEEK_SUNSET.isoformat(),
+                "DeepSeek model %r is retired on %s; switch LLM_MODEL to "
+                "deepseek/%s.",
+                model_id, LEGACY_DEEPSEEK_SUNSET.isoformat(), replacement,
             )
 
     return ModelSpec(provider=provider, model_id=model_id)
