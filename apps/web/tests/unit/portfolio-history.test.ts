@@ -33,7 +33,7 @@ function fullPortfolio(overrides: Partial<FullPortfolio> = {}): FullPortfolio {
 
 describe('buildSnapshotDetail', () => {
   it('uses the Ghostfolio aggregate when available', () => {
-    const detail = buildSnapshotDetail(fullPortfolio(), { cash: 500, total_value: 2000, positions: { 'US.AAPL': 1500 } })
+    const detail = buildSnapshotDetail(fullPortfolio())
     expect(detail.totals).toEqual({
       netWorth: 100000,
       cash: 20000,
@@ -44,11 +44,10 @@ describe('buildSnapshotDetail', () => {
     expect(detail.positions).toEqual([
       { symbol: 'NVDA', qty: 10, price: 180, value: 1800, currency: 'USD' },
     ])
-    // Live-resolver shape is preserved verbatim on the row.
-    expect(detail.resolver).toEqual({ cash: 500, total_value: 2000, positions: { 'US.AAPL': 1500 } })
   })
 
-  it('falls back to the live resolver totals + moomoo positions when Ghostfolio is down', () => {
+  it('refuses to record a broker total as net worth when Ghostfolio is down', () => {
+    // moomoo paper + live slices are present, but they are not net worth.
     const full = fullPortfolio({
       ghostfolio_status: 'failing',
       net_worth_total: null,
@@ -56,28 +55,16 @@ describe('buildSnapshotDetail', () => {
       positions_value: null,
       accounts: [],
       positions: [],
+      moomoo_live: [
+        { symbol: 'US.NVDA', quantity: 10, market_value: 4500, pnl_pct: 12, account_id: '2', currency: 'USD' },
+      ],
     })
-    const detail = buildSnapshotDetail(full, { cash: 500, total_value: 2000, positions: { 'US.AAPL': 1500 } })
-    expect(detail.totals).toEqual({
-      netWorth: 2000,
-      cash: 500,
-      positionsValue: 1500,
-      currency: null,
-    })
-    // Positions come from the moomoo slices (paper + live) so qty/price survive.
-    expect(detail.positions).toEqual([
-      { symbol: 'US.AAPL', qty: 5, price: 200, value: 1000, currency: 'USD' },
-    ])
+    expect(() => buildSnapshotDetail(full)).toThrow(/ghostfolio is unavailable/i)
   })
 
-  it('throws when neither source has totals', () => {
-    const full = fullPortfolio({
-      ghostfolio_status: 'failing',
-      net_worth_total: null,
-      cash_total: null,
-      positions_value: null,
-    })
-    expect(() => buildSnapshotDetail(full, null)).toThrow(/no portfolio data/i)
+  it('throws when the Ghostfolio summary carries no net worth', () => {
+    expect(() => buildSnapshotDetail(fullPortfolio({ net_worth_total: null }))).toThrow(/no net-worth data/i)
+    expect(() => buildSnapshotDetail(null)).toThrow(/no net-worth data/i)
   })
 })
 
@@ -86,6 +73,27 @@ function pt(t: string, netWorth: number): EquityPoint {
 }
 
 describe('computePerformance', () => {
+  it('drops rows not denominated in the newest snapshot currency', () => {
+    // An older capture that fell back to a moomoo paper total (no currency)
+    // must not become a fake 98% drawdown against real MYR net worth.
+    const perf = computePerformance([
+      { ...pt('2026-07-01T08:00:00.000Z', 2000), currency: null },
+      { ...pt('2026-07-02T08:00:00.000Z', 1500), currency: 'USD' },
+      pt('2026-07-03T08:00:00.000Z', 100000),
+      pt('2026-07-10T08:00:00.000Z', 110000),
+    ])
+    expect(perf.series.map(p => p.netWorth)).toEqual([100000, 110000])
+    expect(perf.stats.count).toBe(2)
+    expect(perf.stats.currency).toBe('MYR')
+    expect(perf.stats.totalReturnPct).toBeCloseTo(10)
+    expect(perf.stats.maxDrawdownPct).toBe(0)
+  })
+
+  it('returns an empty result when the newest snapshot has no currency', () => {
+    const perf = computePerformance([{ ...pt('2026-07-01T08:00:00.000Z', 2000), currency: null }])
+    expect(perf.stats.count).toBe(0)
+  })
+
   it('returns an empty result for no snapshots', () => {
     const perf = computePerformance([])
     expect(perf.series).toEqual([])

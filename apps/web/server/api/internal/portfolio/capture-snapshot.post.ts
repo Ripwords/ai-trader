@@ -3,10 +3,10 @@ import { capturePortfolioSnapshot, type CaptureResult } from '../../../lib/portf
 import { captureInvestmentSnapshot, withDeadline, type InvestmentCaptureResult } from '../../../lib/investment-history'
 
 /**
- * The net-worth capture reaches moomoo (via resolvePortfolio) and Ghostfolio,
- * neither of which has a client-side timeout. With OpenD down it blocks on
- * OpenD's reconnect loop, wedging the daily cron. Ghostfolio can legitimately
- * be slow, so this budget is looser than the investments one.
+ * The net-worth capture reaches Ghostfolio and moomoo (for the broker slices
+ * stored alongside), neither of which has a client-side timeout. With OpenD
+ * down it blocks on OpenD's reconnect loop, wedging the daily cron. Ghostfolio
+ * can legitimately be slow, so this budget is looser than the investments one.
  */
 const NET_WORTH_READ_TIMEOUT_MS = 60_000
 

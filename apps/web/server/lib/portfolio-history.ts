@@ -2,10 +2,15 @@ import { and, desc, eq, gte } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { portfolioSnapshots } from '../../db/schema'
 import type { FullPortfolio } from './holdings'
-import type { PortfolioSnapshot } from './portfolio-snapshot'
 
 /**
- * Portfolio snapshot persistence + equity-curve math.
+ * NET WORTH snapshot persistence + equity-curve math.
+ *
+ * Net worth comes from Ghostfolio only. There is no broker fallback on
+ * purpose: a moomoo account total (live or paper) is not net worth, and one
+ * such row in the curve corrupts every return and drawdown computed over it.
+ * When Ghostfolio is unavailable the capture fails loudly and the curve simply
+ * has no point for that day.
  *
  * Pure helpers (`buildSnapshotDetail`, `computePerformance`) are unit-tested
  * without a database; `capturePortfolioSnapshot` / `getPortfolioPerformance`
@@ -27,19 +32,14 @@ export interface SnapshotTotals {
   netWorth: number
   cash: number
   positionsValue: number
-  // Base currency of the totals (e.g. 'MYR' from Ghostfolio). null when only
-  // the moomoo fallback was available — moomoo's resolver shape carries no
-  // currency, and we never invent one.
-  currency: string | null
+  /** Ghostfolio base currency the totals are denominated in (e.g. 'MYR'). */
+  currency: string
 }
 
 export interface SnapshotDetail {
   totals: SnapshotTotals
   perAccount: FullPortfolio['accounts']
   positions: SnapshotPositionEntry[]
-  // The live resolver's own shape ({cash, total_value, positions}) preserved
-  // verbatim so stored rows stay comparable with resolvePortfolio() output.
-  resolver: PortfolioSnapshot | null
 }
 
 function round2(n: number): number {
@@ -47,54 +47,33 @@ function round2(n: number): number {
 }
 
 /**
- * Map the cross-broker portfolio (plus the best-effort live-resolver result)
- * into the row shape `portfolio_snapshots` stores. Prefers the Ghostfolio
- * aggregate when it reported a net worth; otherwise falls back to the live
- * resolver totals and the moomoo position slices. Throws when neither source
- * produced totals — a snapshot of nothing would poison the equity curve.
+ * Map the Ghostfolio aggregate into the row shape `portfolio_snapshots`
+ * stores. Throws when Ghostfolio did not report a net worth; a broker total
+ * is never substituted (see the module comment).
  */
-export function buildSnapshotDetail(full: FullPortfolio | null, resolver: PortfolioSnapshot | null): SnapshotDetail {
-  const ghostfolioOk = full != null && full.ghostfolio_status === 'ok' && full.net_worth_total != null
-  if (ghostfolioOk) {
-    return {
-      totals: {
-        netWorth: round2(full.net_worth_total ?? 0),
-        cash: round2(full.cash_total ?? 0),
-        positionsValue: round2(full.positions_value ?? Math.max(0, (full.net_worth_total ?? 0) - (full.cash_total ?? 0))),
-        currency: full.net_worth_currency || null,
-      },
-      perAccount: full.accounts,
-      positions: full.positions.map(p => ({
-        symbol: p.symbol,
-        qty: p.quantity,
-        price: p.market_price,
-        value: p.market_value,
-        currency: p.currency || null,
-      })),
-      resolver,
-    }
+export function buildSnapshotDetail(full: FullPortfolio | null): SnapshotDetail {
+  if (full == null || full.ghostfolio_status !== 'ok' || full.net_worth_total == null) {
+    throw new Error(
+      'no net-worth data: Ghostfolio is unavailable. A moomoo account total is not net worth, so nothing was recorded.',
+    )
   }
-  if (resolver) {
-    const moomooSlices = [...(full?.moomoo_paper ?? []), ...(full?.moomoo_live ?? [])]
-    return {
-      totals: {
-        netWorth: round2(resolver.total_value),
-        cash: round2(resolver.cash),
-        positionsValue: round2(Math.max(0, resolver.total_value - resolver.cash)),
-        currency: null,
-      },
-      perAccount: full?.accounts ?? [],
-      positions: moomooSlices.map(p => ({
-        symbol: p.symbol,
-        qty: p.quantity,
-        price: p.quantity > 0 ? round2(p.market_value / p.quantity) : 0,
-        value: p.market_value,
-        currency: p.currency,
-      })),
-      resolver,
-    }
+  const netWorth = full.net_worth_total
+  return {
+    totals: {
+      netWorth: round2(netWorth),
+      cash: round2(full.cash_total ?? 0),
+      positionsValue: round2(full.positions_value ?? Math.max(0, netWorth - (full.cash_total ?? 0))),
+      currency: full.net_worth_currency,
+    },
+    perAccount: full.accounts,
+    positions: full.positions.map(p => ({
+      symbol: p.symbol,
+      qty: p.quantity,
+      price: p.market_price,
+      value: p.market_value,
+      currency: p.currency || null,
+    })),
   }
-  throw new Error('no portfolio data — both the Ghostfolio aggregate and the moomoo resolver are unavailable')
 }
 
 export interface CaptureResult {
@@ -137,22 +116,9 @@ export async function capturePortfolioSnapshot(source: SnapshotSource): Promise<
     }
   }
 
-  // Raw (uncached) fetches on purpose — recorded history must never be stale.
+  // Raw (uncached) fetch on purpose — recorded history must never be stale.
   const { getFullPortfolio } = await import('./holdings')
-  const { resolvePortfolio } = await import('./portfolio-snapshot')
-  let full: FullPortfolio | null = null
-  try {
-    full = await getFullPortfolio()
-  } catch (err) {
-    console.warn('[portfolio-history] full portfolio fetch failed:', err instanceof Error ? err.message : err)
-  }
-  let resolver: PortfolioSnapshot | null = null
-  try {
-    resolver = await resolvePortfolio()
-  } catch (err) {
-    console.warn('[portfolio-history] live resolver unavailable:', err instanceof Error ? err.message : err)
-  }
-  const detail = buildSnapshotDetail(full, resolver)
+  const detail = buildSnapshotDetail(await getFullPortfolio())
 
   const inserted = await db
     .insert(portfolioSnapshots)
@@ -164,7 +130,6 @@ export async function capturePortfolioSnapshot(source: SnapshotSource): Promise<
       positionsValue: detail.totals.positionsValue.toFixed(2),
       perAccount: detail.perAccount,
       positions: detail.positions,
-      resolver: detail.resolver,
     })
     .returning({ id: portfolioSnapshots.id, capturedAt: portfolioSnapshots.capturedAt })
   const row = inserted[0]
@@ -219,12 +184,17 @@ function periodReturn(series: EquityPoint[], last: EquityPoint, days: number): n
  * Equity-curve stats over chronologically ordered snapshot points. Simple by
  * design: total return vs the first snapshot, worst peak-to-trough drawdown,
  * and 1/7/30-day returns measured against the closest snapshot at least that
- * old. Non-finite rows are dropped rather than corrupting the math.
+ * old. Non-finite rows are dropped rather than corrupting the math, and so is
+ * every row not denominated in the newest row's currency: older captures once
+ * fell back to a broker total with no currency, and a ratio across two units
+ * is not a return.
  */
 export function computePerformance(points: EquityPoint[]): PortfolioPerformance {
-  const series = points
+  const sorted = points
     .filter(p => Number.isFinite(p.netWorth))
     .sort((a, b) => new Date(a.t).getTime() - new Date(b.t).getTime())
+  const currency = sorted[sorted.length - 1]?.currency ?? null
+  const series = currency == null ? [] : sorted.filter(p => p.currency === currency)
 
   const first = series[0]
   const last = series[series.length - 1]

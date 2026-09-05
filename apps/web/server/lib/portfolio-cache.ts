@@ -16,9 +16,9 @@ import { getFullPortfolio, type FullPortfolio } from './holdings'
  *
  * Lives in its own module rather than holdings.ts because defineCachedFunction
  * is a Nitro-runtime auto-import; holdings.ts is imported directly by unit
- * tests, which run without the Nitro runtime. History writers
- * (capture.post.ts, portfolio-snapshot.ts) deliberately keep calling the raw
- * getFullPortfolio() so recorded snapshots are never stale.
+ * tests, which run without the Nitro runtime. The history writer
+ * (portfolio-history.ts) deliberately keeps calling the raw getFullPortfolio()
+ * so recorded snapshots are never stale.
  */
 export const getFullPortfolioCached = defineCachedFunction(
   async (_opts?: { force?: boolean }): Promise<FullPortfolio> => getFullPortfolio(),
