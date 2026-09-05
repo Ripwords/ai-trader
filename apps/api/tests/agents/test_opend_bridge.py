@@ -38,7 +38,7 @@ async def test_get_kline_translates_ktype_and_routes_to_thread() -> None:
             captured["num"] = num
             return {"bars": []}
 
-    with patch("app.main._build_adapter", return_value=_FakeAdapter()):
+    with patch("app.main._build_adapter", autospec=True, return_value=_FakeAdapter()):
         client = _AgentsOpenDClient(host="127.0.0.1", port=11111)
         result = await client.get_kline("US.AAPL", "K_DAY", 30)
 
@@ -55,7 +55,7 @@ async def test_get_kline_passes_rsa_key_path_to_adapter() -> None:
         def get_kline(self, *, code: str, ktype: str, num: int):
             return {"bars": []}
 
-    with patch("app.main._build_adapter", return_value=_FakeAdapter()) as build_adapter:
+    with patch("app.main._build_adapter", autospec=True, return_value=_FakeAdapter()) as build_adapter:
         client = _AgentsOpenDClient(
             host="127.0.0.1",
             port=11111,
@@ -63,7 +63,7 @@ async def test_get_kline_passes_rsa_key_path_to_adapter() -> None:
         )
         await client.get_kline("US.AAPL", "K_DAY", 30)
 
-    build_adapter.assert_called_once_with("127.0.0.1", 11111, "/tmp/futu_rsa.key")
+    build_adapter.assert_called_once_with("127.0.0.1", 11111, "/tmp/futu_rsa.key", "MYR")
 
 
 @pytest.mark.asyncio
@@ -74,6 +74,7 @@ async def test_algo_opend_bridges_pass_rsa_key_path_to_adapter(monkeypatch) -> N
     monkeypatch.setenv("OPEND_HOST", "opend.test")
     monkeypatch.setenv("OPEND_PORT", "22222")
     monkeypatch.setenv("OPEND_RSA_KEY_PATH", "/tmp/futu_rsa.key")
+    monkeypatch.setenv("MOOMOO_REPORT_CURRENCY", "SGD")
     get_settings.cache_clear()
 
     class _FakeKline:
@@ -84,11 +85,11 @@ async def test_algo_opend_bridges_pass_rsa_key_path_to_adapter(monkeypatch) -> N
             return _FakeKline()
 
     try:
-        with patch("app.main._build_adapter", return_value=_FakeAdapter()) as build_adapter:
+        with patch("app.main._build_adapter", autospec=True, return_value=_FakeAdapter()) as build_adapter:
             get_klines, _, _, _ = _make_opend_bridges()
             assert await get_klines("US.AAPL", 30) == []
 
-        build_adapter.assert_called_once_with("opend.test", 22222, "/tmp/futu_rsa.key")
+        build_adapter.assert_called_once_with("opend.test", 22222, "/tmp/futu_rsa.key", "SGD")
     finally:
         get_settings.cache_clear()
 
@@ -104,8 +105,59 @@ async def test_get_kline_passes_through_unknown_ktype() -> None:
             captured["ktype"] = ktype
             return {"bars": []}
 
-    with patch("app.main._build_adapter", return_value=_FakeAdapter()):
+    with patch("app.main._build_adapter", autospec=True, return_value=_FakeAdapter()):
         client = _AgentsOpenDClient(host="127.0.0.1", port=11111)
         await client.get_kline("US.SPY", "1d", 10)
 
     assert captured["ktype"] == "1d"
+
+
+@pytest.mark.asyncio
+async def test_bridges_construct_the_real_adapter_with_the_report_currency(monkeypatch) -> None:
+    """Regression: the bridges once called ``_build_adapter`` with three
+    positional args after it grew a fourth (``report_currency``), so every
+    scheduler tick and every agents kline fetch raised TypeError. Tests that
+    patched ``_build_adapter`` outright never saw it. Here the real
+    ``_build_adapter`` runs; only the OpendAdapter constructor is faked."""
+    from app import deps as deps_mod
+
+    monkeypatch.setenv("OPEND_HOST", "opend.test")
+    monkeypatch.setenv("OPEND_PORT", "22222")
+    monkeypatch.setenv("OPEND_RSA_KEY_PATH", "/tmp/futu_rsa.key")
+    monkeypatch.setenv("MOOMOO_REPORT_CURRENCY", "SGD")
+    get_settings.cache_clear()
+    deps_mod._build_adapter.cache_clear()
+
+    constructed: list[dict[str, object]] = []
+
+    class _FakeKline:
+        bars: list[object] = []
+
+    class _FakeOpendAdapter:
+        def __init__(self, **kwargs: object) -> None:
+            constructed.append(kwargs)
+
+        def get_kline(self, *, code: str, ktype: str, num: int):
+            return _FakeKline()
+
+    monkeypatch.setattr(deps_mod, "OpendAdapter", _FakeOpendAdapter)
+    try:
+        get_klines, _, _, _ = _make_opend_bridges()
+        assert await get_klines("US.AAPL", 30) == []
+        settings = get_settings()
+        agents = _AgentsOpenDClient(
+            settings.OPEND_HOST,
+            settings.OPEND_PORT,
+            settings.OPEND_RSA_KEY_PATH,
+            settings.MOOMOO_REPORT_CURRENCY,
+        )
+        assert (await agents.get_kline("US.AAPL", "K_DAY", 30)).bars == []
+    finally:
+        get_settings.cache_clear()
+        deps_mod._build_adapter.cache_clear()
+
+    assert constructed
+    assert all(
+        c == {"host": "opend.test", "port": 22222, "rsa_key_path": "/tmp/futu_rsa.key", "report_currency": "SGD"}
+        for c in constructed
+    )

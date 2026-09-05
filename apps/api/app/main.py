@@ -50,17 +50,24 @@ class _AgentsOpenDClient:
        ``.bars`` via :func:`_kline_bars` / :func:`_maybe_await_kline`.
     """
 
-    def __init__(self, host: str, port: int, rsa_key_path: str | None = None) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        rsa_key_path: str | None = None,
+        report_currency: str = "MYR",
+    ) -> None:
         self._host = host
         self._port = port
         self._rsa_key_path = rsa_key_path
+        self._report_currency = report_currency
 
     async def get_kline(self, ticker: str, ktype: str, num: int) -> Any:
         adapter_ktype = _AGENTS_KTYPE_MAP.get(ktype, ktype)
         return await asyncio.to_thread(
-            lambda: _build_adapter(self._host, self._port, self._rsa_key_path).get_kline(
-                code=ticker, ktype=adapter_ktype, num=num
-            )
+            lambda: _build_adapter(
+                self._host, self._port, self._rsa_key_path, self._report_currency
+            ).get_kline(code=ticker, ktype=adapter_ktype, num=num)
         )
 
 
@@ -71,7 +78,12 @@ def _make_opend_bridges():
     settings = get_settings()
 
     def _adapter():
-        return _build_adapter(settings.OPEND_HOST, settings.OPEND_PORT, settings.OPEND_RSA_KEY_PATH)
+        return _build_adapter(
+            settings.OPEND_HOST,
+            settings.OPEND_PORT,
+            settings.OPEND_RSA_KEY_PATH,
+            settings.MOOMOO_REPORT_CURRENCY,
+        )
 
     async def get_klines(symbol: str, num: int):
         return await asyncio.to_thread(
@@ -202,6 +214,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.OPEND_HOST,
         settings.OPEND_PORT,
         settings.OPEND_RSA_KEY_PATH,
+        settings.MOOMOO_REPORT_CURRENCY,
     )
     if settings.DATABASE_URL:
         await algo_repo.init_pool(settings.DATABASE_URL)
