@@ -39,7 +39,7 @@ docker compose up -d --build
 open http://localhost:3000
 ```
 
-Sign in with `APP_PASSWORD`, then type `Show me NVDA daily` in the chat box.
+Sign in with `APP_PASSWORD`, then type `Show me NVDA daily` in the chat box. The empty chat also offers four opening prompts drawn from your watchlist, holdings, and recently triggered alerts; they redraw on every new chat and fall back to a static set when nothing is configured yet.
 
 If the chat returns an error like `Could not find API key process.env.ANTHROPIC_API_KEY`, your `ANTHROPIC_API_KEY` is the placeholder. Edit `.env` and `docker compose up -d --build web` again.
 

@@ -13,6 +13,7 @@ import { useMediaQuery } from '@vueuse/core'
 import { BorderBeam } from 'vue-border-beam'
 import { requestRunNotificationPermission } from '../lib/notify'
 import { buildMirrorStyle, cycleIndex, filterCommandPalette, splitSlashHighlight, type PaletteItem } from '../lib/slash'
+import { DEFAULT_SUGGESTIONS } from '../../server/lib/chat-suggestions'
 
 definePageMeta({ title: 'chat' })
 
@@ -315,6 +316,7 @@ function startNewChat() {
   const { c: _drop, ...rest } = route.query
   router.replace({ query: rest })
   scheduleContextEstimate(0)
+  void refreshSuggestions()
   // Starting a fresh chat from the drawer leaves fullPath unchanged when there
   // was no ?c= to drop, so the drawer's route watcher would not fire.
   drawerOpen.value = false
@@ -378,12 +380,17 @@ async function recordActiveDecision() {
 
 const hasMessages = computed(() => chat.messages.length > 0)
 
-const suggestions = [
-  'Show me NVDA daily',
-  'Any news on Arista Networks?',
-  'What\'s on my watchlist?',
-  'Show my paper portfolio',
-]
+// Opening prompts come from the user's own watchlist, positions, and alerts.
+// Client-only so the greeting paints first; the static list covers a failed
+// fetch, and a fresh draw happens on every new chat.
+const { data: suggestionData, error: suggestionError, refresh: refreshSuggestions } = useLazyFetch<{ suggestions: string[] }>(
+  '/api/chat/suggestions',
+  { server: false },
+)
+const suggestions = computed<readonly string[]>(() => {
+  if (suggestionError.value) return DEFAULT_SUGGESTIONS
+  return suggestionData.value?.suggestions ?? []
+})
 
 function getToolOutput(part: unknown): unknown { return (part as { output?: unknown })?.output }
 function hasOutput(part: unknown): boolean { return (part as { state?: string })?.state === 'output-available' }
@@ -513,8 +520,8 @@ function agentsVerdict(output: unknown) {
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-xl rise-in rise-2">
           <button
-            v-for="(s, i) in suggestions"
-            :key="i"
+            v-for="s in suggestions"
+            :key="s"
             class="text-left px-5 py-4 surface-1 hover:border-[var(--accent)] transition-colors group"
             @click="pickSuggestion(s)"
           >

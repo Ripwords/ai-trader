@@ -46,3 +46,16 @@ export async function getFullPortfolioCached(opts?: { force?: boolean }): Promis
   if (opts?.force) await useStorage().removeItem(FULL_PORTFOLIO_CACHE_KEY)
   return cached()
 }
+
+/**
+ * The cached portfolio if any run has ever filled it, stale or not, without
+ * waiting on the cross-broker fetch. A cold cache starts the fetch in the
+ * background so the next caller finds it. For surfaces that decorate rather
+ * than depend on the numbers (the chat landing page's prompts).
+ */
+export async function peekFullPortfolio(): Promise<FullPortfolio | null> {
+  const entry = await useStorage().getItem<{ value?: FullPortfolio }>(FULL_PORTFOLIO_CACHE_KEY)
+  if (entry?.value) return entry.value
+  void cached().catch(() => undefined)
+  return null
+}
