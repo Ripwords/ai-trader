@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from app.services.agents import graph as graph_mod
 from app.services.agents import reflection as reflection_mod
@@ -108,6 +108,7 @@ async def run_backtest(
     reasoning_effort: str = "medium",
     response_language: str = "en-US",
     selected_analysts: list[str] | None = None,
+    cap_check: Callable[[], Awaitable[None]] | None = None,
 ) -> BacktestAggregate:
     """Run each (symbol, date) sequentially. Returns aggregate stats.
 
@@ -115,10 +116,21 @@ async def run_backtest(
     surface in :attr:`BacktestRunResult.error` and contribute zero to
     the alpha sum but still count toward ``n_runs`` so the user sees
     the failure rate. The next pair runs regardless.
+
+    ``cap_check`` runs before every pair; each pair is a full paid pipeline
+    run, so the daily cost cap is re-checked per pair rather than once for
+    the batch. When it raises, the remaining pairs are recorded as
+    ``error`` rows instead of being run.
     """
     agg = BacktestAggregate()
+    cap_error: str | None = None
 
     for p in pairs:
+        if cap_check is not None and cap_error is None:
+            try:
+                await cap_check()
+            except Exception as e:  # noqa: BLE001
+                cap_error = str(e)
         result = BacktestRunResult(
             symbol=p.symbol,
             trade_date=p.trade_date,
@@ -132,6 +144,8 @@ async def run_backtest(
             tokens_out=0,
         )
         try:
+            if cap_error is not None:
+                raise RuntimeError(cap_error)
             graph = await graph_mod.build_graph_locked(
                 opend,
                 max_debate_rounds=max_debate_rounds,

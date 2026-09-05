@@ -221,7 +221,8 @@ async def run_agents(
             yield (
                 json.dumps({"type": "error", "message": str(e)}) + "\n"
             ).encode()
-            _active_runs.pop(run_id, None)
+            if _active_runs.get(run_id) is task:
+                _active_runs.pop(run_id, None)
             yield (
                 json.dumps(
                     {
@@ -301,7 +302,8 @@ async def run_agents(
             logger.exception("agents run failed: %s", e)
             yield (json.dumps({"type": "error", "message": str(e)}) + "\n").encode()
         finally:
-            _active_runs.pop(run_id, None)
+            if _active_runs.get(run_id) is task:
+                _active_runs.pop(run_id, None)
             tokens_in = accumulator.tokens_in
             tokens_out = accumulator.tokens_out
             cost_usd = _compute_run_cost(tokens_in, tokens_out)
@@ -360,6 +362,18 @@ async def trigger_backtest(
     Sequential by design (toolkit module-globals + cost cap).
     """
     _check_bearer(authorization)
+    pool = getattr(request.app.state, "pg_pool", None)
+    if pool is None:
+        raise HTTPException(
+            status_code=503,
+            detail="db not ready — cost cap cannot be enforced, refusing backtest",
+        )
+    settings = get_settings()
+
+    async def cap_check() -> None:
+        async with pool.acquire() as conn:
+            await assert_under_daily_cap(conn, None, settings.AGENTS_DAILY_COST_USD_CAP)
+
     opend = getattr(request.app.state, "opend_client", None)
     pairs = [
         backtest_mod.BacktestPair(symbol=p.symbol, trade_date=p.trade_date)
@@ -375,6 +389,7 @@ async def trigger_backtest(
         reasoning_effort=body.reasoning_effort,
         response_language=body.response_language,
         selected_analysts=body.selected_analysts,
+        cap_check=cap_check,
     )
     return {
         "n_runs":         agg.n_runs,
@@ -458,6 +473,9 @@ async def resume_run(
         )
     if not row:
         raise HTTPException(status_code=404, detail="run not found")
+    live = _active_runs.get(run_id)
+    if live is not None and not live.done():
+        raise HTTPException(status_code=409, detail="run is still in flight")
 
     symbol = row["symbol"]
     cfg = row["config"] or {}
@@ -473,6 +491,30 @@ async def resume_run(
         task = asyncio.current_task()
         if task is not None:
             _active_runs[run_id] = task
+        # A resume spends like a fresh run, so it obeys the same daily cap.
+        settings = get_settings()
+        try:
+            async with pool.acquire() as conn:
+                await assert_under_daily_cap(
+                    conn, None, settings.AGENTS_DAILY_COST_USD_CAP
+                )
+        except DailyCapExceeded as e:
+            if _active_runs.get(run_id) is task:
+                _active_runs.pop(run_id, None)
+            yield (json.dumps({"type": "error", "message": str(e)}) + "\n").encode()
+            yield (
+                json.dumps(
+                    {
+                        "type": "run-end",
+                        "run_id": run_id,
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                        "cost_usd": 0.0,
+                    }
+                )
+                + "\n"
+            ).encode()
+            return
         opend = getattr(request.app.state, "opend_client", None)
         checkpointer = getattr(request.app.state, "checkpointer", None)
         graph = await graph_mod.build_graph_locked(
@@ -519,7 +561,8 @@ async def resume_run(
             logger.exception("agents resume failed: %s", e)
             yield (json.dumps({"type": "error", "message": str(e)}) + "\n").encode()
         finally:
-            _active_runs.pop(run_id, None)
+            if _active_runs.get(run_id) is task:
+                _active_runs.pop(run_id, None)
             tokens_in = accumulator.tokens_in
             tokens_out = accumulator.tokens_out
             cost_usd = _compute_run_cost(tokens_in, tokens_out)
