@@ -138,6 +138,15 @@ export const DEFAULT_PLANNING_SETTINGS: PlanningSettings = {
 }
 
 const TARGET_KEYS: PlanningBucketKey[] = ['cash', 'equity', 'bond', 'crypto', 'real_estate', 'commodity', 'other']
+const BUCKET_LABELS: Record<PlanningBucketKey, string> = {
+  cash: 'Cash',
+  equity: 'Equity',
+  bond: 'Bonds',
+  crypto: 'Crypto',
+  real_estate: 'Real Estate',
+  commodity: 'Commodities',
+  other: 'Other',
+}
 const CASHFLOW_KINDS: PlanningCashflowKind[] = ['income', 'expense', 'saving']
 
 function roundMoney(value: number): number {
@@ -245,7 +254,14 @@ export function normalizePlanningSettings(input: unknown = {}): PlanningSettings
     // assertion is safe. Keep 0% buckets in the model (no `> 0` filter): a
     // user-zeroed allocation must round-trip stably and stay editable in the
     // UI instead of being erased and re-inflated to its default on reload.
-    target_model: DEFAULT_TARGET_MODEL.map(target => byKey.get(target.key)!),
+    // Buckets beyond the defaults (crypto, real estate, ...) that the user
+    // submitted are kept after them in the order TARGET_KEYS declares.
+    target_model: [
+      ...DEFAULT_TARGET_MODEL.map(target => byKey.get(target.key)!),
+      ...TARGET_KEYS
+        .filter(key => byKey.has(key) && !DEFAULT_TARGET_MODEL.some(t => t.key === key))
+        .map(key => byKey.get(key)!),
+    ],
     monthly_expenses: Math.max(0, roundMoney(finiteNumber(rec.monthly_expenses, DEFAULT_PLANNING_SETTINGS.monthly_expenses))),
     emergency_fund_months: clamp(roundPct(finiteNumber(rec.emergency_fund_months, DEFAULT_PLANNING_SETTINGS.emergency_fund_months)), 0, 36),
     monthly_contribution: Math.max(0, roundMoney(finiteNumber(rec.monthly_contribution, DEFAULT_PLANNING_SETTINGS.monthly_contribution))),
@@ -392,7 +408,15 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
   }
 
   const currentValues = currentValuesByBucket(portfolio)
-  const allocationRows = settings.target_model.map((target): AllocationRow => {
+  // Every bucket the user targets, plus every bucket they actually hold.
+  // Net worth counts all seven buckets, so a held bucket with no target row
+  // (say crypto at 30%) would otherwise make the rows sum to 70% and tell
+  // the user to buy equity into a fully invested portfolio.
+  const targeted = new Set(settings.target_model.map(t => t.key))
+  const heldUntargeted = TARGET_KEYS
+    .filter(key => !targeted.has(key) && (currentValues[key] ?? 0) > 0)
+    .map((key): PlanningTarget => ({ key, label: BUCKET_LABELS[key], target_pct: 0 }))
+  const allocationRows = [...settings.target_model, ...heldUntargeted].map((target): AllocationRow => {
     const currentValue = roundMoney(currentValues[target.key] ?? 0)
     const targetValue = roundMoney(netWorth * target.target_pct / 100)
     const actualPct = roundPct(currentValue / netWorth * 100)

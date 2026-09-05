@@ -99,6 +99,42 @@ describe('planning summary', () => {
     expect(out.concentration.positions_over_20_pct).toBe(2)
   })
 
+  it('adds a 0% row for a held bucket the target model does not mention', () => {
+    // 5k cash + 65k equity + 30k crypto against the default cash/equity/bond
+    // model. Without the crypto row, equity read 65% vs 85% target ("buy
+    // 20k") on a fully invested portfolio and the rows summed to 70%.
+    const out = buildPlanningSummary(portfolio({
+      positions: [
+        {
+          symbol: 'NVDA', name: 'NVIDIA', quantity: 10, market_price: 6_500, market_value: 65_000,
+          investment: 50_000, allocation_pct: 65, pnl_pct: 30, asset_class: 'EQUITY', sectors: [], currency: 'USD',
+        },
+        {
+          symbol: 'BTC-USD', name: 'Bitcoin', quantity: 1, market_price: 30_000, market_value: 30_000,
+          investment: 20_000, allocation_pct: 30, pnl_pct: 50, asset_class: 'CRYPTOCURRENCY', sectors: [], currency: 'USD',
+        },
+      ],
+    }))
+    const crypto = out.allocation_rows.find(row => row.key === 'crypto')
+    expect(crypto).toMatchObject({ label: 'Crypto', target_pct: 0, actual_pct: 30, current_value: 30_000, action: 'sell' })
+    expect(out.allocation_rows.reduce((sum, row) => sum + row.actual_pct, 0)).toBe(100)
+    // A submitted crypto target survives normalisation instead of being dropped.
+    const kept = buildPlanningSummary(portfolio(), {
+      target_model: [
+        { key: 'cash', label: 'Cash', target_pct: 10 },
+        { key: 'equity', label: 'Equity', target_pct: 60 },
+        { key: 'bond', label: 'Bonds', target_pct: 5 },
+        { key: 'crypto', label: 'Crypto', target_pct: 25 },
+      ],
+      monthly_expenses: 0,
+      emergency_fund_months: 6,
+      monthly_contribution: 0,
+    })
+    expect(kept.target_model.map(t => [t.key, t.target_pct])).toEqual([
+      ['cash', 10], ['equity', 60], ['bond', 5], ['crypto', 25],
+    ])
+  })
+
   it('uses custom target allocations when settings are provided', () => {
     const out = buildPlanningSummary(portfolio(), {
       target_model: [
