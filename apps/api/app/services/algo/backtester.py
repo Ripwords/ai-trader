@@ -155,6 +155,15 @@ def run_backtest(
                 error=f"strategy raised on bar {i}: {exc}",
             )
 
+        # Mark bar i before applying the intent: the fill happens at bar
+        # i+1's open, so bar i's equity point must not carry a position that
+        # did not exist yet (that booked phantom P&L on every entry bar and
+        # made equity_curve[0] differ from initial_capital).
+        equity_curve.append(EquityPoint(
+            t=df.iloc[i]["time"].to_pydatetime(),
+            v=round(cash + position * close_now, 4),
+        ))
+
         if ctx.intent is not None:
             side, explicit_qty = ctx.intent
             next_open = float(df.iloc[i + 1]["open"])
@@ -208,12 +217,6 @@ def run_backtest(
                         ts=fill_ts, side="SELL", qty=qty,
                         price=fill_price, pnl=round(pnl, 4),
                     ))
-
-        close_i = float(df.iloc[i]["close"])
-        equity_curve.append(EquityPoint(
-            t=df.iloc[i]["time"].to_pydatetime(),
-            v=round(cash + position * close_i, 4),
-        ))
 
     last_close = float(df.iloc[-1]["close"])
     equity_curve.append(EquityPoint(

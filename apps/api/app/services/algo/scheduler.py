@@ -31,10 +31,21 @@ from zoneinfo import ZoneInfo
 
 class AccountSummary(TypedDict):
     """Lightweight subset of moomoo's portfolio response — only the totals
-    the scheduler needs to populate strategy ctx.cash / ctx.account_value."""
+    the scheduler needs to populate strategy ctx.cash / ctx.account_value,
+    denominated in ``currency`` (the traded symbol's quote currency)."""
 
     cash: float
     total_assets: float
+    currency: str
+
+
+_MARKET_CURRENCY = {"US": "USD", "HK": "HKD", "SH": "CNH", "SZ": "CNH", "SG": "SGD"}
+
+
+def quote_currency(symbol: str, default: str = "USD") -> str:
+    """Currency a moomoo symbol trades in, from its market prefix."""
+    market = symbol.split(".", 1)[0].upper() if "." in symbol else ""
+    return _MARKET_CURRENCY.get(market, default)
 
 
 def _now_naive_utc() -> datetime:
@@ -181,7 +192,7 @@ class Scheduler:
         get_klines: Callable[[str, int], Awaitable[list[Any]]],
         get_position: Callable[[str], Awaitable[int]],
         place_paper_order: Callable[[str, str, int], Awaitable[str | None]],
-        get_account_summary: Callable[[], Awaitable[AccountSummary]] | None = None,
+        get_account_summary: Callable[[str], Awaitable[AccountSummary]] | None = None,
         tick_sec: int = TICK_SEC,
     ) -> None:
         self._get_klines = get_klines
@@ -304,7 +315,8 @@ class Scheduler:
             # Observed flat → pyramiding counter resets (backtester parity).
             self._adds_since_flat[s.id] = 0
 
-        # Pull live paper-account totals so strategies can gate on
+        # Pull live paper-account totals (in the symbol's quote currency, so
+        # they are comparable with its price) so strategies can gate on
         # cash / allocation_pct. If the OpenD bridge is missing or the
         # call fails, fall back to the strategy's configured initial
         # capital — the strategy still runs, it just sees a stale view.
@@ -313,11 +325,14 @@ class Scheduler:
         account_value_now: float = float(s.initial_capital)
         if self._get_account_summary is not None:
             try:
-                summary = await self._get_account_summary()
+                summary = await self._get_account_summary(s.symbol)
                 cash_now = float(summary["cash"])
                 account_value_now = float(summary["total_assets"])
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "strategy %s: account summary unavailable (%s); sizing off initial_capital",
+                    s.id, exc,
+                )
         position_value = position * last_close
         allocation_pct = (
             (position_value / account_value_now) * 100.0
@@ -358,15 +373,27 @@ class Scheduler:
             return
 
         side, explicit_qty = ctx.intent
+        ts = _now_naive_utc()
 
-        # Resolve final order qty: explicit arg from the strategy wins,
-        # otherwise reuse the default we computed above (sized off
-        # initial_capital + open MTM, with last close as fill_price proxy).
-        qty = max(0, int(explicit_qty)) if explicit_qty is not None else default_qty
+        if side == "SELL":
+            # Backtester parity: a bare c.sell() flattens the whole position,
+            # an explicit qty is capped at what is held, and there is nothing
+            # to sell when flat. Sizing modes apply to entries only.
+            if position <= 0:
+                await repo.append_signal(
+                    s.id, ts, side, 0, last_close, None,
+                    "blocked: no position to sell",
+                )
+                return
+            qty = min(int(explicit_qty), position) if explicit_qty is not None else position
+        else:
+            # Explicit arg from the strategy wins, otherwise reuse the default
+            # we computed above (sized off the account value with last close
+            # as the fill-price proxy).
+            qty = max(0, int(explicit_qty)) if explicit_qty is not None else default_qty
         if qty <= 0:
             return
 
-        ts = _now_naive_utc()
         if kill_active:
             await repo.append_signal(
                 s.id, ts, side, qty, last_close, None,

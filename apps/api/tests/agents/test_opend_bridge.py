@@ -113,6 +113,20 @@ async def test_get_kline_passes_through_unknown_ktype() -> None:
 
 
 @pytest.mark.asyncio
+async def test_account_summary_raises_when_no_paper_account_is_readable(monkeypatch) -> None:
+    """Zeros would make the scheduler size every order to 1 share; raising
+    lets it fall back to the strategy's configured capital instead."""
+    class _Broken:
+        def list_accounts(self):
+            return []
+
+    with patch("app.main._build_adapter", autospec=True, return_value=_Broken()):
+        _, _, get_account_summary, _ = _make_opend_bridges()
+        with pytest.raises(RuntimeError, match="no readable moomoo paper account"):
+            await get_account_summary("US.NVDA")
+
+
+@pytest.mark.asyncio
 async def test_bridges_construct_the_real_adapter_with_the_report_currency(monkeypatch) -> None:
     """Regression: the bridges once called ``_build_adapter`` with three
     positional args after it grew a fourth (``report_currency``), so every
@@ -133,6 +147,17 @@ async def test_bridges_construct_the_real_adapter_with_the_report_currency(monke
     class _FakeKline:
         bars: list[object] = []
 
+    portfolio_calls: list[dict[str, object]] = []
+
+    class _FakeAccount:
+        acc_id = "1"
+        trd_env = "SIMULATE"
+
+    class _FakePortfolio:
+        cash = 1000.0
+        total_assets = 5000.0
+        currency = "HKD"
+
     class _FakeOpendAdapter:
         def __init__(self, **kwargs: object) -> None:
             constructed.append(kwargs)
@@ -140,10 +165,20 @@ async def test_bridges_construct_the_real_adapter_with_the_report_currency(monke
         def get_kline(self, *, code: str, ktype: str, num: int):
             return _FakeKline()
 
+        def list_accounts(self):
+            return [_FakeAccount()]
+
+        def get_portfolio(self, **kwargs: object):
+            portfolio_calls.append(kwargs)
+            return _FakePortfolio()
+
     monkeypatch.setattr(deps_mod, "OpendAdapter", _FakeOpendAdapter)
     try:
-        get_klines, _, _, _ = _make_opend_bridges()
+        get_klines, _, get_account_summary, _ = _make_opend_bridges()
         assert await get_klines("US.AAPL", 30) == []
+        summary = await get_account_summary("HK.00700")
+        assert summary == {"cash": 1000.0, "total_assets": 5000.0, "currency": "HKD"}
+        assert portfolio_calls == [{"acc_id": "1", "trd_env": "SIMULATE", "currency": "HKD"}]
         settings = get_settings()
         agents = _AgentsOpenDClient(
             settings.OPEND_HOST,

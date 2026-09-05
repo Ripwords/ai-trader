@@ -315,6 +315,22 @@ def test_can_afford_returns_false_when_qty_times_price_exceeds_cash() -> None:
     assert decisions == [True, False]
 
 
+def test_equity_curve_marks_each_bar_before_the_next_bar_fill() -> None:
+    """A buy signalled on bar 0 fills at bar 1's open. Bar 0's equity point
+    must still be the starting capital: booking the fill into bar 0 and
+    marking it at bar 0's close invented P&L that never existed."""
+    code = (
+        "def on_bar(c):\n"
+        "    if len(c.bars) == 1: c.buy(1)\n"
+    )
+    bars = _bars(closes=[100.0, 200.0, 200.0], opens=[100.0, 200.0, 200.0])
+    res = run_backtest(code, bars, initial_capital=1_000, commission_bps=0, slippage_bps=0)
+    assert res.status == "ok"
+    assert [p.v for p in res.equity_curve] == [1_000.0, 1_000.0, 1_000.0]
+    assert res.metrics is not None
+    assert res.metrics.pnl == 0
+
+
 def test_bare_sell_flattens_position_regardless_of_sizing_mode() -> None:
     """`c.sell()` with no qty arg sells the entire position. Sizing modes
     apply to entries only, not exits."""

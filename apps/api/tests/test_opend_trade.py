@@ -172,6 +172,21 @@ def test_get_portfolio_requests_configured_reporting_currency():
     assert portfolio.reporting_currency_source == "requested"
 
 
+def test_get_portfolio_currency_override_for_one_read():
+    """The algo scheduler sizes orders in the symbol's own currency, so it
+    asks for the totals in that currency instead of the display default."""
+    _set_ctx(FakeTradeCtx(
+        positions_payload=[],
+        accinfo_payload=[{"cash": 1000.0, "market_val": 0.0, "total_assets": 1000.0}],
+    ))
+    adapter = OpendAdapter(
+        host="ignored", port=0, report_currency="MYR", _trade_ctx_factory=lambda: _ctx
+    )
+    portfolio = adapter.get_portfolio(acc_id=12345, trd_env="SIMULATE", currency="usd")
+    assert _ctx.accinfo_calls[0]["currency"] == "USD"
+    assert portfolio.currency == "USD"
+
+
 def test_get_portfolio_defaults_reporting_currency_to_myr():
     """The default must not be the SDK's HKD."""
     _set_ctx(FakeTradeCtx(

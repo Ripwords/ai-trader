@@ -389,7 +389,14 @@ class OpendAdapter:
             ))
         return accounts
 
-    def get_portfolio(self, *, acc_id: str, trd_env: str = "SIMULATE") -> Portfolio:
+    def get_portfolio(
+        self, *, acc_id: str, trd_env: str = "SIMULATE", currency: str | None = None
+    ) -> Portfolio:
+        """``currency`` overrides the configured reporting currency for this
+        one read: moomoo converts the account scalars into whatever we ask,
+        so a caller sizing an order in a symbol's own currency can ask for
+        the totals in that currency instead of the display default."""
+        report_currency = (currency or "").strip().upper() or self._report_currency
         ctx = self._trade_ctx_factory()
         try:
             try:
@@ -404,7 +411,7 @@ class OpendAdapter:
                 acc_id=int(acc_id),
                 trd_env=env,
                 refresh_cache=True,
-                currency=self._report_currency,
+                currency=report_currency,
             )
         finally:
             try:
@@ -477,7 +484,7 @@ class OpendAdapter:
             positions=positions,
             # OpenD echoes the currency we requested. Fall back to it directly
             # so the field is never null just because the column was absent.
-            currency=_currency(a.get("currency")) or self._report_currency,
+            currency=_currency(a.get("currency")) or report_currency,
             reporting_currency_source="requested",
             cash_by_currency=cash_by_currency,
         )

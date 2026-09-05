@@ -22,6 +22,7 @@ from app.services.algo.scheduler import (
     AccountSummary,
     Scheduler,
     install_scheduler,
+    quote_currency,
 )
 from app.services.paper_orders import record_paper_order
 from app.settings import get_settings
@@ -107,21 +108,38 @@ def _make_opend_bridges():
 
         return await asyncio.to_thread(_do)
 
-    async def get_account_summary() -> AccountSummary:
+    async def get_account_summary(symbol: str) -> AccountSummary:
+        """Paper-account totals in the quote currency of ``symbol``.
+
+        Sizing a US.NVDA order off totals converted into MYR would buy
+        several times the intended quantity, so the totals are requested in
+        the symbol's own currency. Raises when no paper account can be read
+        so the scheduler falls back to the strategy's configured capital
+        instead of sizing off zeros."""
+        currency = quote_currency(symbol)
+
         def _do() -> AccountSummary:
             ad = _adapter()
+            failures: list[str] = []
             for acc in ad.list_accounts():
                 if acc.trd_env != "SIMULATE":
                     continue
                 try:
-                    pf = ad.get_portfolio(acc_id=acc.acc_id, trd_env="SIMULATE")
-                except Exception:
+                    pf = ad.get_portfolio(
+                        acc_id=acc.acc_id, trd_env="SIMULATE", currency=currency
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(f"{acc.acc_id}: {exc}")
                     continue
                 return AccountSummary(
                     cash=float(pf.cash),
                     total_assets=float(pf.total_assets),
+                    currency=pf.currency or currency,
                 )
-            return AccountSummary(cash=0.0, total_assets=0.0)
+            raise RuntimeError(
+                "no readable moomoo paper account"
+                + (f" ({'; '.join(failures)})" if failures else "")
+            )
 
         return await asyncio.to_thread(_do)
 
