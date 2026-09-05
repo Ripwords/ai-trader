@@ -43,6 +43,29 @@ BANNED_NAMES: frozenset[str] = frozenset(
 # with __ is rejected — that closes the `obj.__class__.__bases__` escape).
 _ALLOWED_DUNDERS: frozenset[str] = frozenset({"__name__", "__doc__"})
 
+# pandas / numpy are handed to the strategy as whole modules, and their IO
+# surface reaches the filesystem (``pd.read_csv('/etc/passwd')``) and the
+# pickle loader (``pd.read_pickle`` = arbitrary code). Instance methods carry
+# the same risk (``c.bars.to_csv('/tmp/x')``), so the ban is on the attribute
+# name wherever it appears.
+BANNED_ATTRS: frozenset[str] = frozenset(
+    {
+        # pandas readers / writers
+        "read_csv", "read_table", "read_fwf", "read_pickle", "read_excel",
+        "read_parquet", "read_feather", "read_hdf", "read_sql", "read_sql_query",
+        "read_sql_table", "read_json", "read_html", "read_xml", "read_stata",
+        "read_sas", "read_spss", "read_orc", "read_clipboard", "read_gbq",
+        "to_csv", "to_pickle", "to_excel", "to_parquet", "to_feather", "to_hdf",
+        "to_sql", "to_json", "to_html", "to_xml", "to_stata", "to_orc",
+        "to_clipboard", "to_gbq", "to_latex", "to_markdown",
+        # numpy file IO
+        "load", "save", "savez", "savez_compressed", "loadtxt", "savetxt",
+        "genfromtxt", "fromfile", "tofile", "memmap", "fromregex",
+        # module internals that reach the interpreter
+        "io", "compat", "ctypeslib", "testing", "util",
+    }
+)
+
 
 @dataclass
 class ValidationError(Exception):
@@ -87,6 +110,8 @@ class _Visitor(ast.NodeVisitor):
             and attr not in _ALLOWED_DUNDERS
         ):
             self._err(node, f"dunder attribute '{attr}' is not allowed")
+        elif attr in BANNED_ATTRS:
+            self._err(node, f"attribute '{attr}' is not allowed (file/network IO)")
         self.generic_visit(node)
 
 

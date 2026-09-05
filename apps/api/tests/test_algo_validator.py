@@ -30,6 +30,14 @@ from app.services.algo.validator import ValidationError, validate
         ("def on_bar(c): open('/etc/passwd')", "open"),
         ("def on_bar(c): return c.__class__", "__class__"),
         ("def on_bar(c): return getattr(c, '__class__')", "getattr"),
+        # pandas/numpy are injected as whole modules; their IO surface reaches
+        # the filesystem and, via pickle, arbitrary code.
+        ("def on_bar(c): pd.read_pickle('/tmp/evil.pkl')", "read_pickle"),
+        ("def on_bar(c): pd.read_csv('/etc/passwd')", "read_csv"),
+        ("def on_bar(c): c.bars.to_csv('/tmp/out.csv')", "to_csv"),
+        ("import pandas as x\ndef on_bar(c): x.io.parsers.read_csv('/etc/passwd')", "io"),
+        ("def on_bar(c): np.load('/tmp/evil.npy', allow_pickle=True)", "load"),
+        ("def on_bar(c): np.savetxt('/tmp/out.txt', [1])", "savetxt"),
     ],
 )
 def test_validator_blocks_dangerous(src: str, needle: str) -> None:
