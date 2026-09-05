@@ -169,13 +169,24 @@ export interface PortfolioPerformance {
 const DAY_MS = 24 * 60 * 60 * 1000
 
 function periodReturn(series: EquityPoint[], last: EquityPoint, days: number): number | null {
-  const cutoff = new Date(last.t).getTime() - days * DAY_MS
-  // Latest point that is at least `days` older than the newest snapshot.
+  const base = periodBaseline(series, last.t, days)
+  return base && base.netWorth > 0 ? ((last.netWorth / base.netWorth) - 1) * 100 : null
+}
+
+/**
+ * The snapshot `days` before `lastIso`, allowing the daily capture to land a
+ * few minutes later than the day before. Strictly requiring `<= cutoff`
+ * turned a 1-day return into a 2-day return whenever today's capture ran
+ * earlier in the day than yesterday's. Tolerance is half a day, capped at
+ * half the window so 1-day and 7-day baselines cannot collide.
+ */
+export function periodBaseline<T extends { t: string }>(series: T[], lastIso: string, days: number): T | null {
+  const cutoff = new Date(lastIso).getTime() - days * DAY_MS
+  const tolerance = Math.min(DAY_MS / 2, (days * DAY_MS) / 2)
   for (let i = series.length - 1; i >= 0; i--) {
     const point = series[i]!
-    if (new Date(point.t).getTime() <= cutoff) {
-      return point.netWorth > 0 ? ((last.netWorth / point.netWorth) - 1) * 100 : null
-    }
+    const t = new Date(point.t).getTime()
+    if (t <= cutoff + tolerance && t < new Date(lastIso).getTime()) return point
   }
   return null
 }

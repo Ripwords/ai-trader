@@ -5,6 +5,11 @@ import type { AgentEvent } from '../../types/agents'
 
 const QUEUE_CAP = 100
 
+/** Events that change agent_runs.status or its terminal payload. Dropping
+ *  one leaves the run "running" forever, which 409s every later run on the
+ *  same symbol, so they bypass the queue cap. */
+const TERMINAL_EVENTS = new Set(['run-end', 'error', 'final-state', 'decision'])
+
 export class AgentRunTee {
   private queue: AgentEvent[] = []
   private seq = 0
@@ -13,7 +18,7 @@ export class AgentRunTee {
   constructor(public runId: string, public userId: string) {}
 
   push(ev: AgentEvent) {
-    if (this.queue.length >= QUEUE_CAP) {
+    if (this.queue.length >= QUEUE_CAP && !TERMINAL_EVENTS.has(ev.type)) {
       console.warn('[agents-tee] queue overflow, dropping', ev.type)
       return
     }
@@ -29,6 +34,8 @@ export class AgentRunTee {
       while (this.queue.length) {
         const ev = this.queue.shift()!
         const s = this.seq++
+        // The message row is the timeline; the status update is the run's
+        // fate. A failed timeline insert must not skip the status update.
         try {
           await db.insert(agentMessages).values({
             runId: this.runId,
@@ -37,6 +44,10 @@ export class AgentRunTee {
             node: 'node' in ev ? (ev.node ?? null) : null,
             payload: ev as unknown as Record<string, unknown>,
           })
+        } catch (e: unknown) {
+          console.error('[agents-tee] message write failed', (e as Error)?.message)
+        }
+        try {
           if (ev.type === 'decision') {
             const rows = await db
               .select()
@@ -90,7 +101,7 @@ export class AgentRunTee {
               .where(eq(agentRuns.id, this.runId))
           }
         } catch (e: unknown) {
-          console.error('[agents-tee] write failed', (e as Error)?.message)
+          console.error('[agents-tee] status write failed', (e as Error)?.message)
         }
       }
     } finally {

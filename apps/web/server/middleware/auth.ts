@@ -13,10 +13,11 @@ export default defineEventHandler((event) => {
   // has no cookie). Skip the session check so the bearer guard runs;
   // an unauthorised caller still gets 401 from the route itself.
   if (path.startsWith('/api/internal/')) return
-  if (!path.startsWith('/api') && !['/'].includes(path) && !path.startsWith('/_')) {
-    // static assets, devtools, etc — allow
-    return
-  }
+  // Build assets and devtools live under /_ (Nitro serves /_nuxt/* before
+  // this middleware anyway); everything else, every page route included,
+  // needs a session. The old allow-clause let any page except "/" render the
+  // authed shell to an anonymous visitor.
+  if (path.startsWith('/_')) return
   const token = getCookie(event, 'session')
   if (!token) {
     if (path.startsWith('/api')) {

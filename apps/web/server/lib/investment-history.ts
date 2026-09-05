@@ -2,6 +2,7 @@ import { and, desc, eq, gte } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { investmentSnapshots } from '../../db/schema'
 import type { InvestmentPortfolio } from './investment-portfolio'
+import { periodBaseline } from './portfolio-history'
 
 /**
  * Equity curve for the INVESTMENTS layer (moomoo live).
@@ -192,14 +193,8 @@ export async function captureInvestmentSnapshot(source: SnapshotSource): Promise
 }
 
 function periodReturn(series: InvestmentEquityPoint[], last: InvestmentEquityPoint, days: number): number | null {
-  const cutoff = new Date(last.t).getTime() - days * DAY_MS
-  for (let i = series.length - 1; i >= 0; i--) {
-    const p = series[i]!
-    if (new Date(p.t).getTime() <= cutoff) {
-      return p.marketValue > 0 ? ((last.marketValue / p.marketValue) - 1) * 100 : null
-    }
-  }
-  return null
+  const base = periodBaseline(series, last.t, days)
+  return base && base.marketValue > 0 ? ((last.marketValue / base.marketValue) - 1) * 100 : null
 }
 
 function pctChange(from: number, to: number): number | null {

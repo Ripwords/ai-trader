@@ -122,7 +122,11 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
   })
 
   if (!upstream.ok || !upstream.body) {
-    await db.update(agentRuns).set({ status: 'failed', error: `upstream ${upstream.status}` }).where(eq(agentRuns.id, run.id))
+    // finishedAt is what the active-runs poller keys "recently finished" on;
+    // without it a failed start vanished from the UI instead of showing.
+    await db.update(agentRuns)
+      .set({ status: 'failed', error: `upstream ${upstream.status}`, finishedAt: new Date() })
+      .where(eq(agentRuns.id, run.id))
     throw createError({ statusCode: 502, statusMessage: 'upstream agents service failed' })
   }
 

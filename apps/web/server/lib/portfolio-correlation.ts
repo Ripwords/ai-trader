@@ -37,8 +37,8 @@ export const getPortfolioCorrelationCached = defineCachedFunction(
     group: 'correlation',
     getKey: () => 'full',
     maxAge: 60,
-    staleMaxAge: 60 * 10,
-    swr: true,
+    // See portfolio-cache.ts: swr would hand a forced refresh the stale entry.
+    swr: false,
     shouldInvalidateCache: (opts?: { force?: boolean }) => Boolean(opts?.force),
   },
 ) as (opts?: { force?: boolean }) => Promise<PortfolioCorrelationResult>

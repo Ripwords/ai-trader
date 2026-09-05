@@ -12,7 +12,10 @@ import { getFullPortfolio, type FullPortfolio } from './holdings'
  * heavy work once.
  *
  * Pass `{ force: true }` (wired to the page's hard-refresh button via
- * ?force=1) to invalidate and recompute instead of serving the SWR cache.
+ * ?force=1) to invalidate and recompute. No stale-while-revalidate: with swr
+ * on, Nitro answers an invalidated call with the old entry and refreshes in
+ * the background, so the refresh button returned the numbers it was asked
+ * to replace. An expired entry now waits for the fresh fetch instead.
  *
  * Lives in its own module rather than holdings.ts because defineCachedFunction
  * is a Nitro-runtime auto-import; holdings.ts is imported directly by unit
@@ -27,8 +30,7 @@ export const getFullPortfolioCached = defineCachedFunction(
     group: 'full',
     getKey: () => 'full',
     maxAge: 60,
-    staleMaxAge: 60 * 10,
-    swr: true,
+    swr: false,
     shouldInvalidateCache: (opts?: { force?: boolean }) => Boolean(opts?.force),
   },
 ) as (opts?: { force?: boolean }) => Promise<FullPortfolio>

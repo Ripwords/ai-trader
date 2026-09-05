@@ -10,6 +10,9 @@ export type FxConverter = (amount: number, from: string, to: string) => Promise<
 
 // getFxRate is imported lazily so this module stays free of yahoo.ts's
 // Nuxt auto-import (defineCachedFunction) dependency at eval time.
+/** Annualised volatility below this is float noise, not a risk estimate. */
+const MIN_VOLATILITY_FOR_SHARPE = 1e-6
+
 const defaultFxConverter: FxConverter = async (amount, from, to) => {
   if (!amount || from === to) return amount
   const { getFxRate } = await import('./yahoo')
@@ -296,7 +299,11 @@ function mptPoint(
     }
   }
   const volatility_annual = Math.sqrt(Math.max(0, portfolioVariance))
-  const sharpe_ratio = volatility_annual > 0 ? (expected_return_annual - riskFreeRate) / volatility_annual : null
+  // Float-noise volatility (a short, monotonic return series) would produce
+  // a Sharpe in the 1e15 range and win the max-Sharpe portfolio outright.
+  const sharpe_ratio = volatility_annual > MIN_VOLATILITY_FOR_SHARPE
+    ? (expected_return_annual - riskFreeRate) / volatility_annual
+    : null
   return {
     label,
     expected_return_annual,

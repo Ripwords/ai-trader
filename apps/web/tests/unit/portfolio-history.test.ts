@@ -140,6 +140,17 @@ describe('computePerformance', () => {
     expect(perf.stats.periodReturns.d1).toBeCloseTo(10)
   })
 
+  it('accepts a baseline captured a few minutes short of the full period', () => {
+    // Daily cron: yesterday 08:06, today 08:04. Strictly requiring 24h would
+    // skip yesterday and report a 2-day move as the 1-day return.
+    const perf = computePerformance([
+      pt('2026-07-16T08:05:00.000Z', 90),
+      pt('2026-07-17T08:06:00.000Z', 100),
+      pt('2026-07-18T08:04:00.000Z', 101),
+    ])
+    expect(perf.stats.periodReturns.d1).toBeCloseTo(1)
+  })
+
   it('leaves a period return null when no snapshot is old enough', () => {
     const perf = computePerformance([
       pt('2026-07-18T08:00:00.000Z', 100),
