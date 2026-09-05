@@ -234,51 +234,56 @@ watch(
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
-    <header class="page-header">
-      <!-- Breadcrumb: ``research`` exits to the index, the symbol exits the
-           current ?run=<id> deep-link back to the symbol's main view. Both
-           segments are clickable; ``aria-current`` marks the active leaf
-           when no specific run is being viewed. -->
-      <nav class="crumb" aria-label="breadcrumb">
-        <NuxtLink to="/research" class="crumb__link crumb__research">
-          research
-        </NuxtLink>
-        <span class="crumb__sep" aria-hidden="true">/</span>
+    <PageHeader>
+      <template #lead>
+        <!-- Breadcrumb: ``research`` exits to the index, the symbol exits the
+             current ?run=<id> deep-link back to the symbol's main view. Both
+             segments are clickable; ``aria-current`` marks the active leaf
+             when no specific run is being viewed. -->
+        <nav class="crumb" aria-label="breadcrumb">
+          <NuxtLink to="/research" class="crumb__link crumb__research">
+            research
+          </NuxtLink>
+          <span class="crumb__sep" aria-hidden="true">/</span>
+          <NuxtLink
+            :to="{ path: `/research/${symbol}`, query: {} }"
+            class="crumb__link crumb__symbol"
+            :aria-current="!queryRunId ? 'page' : undefined"
+            data-mono
+          >
+            {{ symbol }}
+          </NuxtLink>
+
+          <!-- Pills: live-run indicator when *any* run is in-flight for this
+               symbol; specific-run indicator when the URL has ?run=<id>. -->
+          <span
+            v-if="liveRun && liveRun.id !== queryRunId"
+            class="crumb__pill crumb__pill--live"
+            data-mono
+            :title="`run started ${liveRun.startedAt ?? ''}`"
+          >
+            <span class="crumb__beacon" /> live run
+          </span>
+          <span
+            v-if="queryRunId"
+            class="crumb__pill crumb__pill--specific"
+            data-mono
+            :title="`viewing run ${queryRunId}`"
+          >
+            run · {{ queryRunId.slice(0, 8) }}
+          </span>
+        </nav>
+      </template>
+
+      <template #actions>
         <NuxtLink
-          :to="{ path: `/research/${symbol}`, query: {} }"
-          class="crumb__link crumb__symbol"
-          :aria-current="!queryRunId ? 'page' : undefined"
-          data-mono
+          :to="`/research/report/${symbol}`"
+          class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
         >
-          {{ symbol }}
-        </NuxtLink>
-
-        <!-- Pills: live-run indicator when *any* run is in-flight for this
-             symbol; specific-run indicator when the URL has ?run=<id>. -->
-        <span
-          v-if="liveRun && liveRun.id !== queryRunId"
-          class="crumb__pill crumb__pill--live"
-          data-mono
-          :title="`run started ${liveRun.startedAt ?? ''}`"
-        >
-          <span class="crumb__beacon" /> live run
-        </span>
-        <span
-          v-if="queryRunId"
-          class="crumb__pill crumb__pill--specific"
-          data-mono
-          :title="`viewing run ${queryRunId}`"
-        >
-          run · {{ queryRunId.slice(0, 8) }}
-        </span>
-      </nav>
-
-      <div class="page-header__actions">
-        <NuxtLink :to="`/research/report/${symbol}`" class="page-header__link">
           risk report →
         </NuxtLink>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden research-main">
       <RunHeader
@@ -403,24 +408,13 @@ watch(
 </template>
 
 <style scoped>
-/* ─── Page header / breadcrumb ─── */
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  height: 4rem;
-  padding: 0 1.75rem;
-  border-bottom: 1px solid var(--ink-line);
-  flex-shrink: 0;
-}
-
+/* ─── Breadcrumb ─── */
 .crumb {
   display: flex;
   align-items: baseline;
   gap: 0.7rem;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   flex-wrap: wrap;
@@ -434,6 +428,21 @@ watch(
   transition: color 140ms ease, border-color 140ms ease;
 }
 .crumb__link:hover { color: var(--accent); border-bottom-color: var(--accent); }
+@media (pointer: coarse) {
+  /* Grow the touch area without growing the box, so the hover underline stays
+     against the text instead of sitting 44px below it. */
+  .crumb__link { position: relative; }
+  .crumb__link::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    min-width: 44px;
+    height: 44px;
+  }
+}
 .crumb__symbol {
   color: var(--paper-1);
   letter-spacing: 0.06em;
@@ -481,23 +490,6 @@ watch(
   100% { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0); }
 }
 
-.page-header__actions {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-shrink: 0;
-}
-.page-header__link {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--paper-3);
-  text-decoration: none;
-  transition: color 140ms ease;
-}
-.page-header__link:hover { color: var(--accent); }
-
 /* ─── Layout: a generous editorial column for the active run, with a
    smaller history aside. The run is the page; history sits beside,
    not below, so the user always knows where to look back. ─── */
@@ -514,7 +506,7 @@ watch(
 .research-shell {
   max-width: 1240px;
   margin: 0 auto;
-  padding: 1.5rem 1.5rem 4rem;
+  padding: 1.5rem var(--page-x) 4rem;
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: 2.5rem;

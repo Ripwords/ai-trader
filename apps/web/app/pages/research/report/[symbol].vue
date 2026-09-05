@@ -199,33 +199,33 @@ const showLoadingScreen = computed(() => {
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
-    <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
-      <div class="flex items-baseline gap-4">
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">research</span>
-        <span class="font-mono text-xs text-[var(--paper-3)]">/</span>
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-1)]" data-mono>{{ symbol }}</span>
-        <span class="font-mono text-xs text-[var(--paper-3)]">/</span>
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-1)]">risk report</span>
+    <PageHeader>
+      <template #lead>
+        <span>research</span>
+        <span class="text-[var(--paper-3)]">/</span>
+        <span class="text-[var(--paper-1)]" data-mono>{{ symbol }}</span>
+        <span class="text-[var(--paper-3)]">/</span>
+        <span class="text-[var(--paper-1)]">risk report</span>
         <span v-if="phase === 'streaming'" class="streaming-tag">streaming<span class="dots"><span>.</span><span>.</span><span>.</span></span></span>
-        <span v-else-if="state.cached" class="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--paper-3)]">cached</span>
-      </div>
-      <div class="flex items-center gap-5">
+        <span v-else-if="state.cached" class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">cached</span>
+      </template>
+      <template #actions>
         <button
           v-if="phase === 'done' || phase === 'error'"
           type="button"
-          class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]"
+          class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
           @click="regenerate"
         >
           regenerate ↻
         </button>
         <NuxtLink
           to="/research"
-          class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]"
+          class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
         >
           ← research
         </NuxtLink>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
       <div v-if="showLoadingScreen" class="loading">
@@ -330,7 +330,7 @@ const showLoadingScreen = computed(() => {
 .report {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 1.75rem 1.75rem 4rem;
+  padding: 1.75rem var(--page-x) 4rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -395,7 +395,7 @@ const showLoadingScreen = computed(() => {
 
 .streaming-tag {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--accent);

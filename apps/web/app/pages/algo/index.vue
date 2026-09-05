@@ -72,36 +72,36 @@ function fmt(t: string): string {
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
-    <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
-      <div class="flex items-baseline gap-4">
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">algo</span>
-      </div>
-      <div class="flex items-center gap-5">
+    <PageHeader>
+      <template #lead>
+        <span>algo</span>
+      </template>
+      <template #actions>
         <button
           v-if="state"
-          class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-2 rounded transition-colors"
+          class="px-3 py-2 rounded transition-colors"
           :class="state.kill_active
             ? 'bg-[var(--tape-down)] text-[#07080a]'
             : 'border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)]'"
           @click="toggleKill"
         >{{ state.kill_active ? '◼ kill active' : '◯ kill switch' }}</button>
         <button
-          class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-2 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
+          class="px-3 py-2 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
           @click="showNew = !showNew"
         >
           {{ showNew ? 'cancel' : '+ new strategy' }}
         </button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-5xl mx-auto px-7 py-8 space-y-8">
+      <div class="max-w-5xl mx-auto page-pad space-y-8">
         <!-- New strategy form -->
         <div v-if="showNew" class="surface-1 p-6 space-y-4">
           <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
             new strategy
           </div>
-          <div class="grid grid-cols-3 gap-4">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <label class="block">
               <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">name</span>
               <input
@@ -172,7 +172,7 @@ function fmt(t: string): string {
               </div>
             </NuxtLink>
             <button
-              class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)] hover:text-[var(--tape-down)]"
+              class="tap font-mono text-xs uppercase tracking-wider text-[var(--paper-3)] hover:text-[var(--tape-down)]"
               @click.stop="remove(s.id, s.name)"
             >
               delete

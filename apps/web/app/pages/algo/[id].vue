@@ -273,36 +273,36 @@ async function runBacktest() {
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
-    <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
-      <div class="flex items-baseline gap-4">
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">algo · edit</span>
-      </div>
-      <div class="flex items-center gap-5">
+    <PageHeader>
+      <template #lead>
+        <span>algo · edit</span>
+      </template>
+      <template #actions>
         <button
           v-if="state"
-          class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-2 rounded transition-colors"
+          class="px-3 py-2 rounded transition-colors"
           :class="state.kill_active
             ? 'bg-[var(--tape-down)] text-[#07080a]'
             : 'border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)]'"
           @click="toggleKill"
         >{{ state.kill_active ? '◼ kill active — click to release' : '◯ kill switch' }}</button>
-        <NuxtLink to="/algo" class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]">
+        <NuxtLink to="/algo" class="text-[var(--paper-3)] hover:text-[var(--accent)]">
           ← strategies
         </NuxtLink>
         <button
-          class="md:hidden font-mono text-xs uppercase tracking-[0.18em] px-3 py-2 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] rounded hover:text-[var(--accent)] hover:border-[var(--accent)]"
+          class="md:hidden px-3 py-2 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] rounded hover:text-[var(--accent)] hover:border-[var(--accent)]"
           @click="sidebarOpen = !sidebarOpen"
           :aria-expanded="sidebarOpen"
           aria-controls="strategy-assistant-sidebar"
         >{{ sidebarOpen ? '✕ chat' : '💬 chat' }}</button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <div class="flex-1 min-h-0 flex">
       <main class="flex-1 min-w-0 overflow-y-auto scroll-hidden">
-        <div class="max-w-5xl mx-auto px-7 py-8 space-y-6">
+        <div class="max-w-5xl mx-auto page-pad space-y-6">
         <!-- Header card -->
-        <div class="flex items-baseline justify-between">
+        <div class="flex flex-wrap items-baseline justify-between gap-3">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight">{{ strategy!.name }}</h1>
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mt-1">
@@ -369,8 +369,8 @@ async function runBacktest() {
 
         <!-- Editor -->
         <div class="surface-1 p-5 space-y-4">
-          <div class="grid grid-cols-4 gap-4">
-            <label class="block col-span-2">
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <label class="block md:col-span-2">
               <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">name</span>
               <input
                 v-model="draft.name"
@@ -401,7 +401,7 @@ async function runBacktest() {
 
           <div class="space-y-2">
             <div class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">backtest config</div>
-            <div class="grid grid-cols-6 gap-3">
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
               <label class="block">
                 <UTooltip
                   text="Starting cash for backtests. Doesn't affect live trading. Higher capital lets % equity sizing buy more shares per signal but can mask under-capitalised strategies. Typical retail backtest: $10k–$100k."
@@ -520,7 +520,7 @@ async function runBacktest() {
 
         <!-- Backtest -->
         <div class="surface-1 p-5 space-y-4">
-          <div class="flex items-end justify-between">
+          <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">backtest</div>
               <div class="text-sm text-[var(--paper-2)] mt-1">

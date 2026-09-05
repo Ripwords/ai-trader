@@ -9,6 +9,7 @@ import {
   isToolUIPart,
 } from 'ai'
 import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
+import { useMediaQuery } from '@vueuse/core'
 import { BorderBeam } from 'vue-border-beam'
 import { requestRunNotificationPermission } from '../lib/notify'
 import { buildMirrorStyle, cycleIndex, filterCommandPalette, splitSlashHighlight, type PaletteItem } from '../lib/slash'
@@ -42,6 +43,25 @@ watch(maxSteps, (v) => {
 })
 function bumpMaxSteps(delta: number) {
   maxSteps.value = Math.min(MAX_STEPS_MAX, Math.max(MAX_STEPS_MIN, maxSteps.value + delta))
+}
+
+// The full hint is three lines of text on a phone, which grows the textarea to
+// two rows and leaves it scrolling before a character is typed. Resolves false
+// during SSR, so the server and the first client paint agree on the long form.
+const isNarrow = useMediaQuery('(max-width: 639px)')
+const promptPlaceholder = computed(() => (
+  isNarrow.value ? 'Ask anything…' : 'Show me NVDA daily, what\'s on my watchlist, any news on…'
+))
+
+// BorderBeam's ClientOnly fallback renders a second UChatPrompt, so both of
+// these are consumed twice. Hoisted so the pair cannot drift apart.
+// The send button grows to the 44px touch floor on phones, and the textarea's
+// padding-end grows with it so text never runs under the button.
+const PROMPT_UI = { body: '!pe-11 max-sm:!pe-14' }
+const SUBMIT_UI = {
+  base: '!absolute !bottom-0 !end-0 !size-8 max-sm:!size-11 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
+  leadingIcon: '!size-4',
+  trailingIcon: '!size-4',
 }
 
 const slashCommands = ref<PaletteItem[]>([])
@@ -162,6 +182,29 @@ onMounted(() => {
 const chatId = ref<string | null>(typeof route.query.c === 'string' ? route.query.c : null)
 const conversationsList = ref<{ refresh: () => Promise<void> } | null>(null)
 
+// The watchlist and conversation rail lives in the left column on desktop and
+// inside the global drawer on phones. It moves via <Teleport :disabled>, which
+// relocates the DOM node without remounting — so there is still exactly one
+// ConversationsList holding `conversationsList`, and one WatchlistSidebar
+// running the OpenD status poll. Two instances would leave the ref pointing at
+// whichever mounted last and silently stop refreshing the other.
+//
+// Starts true so SSR and the pre-hydration paint render the rail in place;
+// teleporting on the server would target a node that does not exist yet.
+const isDesktop = ref(true)
+let railQuery: MediaQueryList | null = null
+function onRailQueryChange(e: MediaQueryListEvent): void { isDesktop.value = e.matches }
+onMounted(async () => {
+  railQuery = window.matchMedia('(min-width: 1024px)')
+  // This page sits above AppShellDrawer in the layout, so it mounts first —
+  // wait a tick for the drawer to create #shell-drawer-extra before enabling
+  // the teleport that targets it.
+  await nextTick()
+  isDesktop.value = railQuery.matches
+  railQuery.addEventListener('change', onRailQueryChange)
+})
+onBeforeUnmount(() => { railQuery?.removeEventListener('change', onRailQueryChange) })
+
 const drawerOpen = useState('shell.drawerOpen', () => false)
 
 interface ConversationMetadata {
@@ -272,6 +315,9 @@ function startNewChat() {
   const { c: _drop, ...rest } = route.query
   router.replace({ query: rest })
   scheduleContextEstimate(0)
+  // Starting a fresh chat from the drawer leaves fullPath unchanged when there
+  // was no ?c= to drop, so the drawer's route watcher would not fire.
+  drawerOpen.value = false
 }
 function onSelectConversation(id: string) { router.push({ query: { ...route.query, c: id } }) }
 function onConversationDeleted(id: string) { if (id === chatId.value) startNewChat() }
@@ -432,29 +478,30 @@ function agentsVerdict(output: unknown) {
 </script>
 
 <template>
-  <!-- Desktop-only left rail. Mobile users get the chat full-width;
-       a future iteration can move watchlist + conversations into the
-       global drawer via state-shared instance. -->
+  <!-- Left rail on desktop, global drawer on phones. The Teleport moves the
+       same instances between the two homes; see `isDesktop` in the script. -->
   <aside class="rail-desktop hidden lg:flex">
-    <div class="rail-body">
-      <WatchlistSidebar class="!w-full !border-r-0 flex-1 min-h-0" @select="onSelect" />
-      <div class="border-t hairline">
-        <ConversationsList
-          ref="conversationsList"
-          :active-id="chatId"
-          @select="onSelectConversation"
-          @new="startNewChat"
-          @deleted="onConversationDeleted"
-        />
+    <Teleport to="#shell-drawer-extra" :disabled="isDesktop">
+      <div class="rail-body">
+        <WatchlistSidebar class="!w-full !border-r-0 flex-1 min-h-0" @select="onSelect" />
+        <div class="border-t hairline">
+          <ConversationsList
+            ref="conversationsList"
+            :active-id="chatId"
+            @select="onSelectConversation"
+            @new="startNewChat"
+            @deleted="onConversationDeleted"
+          />
+        </div>
       </div>
-    </div>
+    </Teleport>
   </aside>
 
   <div class="chat-pane">
     <main class="flex-1 min-h-0 flex flex-col">
       <div
         v-if="!hasMessages"
-        class="flex-1 flex flex-col items-center justify-center px-6 max-w-2xl mx-auto text-center gap-10"
+        class="flex-1 flex flex-col items-center justify-center page-x max-w-2xl mx-auto text-center gap-10"
       >
         <div class="rise-in">
           <div class="text-4xl sm:text-5xl font-semibold tracking-tight text-[var(--paper-0)] leading-none">
@@ -480,7 +527,7 @@ function agentsVerdict(output: unknown) {
         v-else
         :messages="chat.messages"
         :status="chat.status"
-        class="flex-1 min-h-0 max-w-3xl mx-auto w-full px-4 sm:px-6 overflow-y-auto scroll-hidden"
+        class="flex-1 min-h-0 max-w-3xl mx-auto w-full page-x overflow-y-auto scroll-hidden"
       >
         <template #content="{ message }">
           <template v-for="(part, idx) in message.parts" :key="`${message.id}-${idx}`">
@@ -561,7 +608,7 @@ function agentsVerdict(output: unknown) {
       </UChatMessages>
     </main>
 
-    <footer class="px-4 sm:px-6 py-4 sm:py-5 border-t hairline shrink-0">
+    <footer class="composer-footer page-x border-t hairline shrink-0">
       <div class="max-w-3xl mx-auto">
         <div class="mb-3 space-y-2">
           <div
@@ -610,7 +657,7 @@ function agentsVerdict(output: unknown) {
             class="space-y-1"
             :title="contextTooltip"
           >
-            <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 font-mono text-xs uppercase tracking-[0.14em]">
+            <div class="composer-meta font-mono text-xs uppercase tracking-[0.14em]">
               <div class="min-w-0 text-[var(--paper-3)] truncate">
                 model
                 <span class="text-[var(--paper-2)] normal-case tracking-normal">{{ contextInfo?.modelSpec ?? 'loading' }}</span>
@@ -622,8 +669,9 @@ function agentsVerdict(output: unknown) {
                 <span>steps</span>
                 <button
                   type="button"
-                  class="size-4 inline-flex items-center justify-center leading-none hover:text-[var(--accent)] disabled:opacity-40"
+                  class="step-btn hover:text-[var(--accent)] disabled:opacity-40"
                   :disabled="maxSteps <= MAX_STEPS_MIN"
+                  aria-label="decrease max agentic steps"
                   @click="bumpMaxSteps(-5)"
                 >−</button>
                 <input
@@ -631,13 +679,14 @@ function agentsVerdict(output: unknown) {
                   type="number"
                   :min="MAX_STEPS_MIN"
                   :max="MAX_STEPS_MAX"
-                  class="w-8 bg-transparent text-center text-[var(--paper-2)] normal-case tracking-normal outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                  class="step-input w-8 bg-transparent text-center text-[var(--paper-2)] normal-case tracking-normal outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
                   aria-label="max agentic steps per message"
                 >
                 <button
                   type="button"
-                  class="size-4 inline-flex items-center justify-center leading-none hover:text-[var(--accent)] disabled:opacity-40"
+                  class="step-btn hover:text-[var(--accent)] disabled:opacity-40"
                   :disabled="maxSteps >= MAX_STEPS_MAX"
+                  aria-label="increase max agentic steps"
                   @click="bumpMaxSteps(5)"
                 >+</button>
               </div>
@@ -700,19 +749,15 @@ function agentsVerdict(output: unknown) {
               <UChatPrompt
                 v-model="input"
                 :error="chat.error"
-                placeholder="Show me NVDA daily, what's on my watchlist, any news on…"
-                :ui="{ body: '!pe-11' }"
+                :placeholder="promptPlaceholder"
+                :ui="PROMPT_UI"
                 @submit="onSubmit"
               >
                 <UChatPromptSubmit
                   :status="chat.status"
                   color="neutral"
                   variant="solid"
-                  :ui="{
-                    base: '!absolute !bottom-0 !end-0 !size-8 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
-                    leadingIcon: '!size-4',
-                    trailingIcon: '!size-4',
-                  }"
+                  :ui="SUBMIT_UI"
                   @stop="chat.stop()"
                   @reload="chat.regenerate()"
                 />
@@ -722,19 +767,15 @@ function agentsVerdict(output: unknown) {
               <UChatPrompt
                 v-model="input"
                 :error="chat.error"
-                placeholder="Show me NVDA daily, what's on my watchlist, any news on…"
-                :ui="{ body: '!pe-11' }"
+                :placeholder="promptPlaceholder"
+                :ui="PROMPT_UI"
                 @submit="onSubmit"
               >
                 <UChatPromptSubmit
                   :status="chat.status"
                   color="neutral"
                   variant="solid"
-                  :ui="{
-                    base: '!absolute !bottom-0 !end-0 !size-8 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
-                    leadingIcon: '!size-4',
-                    trailingIcon: '!size-4',
-                  }"
+                  :ui="SUBMIT_UI"
                   @stop="chat.stop()"
                   @reload="chat.regenerate()"
                 />
@@ -782,8 +823,70 @@ function agentsVerdict(output: unknown) {
   z-index: 10;
 }
 
+.composer-footer {
+  padding-top: 1rem;
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+}
+@media (min-width: 640px) {
+  .composer-footer {
+    padding-top: 1.25rem;
+    padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* model / steps / context. One row is 60-odd characters of mono text, which
+   only fits from tablet width up; below that the items wrap.
+
+   Flex rather than grid on purpose: a grid item spanning `1 / -1` contributes
+   its min-content width to the column tracks, so the long context string sized
+   the whole strip wider than the composer no matter what the other items did. */
+.composer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1rem;
+}
+.composer-meta > * { min-width: 0; }
+@media (min-width: 640px) {
+  .composer-meta { justify-content: space-between; }
+}
+
+.step-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  line-height: 1;
+}
+@media (pointer: coarse) {
+  /* Full 44px boxes with no negative margin. Clawing the width back with
+     negative margins made adjacent hit areas overlap by 24px, so a tap between
+     `−` and the field landed on whichever won the stacking order. The strip
+     wraps, so the extra ~60px costs a row, not a clipped control. */
+  .step-btn,
+  .step-input {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 .prompt-wrap {
   position: relative;
+}
+
+/* A placeholder is a hint, not content — it must never wrap the textarea onto
+   a second row and leave the composer scrolled before anything is typed. */
+.prompt-wrap :deep(textarea::placeholder) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (pointer: coarse) {
+  /* The app's primary input should clear the touch floor on its own rather
+     than relying on the surrounding composer rim to catch the tap. */
+  .prompt-wrap :deep(textarea) { min-height: 44px; }
 }
 
 .slash-palette {

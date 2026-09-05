@@ -87,22 +87,22 @@ function sourceColor(source: string): string {
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
-    <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
-      <div class="flex items-baseline gap-4">
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">usage</span>
-      </div>
-      <div class="flex items-center gap-5">
+    <PageHeader>
+      <template #lead>
+        <span>usage</span>
+      </template>
+      <template #actions>
         <button
-          class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]"
+          class="text-[var(--paper-3)] hover:text-[var(--accent)]"
           @click="refresh()"
         >
           refresh
         </button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-6xl mx-auto px-7 py-8 space-y-8">
+      <div class="max-w-6xl mx-auto page-pad space-y-8">
         <div v-if="pending && !data" class="font-mono text-sm text-[var(--paper-3)] text-center py-16">
           loading…
         </div>
@@ -127,7 +127,7 @@ function sourceColor(source: string): string {
               <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
                 {{ period.label }}
               </div>
-              <div class="font-mono text-2xl text-[var(--paper-0)]">
+              <div class="font-mono stat-value text-[var(--paper-0)]">
                 {{ formatUsd(period.t.estimatedCostUsd) }}
               </div>
               <div class="font-mono text-xs text-[var(--paper-3)]">
@@ -157,7 +157,7 @@ function sourceColor(source: string): string {
                 :key="row.source"
                 class="space-y-1"
               >
-                <div class="flex justify-between font-mono text-xs">
+                <div class="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4 font-mono text-xs">
                   <span class="text-[var(--paper-1)]">{{ row.source }}</span>
                   <span class="text-[var(--paper-3)]">
                     {{ formatUsd(row.estimatedCostUsd) }} · {{ row.calls }} call{{ row.calls === 1 ? '' : 's' }} · {{ formatTokens(row.totalTokens) }} tokens
@@ -187,34 +187,36 @@ function sourceColor(source: string): string {
             </div>
 
             <div v-else class="surface-1 overflow-hidden">
-              <table class="w-full font-mono text-xs">
-                <thead>
-                  <tr class="text-[var(--paper-3)] uppercase tracking-wider border-b hairline">
-                    <th class="text-left px-4 py-3">when</th>
-                    <th class="text-left px-4 py-3">source</th>
-                    <th class="text-left px-4 py-3">model</th>
-                    <th class="text-right px-4 py-3">in</th>
-                    <th class="text-right px-4 py-3">out</th>
-                    <th class="text-right px-4 py-3">total</th>
-                    <th class="text-right px-4 py-3">cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="row in data.recent"
-                    :key="row.id"
-                    class="border-b hairline last:border-b-0"
-                  >
-                    <td class="px-4 py-2.5 text-[var(--paper-2)]">{{ formatTs(row.ts) }}</td>
-                    <td class="px-4 py-2.5 text-[var(--paper-1)]">{{ row.source }}</td>
-                    <td class="px-4 py-2.5 text-[var(--paper-3)]">{{ row.modelSpec }}</td>
-                    <td class="px-4 py-2.5 text-right text-[var(--paper-2)]">{{ formatTokens(row.inputTokens) }}</td>
-                    <td class="px-4 py-2.5 text-right text-[var(--paper-2)]">{{ formatTokens(row.outputTokens) }}</td>
-                    <td class="px-4 py-2.5 text-right text-[var(--paper-1)]">{{ formatTokens(row.totalTokens) }}</td>
-                    <td class="px-4 py-2.5 text-right text-[var(--paper-0)]">{{ formatUsd(row.estimatedCostUsd) }}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <div class="table-scroll">
+                <table class="w-full font-mono text-xs">
+                  <thead>
+                    <tr class="text-[var(--paper-3)] uppercase tracking-wider border-b hairline">
+                      <th class="text-left px-4 py-3">when</th>
+                      <th class="text-left px-4 py-3">source</th>
+                      <th class="text-left px-4 py-3">model</th>
+                      <th class="text-right px-4 py-3">in</th>
+                      <th class="text-right px-4 py-3">out</th>
+                      <th class="text-right px-4 py-3">total</th>
+                      <th class="text-right px-4 py-3">cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="row in data.recent"
+                      :key="row.id"
+                      class="border-b hairline last:border-b-0"
+                    >
+                      <td class="px-4 py-2.5 text-[var(--paper-2)]">{{ formatTs(row.ts) }}</td>
+                      <td class="px-4 py-2.5 text-[var(--paper-1)]">{{ row.source }}</td>
+                      <td class="px-4 py-2.5 text-[var(--paper-3)]">{{ row.modelSpec }}</td>
+                      <td class="px-4 py-2.5 text-right text-[var(--paper-2)]">{{ formatTokens(row.inputTokens) }}</td>
+                      <td class="px-4 py-2.5 text-right text-[var(--paper-2)]">{{ formatTokens(row.outputTokens) }}</td>
+                      <td class="px-4 py-2.5 text-right text-[var(--paper-1)]">{{ formatTokens(row.totalTokens) }}</td>
+                      <td class="px-4 py-2.5 text-right text-[var(--paper-0)]">{{ formatUsd(row.estimatedCostUsd) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </section>
         </template>

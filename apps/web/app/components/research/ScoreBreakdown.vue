@@ -139,4 +139,13 @@ const rows = computed<Row[]>(() => [
   letter-spacing: 0.04em;
   color: var(--accent);
 }
+
+/* 78px only fits "valuation" once .row-label sheds tracking, so the two move together. */
+@media (max-width: 640px) {
+  .row {
+    grid-template-columns: 78px 1fr 28px 36px;
+    gap: 0.5rem;
+  }
+  .row-label { letter-spacing: 0.08em; }
+}
 </style>

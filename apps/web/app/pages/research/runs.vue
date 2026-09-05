@@ -56,42 +56,42 @@ function fmtCost(n: number): string {
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
-    <header class="px-7 h-16 flex items-center justify-between border-b hairline shrink-0">
-      <div class="flex items-baseline gap-4">
-        <span class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">research · agent runs</span>
-      </div>
-      <div class="flex items-center gap-5">
+    <PageHeader>
+      <template #lead>
+        <span>research · agent runs</span>
+      </template>
+      <template #actions>
         <NuxtLink
           to="/research"
-          class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] hover:text-[var(--accent)]"
+          class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
         >
           ← research
         </NuxtLink>
         <button
           :disabled="pending"
-          class="font-mono text-xs uppercase tracking-[0.18em] px-3 py-2 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--accent)] hover:border-[var(--accent)] rounded transition-colors disabled:opacity-60"
+          class="px-3 py-2 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--accent)] hover:border-[var(--accent)] rounded transition-colors disabled:opacity-60"
           @click="refresh()"
         >
           {{ pending ? 'refreshing…' : '↻ refresh' }}
         </button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-6xl mx-auto px-7 py-8 space-y-8">
-        <section class="grid grid-cols-3 gap-4">
+      <div class="max-w-6xl mx-auto page-pad space-y-8">
+        <section class="grid grid-cols-1 min-[520px]:grid-cols-3 gap-4">
           <div class="surface-1 p-5">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">runs (24h)</div>
-            <div class="text-3xl mt-2 font-medium">{{ stats.total }}</div>
+            <div class="stat-value-lg mt-2 font-medium font-mono">{{ stats.total }}</div>
           </div>
           <div class="surface-1 p-5">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">avg cost</div>
-            <div class="text-3xl mt-2 font-medium font-mono">{{ fmtCost(stats.avgCost) }}</div>
+            <div class="stat-value-lg mt-2 font-medium font-mono">{{ fmtCost(stats.avgCost) }}</div>
           </div>
           <div class="surface-1 p-5">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">completion rate</div>
             <div
-              class="text-3xl mt-2 font-medium font-mono"
+              class="stat-value-lg mt-2 font-medium font-mono"
               :class="stats.completedRate >= 90 ? 'text-[var(--tape-up)]' : stats.completedRate >= 50 ? 'text-[var(--paper-0)]' : 'text-[var(--tape-down)]'"
             >{{ stats.completedRate }}%</div>
           </div>
@@ -103,7 +103,7 @@ function fmtCost(n: number): string {
             <input
               v-model="symbolFilter"
               placeholder="NVDA"
-              class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+              class="runs-filter block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
             />
           </label>
           <div class="font-mono text-xs text-[var(--paper-3)] pb-2">
@@ -116,3 +116,9 @@ function fmtCost(n: number): string {
     </main>
   </div>
 </template>
+
+<style scoped>
+@media (pointer: coarse) {
+  .runs-filter { min-height: 44px; }
+}
+</style>

@@ -10,6 +10,17 @@ export default defineNuxtConfig({
   // Devtools floating button clutters the composer area — turn it off.
   devtools: { enabled: false },
   typescript: { strict: true },
+  // @nuxt/ui bundles @nuxtjs/color-mode, which defaults to `system`. Left
+  // unset it put `class="light"` on <html>, so every Nuxt UI surface rendered
+  // its light palette underneath our hand-rolled --ink-* one — most visibly
+  // the chat composer, whose `bg-default/75` came out white.
+  //
+  // `preference` is only a default: the module's pre-paint script reads the
+  // stored key first, so anyone who already loaded the app has `system` cached
+  // and would stay light forever. Moving to a fresh storageKey retires those
+  // values. There is no theme switcher and main.css defines only a dark
+  // palette, so nothing will ever write a different one.
+  colorMode: { preference: 'dark', fallback: 'dark', storageKey: 'ai-trader-color-mode' },
   app: {
     head: {
       title: 'ai·trader',
@@ -17,6 +28,10 @@ export default defineNuxtConfig({
       meta: [
         { name: 'description', content: 'Trading copilot — moomoo data, AI chat, charts, news, portfolio.' },
         { name: 'theme-color', content: '#0d0f12' },
+        // viewport-fit=cover is what makes env(safe-area-inset-*) resolve to
+        // anything but 0 on notched phones; interactive-widget keeps the chat
+        // composer above the soft keyboard instead of behind it.
+        { name: 'viewport', content: 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content' },
       ],
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },

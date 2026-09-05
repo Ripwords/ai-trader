@@ -104,27 +104,27 @@ const statusClass = (status: PriceAlert['status']) => {
     <!-- Create form -->
     <div class="grid grid-cols-2 md:grid-cols-[120px_150px_120px_1fr_auto] gap-2.5 items-end">
       <label class="block">
-        <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">symbol</span>
+        <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">symbol</span>
         <input
           v-model="form.symbol"
           type="text"
           placeholder="NVDA"
-          class="w-full bg-[var(--ink-2)] border hairline px-3 py-2 font-mono text-xs text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"
+          class="w-full min-h-11 bg-[var(--ink-2)] border hairline px-3 py-2 font-mono text-xs text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"
           data-mono
           @keydown.enter="createAlert()"
         >
       </label>
       <label class="block">
-        <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">kind</span>
+        <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">kind</span>
         <select
           v-model="form.kind"
-          class="w-full bg-[var(--ink-2)] border hairline px-3 py-2 font-mono text-xs text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"
+          class="w-full min-h-11 bg-[var(--ink-2)] border hairline px-3 py-2 font-mono text-xs text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"
         >
           <option v-for="k in KIND_OPTIONS" :key="k.value" :value="k.value">{{ k.label }}</option>
         </select>
       </label>
       <label class="block">
-        <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">
+        <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">
           {{ form.kind === 'pct_move_day' ? 'move %' : 'price' }}
         </span>
         <input
@@ -132,23 +132,23 @@ const statusClass = (status: PriceAlert['status']) => {
           type="number"
           min="0"
           step="any"
-          class="w-full bg-[var(--ink-2)] border hairline px-3 py-2 font-mono text-xs text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"
+          class="w-full min-h-11 bg-[var(--ink-2)] border hairline px-3 py-2 font-mono text-xs text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"
           data-mono
           @keydown.enter="createAlert()"
         >
       </label>
       <label class="block">
-        <span class="block font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">note</span>
+        <span class="block font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] mb-1">note</span>
         <input
           v-model="form.note"
           type="text"
           placeholder="optional"
-          class="w-full bg-[var(--ink-2)] border hairline px-3 py-2 font-mono text-xs text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"
+          class="w-full min-h-11 bg-[var(--ink-2)] border hairline px-3 py-2 font-mono text-xs text-[var(--paper-0)] outline-none focus:border-[var(--accent)] transition-colors"
           @keydown.enter="createAlert()"
         >
       </label>
       <button
-        class="font-mono text-[10px] uppercase tracking-[0.16em] border px-3.5 py-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        class="min-h-11 font-mono text-xs uppercase tracking-[0.16em] border px-3.5 py-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         :class="canCreate && !creating
           ? 'border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--ink-0)]'
           : 'hairline text-[var(--paper-3)]'"

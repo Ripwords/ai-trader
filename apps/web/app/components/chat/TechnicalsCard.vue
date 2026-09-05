@@ -413,8 +413,9 @@ const smaLadder = computed<SmaRow[]>(() => {
 
 .ta-level {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.75rem;
+  gap: 0.15rem 0.75rem;
   font-size: 0.72rem;
   color: var(--paper-1, #e8dfd0);
   font-variant-numeric: tabular-nums;
@@ -438,6 +439,7 @@ const smaLadder = computed<SmaRow[]>(() => {
 .ta-level-time {
   color: var(--paper-3, #9e9789);
   font-size: 0.65rem;
+  min-width: 0;
 }
 
 /* Note / meta / error */

@@ -149,24 +149,26 @@ function mosClass(v: string | number | null | undefined): string {
       <!-- Scenarios table -->
       <div v-if="valuationData.scenarios.length" class="val-section">
         <div class="val-section-title">scenarios</div>
-        <table class="val-table">
-          <thead>
-            <tr>
-              <th>name</th>
-              <th>growth</th>
-              <th>fair value</th>
-              <th>probability</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(s, i) in valuationData.scenarios" :key="i">
-              <td>{{ s.name }}</td>
-              <td>{{ fmtPct(s.growth) }}</td>
-              <td>{{ ccy }}{{ fmtPrice(s.fair_value) }}</td>
-              <td>{{ fmtPct(s.probability) }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-scroll">
+          <table class="val-table">
+            <thead>
+              <tr>
+                <th>name</th>
+                <th>growth</th>
+                <th>fair value</th>
+                <th>probability</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(s, i) in valuationData.scenarios" :key="i">
+                <td>{{ s.name }}</td>
+                <td>{{ fmtPct(s.growth) }}</td>
+                <td>{{ ccy }}{{ fmtPrice(s.fair_value) }}</td>
+                <td>{{ fmtPct(s.probability) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <!-- Multiples block -->
