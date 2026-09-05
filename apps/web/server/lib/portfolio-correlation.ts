@@ -30,15 +30,22 @@ async function getPortfolioCorrelation(opts?: { force?: boolean }): Promise<Port
   })
 }
 
-export const getPortfolioCorrelationCached = defineCachedFunction(
+const cached = defineCachedFunction(
   async (opts?: { force?: boolean }): Promise<PortfolioCorrelationResult> => getPortfolioCorrelation(opts),
   {
     name: 'portfolio',
     group: 'correlation',
     getKey: () => 'full',
     maxAge: 60,
-    // See portfolio-cache.ts: swr would hand a forced refresh the stale entry.
-    swr: false,
-    shouldInvalidateCache: (opts?: { force?: boolean }) => Boolean(opts?.force),
+    staleMaxAge: 60 * 10,
+    swr: true,
   },
 ) as (opts?: { force?: boolean }) => Promise<PortfolioCorrelationResult>
+
+const CORRELATION_CACHE_KEY = 'cache:portfolio:correlation:full.json'
+
+/** See portfolio-cache.ts: a forced call drops the entry rather than serving it stale under swr. */
+export async function getPortfolioCorrelationCached(opts?: { force?: boolean }): Promise<PortfolioCorrelationResult> {
+  if (opts?.force) await useStorage().removeItem(CORRELATION_CACHE_KEY)
+  return cached(opts)
+}

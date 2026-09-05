@@ -29,6 +29,7 @@ export async function searchWithFallback(
   const order: ('brave' | 'tavily')[] = primary === 'tavily' ? ['tavily', 'brave'] : ['brave', 'tavily']
 
   let lastErr: unknown
+  let answered = false
   for (const provider of order) {
     const key = provider === 'brave' ? process.env.BRAVE_API_KEY : process.env.TAVILY_API_KEY
     if (!key) continue
@@ -37,11 +38,15 @@ export async function searchWithFallback(
         ? await braveSearch(key, kind, query, maxResults)
         : await tavilySearch(key, kind, query, maxResults)
       if (results.length > 0) return results
+      answered = true
     } catch (err) {
       lastErr = err
     }
   }
   if (lastErr) throw lastErr
+  // A provider ran and found nothing: that is an empty answer, not an
+  // outage, and must not read as "no provider configured".
+  if (answered) return []
   throw new Error('No search provider configured. Set BRAVE_API_KEY and/or TAVILY_API_KEY.')
 }
 

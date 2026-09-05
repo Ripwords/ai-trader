@@ -60,7 +60,16 @@ export async function buildResearchDossier(
     })),
     section('technicals', async () => computeTechnicals(await getDailyBars(symbol))),
     section('insider', () => getInsiderTrades(symbol)),
-    section('news', () => getContextualNews({ symbol, companyName, maxResults: 10 })),
+    section('news', async () => {
+      const news = await getContextualNews({ symbol, companyName, maxResults: 10 })
+      // getContextualNews never throws; a total search outage arrives as an
+      // error string with every group empty, which must count as a missing
+      // section so the memo states the gap instead of reporting "no news".
+      if (news.error && news.ticker.length === 0 && news.macro.length === 0 && news.contextual.length === 0) {
+        throw new Error(`news search failed: ${news.error}`)
+      }
+      return news
+    }),
     section('holdings', () => getHoldingForSymbol(symbol)),
     (async (): Promise<DossierSection<AgentsVerdictData>> => {
       try {

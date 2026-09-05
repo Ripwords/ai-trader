@@ -44,6 +44,7 @@ beforeEach(() => {
   getFullPortfolioCached.mockReset()
   getDailyBars.mockReset()
   vi.stubGlobal('defineCachedFunction', (fn: unknown) => fn)
+  vi.stubGlobal('useStorage', () => ({ removeItem: vi.fn(async () => undefined) }))
 })
 
 describe('getPortfolioCorrelationCached', () => {

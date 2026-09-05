@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { appSettings } from '../../db/schema'
 import {
@@ -20,22 +20,25 @@ function makeId(): string {
     : `decision-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-async function saveConversationMetadataMap(metadata: Record<string, ConversationMetadata>): Promise<void> {
+/**
+ * Write one thread's entry with jsonb_set inside the single settings row, so
+ * a pin racing an auto-summary on another thread cannot overwrite it with a
+ * stale copy of the whole map (which the read-modify-write of the full blob
+ * used to do). The row is created empty on first use.
+ */
+async function saveConversationMetadata(threadId: string, next: ConversationMetadata): Promise<void> {
   const db = getDb()
   await db
     .insert(appSettings)
-    .values({
-      key: CONVERSATION_METADATA_KEY,
-      value: metadata,
+    .values({ key: CONVERSATION_METADATA_KEY, value: {}, updatedAt: new Date() })
+    .onConflictDoNothing({ target: appSettings.key })
+  await db
+    .update(appSettings)
+    .set({
+      value: sql`jsonb_set(coalesce(${appSettings.value}, '{}'::jsonb), ${sql.raw(`'{${threadId.replace(/[^a-zA-Z0-9_-]/g, '')}}'`)}, ${JSON.stringify(next)}::jsonb, true)`,
       updatedAt: new Date(),
     })
-    .onConflictDoUpdate({
-      target: appSettings.key,
-      set: {
-        value: metadata,
-        updatedAt: new Date(),
-      },
-    })
+    .where(eq(appSettings.key, CONVERSATION_METADATA_KEY))
 }
 
 export async function getConversationMetadataMap(): Promise<Record<string, ConversationMetadata>> {
@@ -69,8 +72,7 @@ export async function patchConversationMetadata(
   if (typeof patch.summary === 'string') next.summary = patch.summary.trim().replace(/\s+/g, ' ') || undefined
   else if (patch.summary === null) next.summary = undefined
 
-  map[threadId] = next
-  await saveConversationMetadataMap(map)
+  await saveConversationMetadata(threadId, next)
   return next
 }
 
@@ -92,7 +94,6 @@ export async function recordConversationDecision(
     ...current,
     decisions: [decision, ...current.decisions].slice(0, 50),
   }
-  map[threadId] = next
-  await saveConversationMetadataMap(map)
+  await saveConversationMetadata(threadId, next)
   return next
 }

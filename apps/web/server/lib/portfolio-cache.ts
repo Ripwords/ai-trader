@@ -12,10 +12,7 @@ import { getFullPortfolio, type FullPortfolio } from './holdings'
  * heavy work once.
  *
  * Pass `{ force: true }` (wired to the page's hard-refresh button via
- * ?force=1) to invalidate and recompute. No stale-while-revalidate: with swr
- * on, Nitro answers an invalidated call with the old entry and refreshes in
- * the background, so the refresh button returned the numbers it was asked
- * to replace. An expired entry now waits for the fresh fetch instead.
+ * ?force=1) to drop the entry and recompute.
  *
  * Lives in its own module rather than holdings.ts because defineCachedFunction
  * is a Nitro-runtime auto-import; holdings.ts is imported directly by unit
@@ -23,14 +20,29 @@ import { getFullPortfolio, type FullPortfolio } from './holdings'
  * (portfolio-history.ts) deliberately keeps calling the raw getFullPortfolio()
  * so recorded snapshots are never stale.
  */
-export const getFullPortfolioCached = defineCachedFunction(
-  async (_opts?: { force?: boolean }): Promise<FullPortfolio> => getFullPortfolio(),
+const cached = defineCachedFunction(
+  async (): Promise<FullPortfolio> => getFullPortfolio(),
   {
     name: 'portfolio',
     group: 'full',
     getKey: () => 'full',
     maxAge: 60,
-    swr: false,
-    shouldInvalidateCache: (opts?: { force?: boolean }) => Boolean(opts?.force),
+    staleMaxAge: 60 * 10,
+    swr: true,
   },
-) as (opts?: { force?: boolean }) => Promise<FullPortfolio>
+) as () => Promise<FullPortfolio>
+
+/** Nitro's key for the entry above: base "/cache", group, name, key + ".json". */
+export const FULL_PORTFOLIO_CACHE_KEY = 'cache:portfolio:full:full.json'
+
+/**
+ * Stale-while-revalidate keeps page loads instant, but under swr an
+ * invalidated call is answered with the stale entry while the refresh runs
+ * in the background, so the refresh button returned the numbers it was asked
+ * to replace. A forced call therefore removes the entry first, which makes
+ * the next read wait for a fresh fetch.
+ */
+export async function getFullPortfolioCached(opts?: { force?: boolean }): Promise<FullPortfolio> {
+  if (opts?.force) await useStorage().removeItem(FULL_PORTFOLIO_CACHE_KEY)
+  return cached()
+}
