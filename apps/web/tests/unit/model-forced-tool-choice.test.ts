@@ -5,10 +5,14 @@ import { supportsForcedToolChoice } from '../../server/llm/model'
  * DeepSeek's thinking-mode models reject a forced `tool_choice` outright:
  *   400 invalid_request_error "Thinking mode does not support this tool_choice"
  * which kills the whole stream, so every slash command (/investment-research,
- * /news-pulse, /ta, ...) fails while plain chat keeps working. Verified against
- * the live API on 2026-09-05: v4-pro, v4-flash and reasoner all reject it;
- * deepseek-chat accepts it. They do still call the right tool under
- * `tool_choice: "auto"` when the dispatch directive names it.
+ * /news-pulse, /ta, ...) fails while plain chat keeps working. They do still
+ * call the right tool under `tool_choice: "auto"` when the dispatch directive
+ * names it, so the fallback keeps the dispatch and loses only its determinism.
+ *
+ * Verified against the live API on 2026-09-05: `GET /models` lists only
+ * v4-pro, v4-flash and v4-flash-vision-exp, and every one of them rejects a
+ * forced tool_choice. The deprecated deepseek-chat alias was the last
+ * non-thinking model, so the whole provider is now a no.
  */
 describe('supportsForcedToolChoice', () => {
   it('allows forcing on non-reasoning providers', () => {
@@ -17,14 +21,17 @@ describe('supportsForcedToolChoice', () => {
     expect(supportsForcedToolChoice('google/gemini-2.5-pro')).toBe(true)
   })
 
-  it('refuses forcing on DeepSeek thinking-mode models', () => {
+  it('refuses forcing on every current DeepSeek model', () => {
     expect(supportsForcedToolChoice('deepseek/deepseek-v4-pro')).toBe(false)
     expect(supportsForcedToolChoice('deepseek/deepseek-v4-flash')).toBe(false)
-    expect(supportsForcedToolChoice('deepseek/deepseek-reasoner')).toBe(false)
+    expect(supportsForcedToolChoice('deepseek/deepseek-v4-flash-vision-exp')).toBe(false)
   })
 
-  it('allows forcing on the non-thinking deepseek-chat model', () => {
-    expect(supportsForcedToolChoice('deepseek/deepseek-chat')).toBe(true)
+  it('refuses forcing on the deprecated deepseek aliases too', () => {
+    // Still resolve server-side for now, but they are out of the catalog and
+    // route to a thinking model, so forcing must not come back for them.
+    expect(supportsForcedToolChoice('deepseek/deepseek-chat')).toBe(false)
+    expect(supportsForcedToolChoice('deepseek/deepseek-reasoner')).toBe(false)
   })
 
   it('treats unknown deepseek model ids as thinking-mode (fail safe)', () => {

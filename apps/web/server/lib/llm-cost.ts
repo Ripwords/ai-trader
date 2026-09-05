@@ -1,17 +1,9 @@
-// USD per 1M tokens. Conservative public list prices.
-const PRICES: Record<string, { input: number; output: number }> = {
-  'anthropic/claude-sonnet-4-6': { input: 3.00, output: 15.00 },
-  'anthropic/claude-opus-4-7': { input: 15.00, output: 75.00 },
-  'openai/gpt-4o': { input: 2.50, output: 10.00 },
-  'openai/gpt-4o-mini': { input: 0.15, output: 0.60 },
-  'google/gemini-2.5-pro': { input: 1.25, output: 5.00 },
-  'deepseek/deepseek-v4-flash': { input: 0.27, output: 1.10 },
-}
+import { MODEL_PRICING } from './model-pricing'
 
 export function estimateCost(modelSpec: string, inputTokens: number, outputTokens: number): number {
-  const p = PRICES[modelSpec]
+  const p = MODEL_PRICING[modelSpec as keyof typeof MODEL_PRICING]
   if (!p) return 0
-  return (inputTokens * p.input + outputTokens * p.output) / 1_000_000
+  return (inputTokens * p.input_per_1m + outputTokens * p.output_per_1m) / 1_000_000
 }
 
 export interface RecordUsageArgs {

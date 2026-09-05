@@ -23,7 +23,13 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   'openai/gpt-4o': 128_000,
   'openai/gpt-4o-mini': 128_000,
   'google/gemini-2.5-pro': 1_048_576,
-  'deepseek/deepseek-v4-flash': 128_000,
+  // Verified against the live API 2026-09-05 by sending oversized prompts:
+  // v4-flash accepted a 400,084-token prompt outright. The previous 128_000
+  // here was stale by more than 3x, so long chats were being trimmed to a
+  // fraction of what the model can actually hold. 400_000 is the measured
+  // floor, not an advertised ceiling — raise it if a larger prompt lands.
+  'deepseek/deepseek-v4-pro': 400_000,
+  'deepseek/deepseek-v4-flash': 400_000,
 }
 
 function parsePositiveInt(value: string | undefined): number | null {
@@ -91,26 +97,27 @@ export function buildModel(spec: string = process.env.LLM_MODEL || DEFAULT_MODEL
 }
 
 /**
- * DeepSeek's thinking-mode models reject a forced `tool_choice` with a hard
- * 400 ("Thinking mode does not support this tool_choice"), which aborts the
- * whole stream — so every slash command dies while plain chat still works.
- * Verified against the live API 2026-09-05: deepseek-v4-pro, deepseek-v4-flash
- * and deepseek-reasoner all reject it; only deepseek-chat accepts it.
+ * DeepSeek's whole current lineup runs in thinking mode, and thinking mode
+ * rejects a forced `tool_choice` with a hard 400 ("Thinking mode does not
+ * support this tool_choice") that aborts the entire stream — so every slash
+ * command dies while plain chat still works.
+ *
+ * Verified against the live API 2026-09-05: `GET /models` lists only
+ * deepseek-v4-pro, deepseek-v4-flash and deepseek-v4-flash-vision-exp, and all
+ * of them reject a forced tool_choice. The non-thinking deepseek-chat alias
+ * accepted it but is deprecated and no longer in the catalog, so there is no
+ * DeepSeek model left to allowlist — the answer for this provider is always no.
  *
  * The caller's fallback is `tool_choice: "auto"` plus the dispatch directive
- * naming the tool and its arguments, which those models do honour.
+ * naming the tool and its arguments, which these models do honour: the
+ * dispatch survives, only its determinism is lost.
  *
- * Unknown deepseek ids are assumed to be thinking-mode: a soft steer degrades
- * gracefully, a rejected force kills the turn. Set LLM_FORCE_TOOL_CHOICE=true
- * to force anyway on a model this allowlist does not know yet.
+ * LLM_FORCE_TOOL_CHOICE=true forces anyway, for when DeepSeek ships a
+ * non-thinking model again.
  */
-const DEEPSEEK_FORCED_TOOL_CHOICE_OK = new Set(['deepseek-chat'])
-
 export function supportsForcedToolChoice(
   spec: string = process.env.LLM_MODEL || DEFAULT_MODEL_SPEC,
 ): boolean {
   if (process.env.LLM_FORCE_TOOL_CHOICE === 'true') return true
-  const { provider, modelId } = splitModelSpec(spec)
-  if (provider !== 'deepseek') return true
-  return DEEPSEEK_FORCED_TOOL_CHOICE_OK.has(modelId)
+  return splitModelSpec(spec).provider !== 'deepseek'
 }
