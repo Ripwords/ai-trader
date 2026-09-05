@@ -85,7 +85,39 @@ docker-compose.yml
 
 - The Nuxt server runs **`ai-sdk`** (plus `@modelcontextprotocol/sdk` for the Ghostfolio MCP client) and proxies market data + paper-trading calls to FastAPI.
 - The FastAPI side embeds [**TradingAgents**](https://github.com/TauricResearch/TradingAgents) — a LangGraph multi-agent debate (analysts → bull/bear researchers → trader → risk panel → portfolio manager). Run checkpoints + per-role reflections persist via `langgraph-checkpoint-postgres`. Algo strategies/runs/signals are also written from this side via asyncpg, so both services share the Drizzle-managed schema.
-- [**Ghostfolio MCP**](https://github.com/mhajder/ghostfolio-mcp) is a remote MCP endpoint you bring yourself (set `GHOSTFOLIO_MCP_URL` + bearer); it talks to your [**Ghostfolio**](https://github.com/ghostfolio/ghostfolio) instance and gives the agent cross-broker holdings/performance/dividends tools. Leave it unset and the agent simply doesn't see the `ghostfolio_*` tools.
+- [**Ghostfolio MCP**](https://github.com/mhajder/ghostfolio-mcp) is a remote MCP endpoint you bring yourself (set `GHOSTFOLIO_MCP_URL` + bearer); it talks to your [**Ghostfolio**](https://github.com/ghostfolio/ghostfolio) instance and gives the agent cross-broker holdings/performance/dividends tools. Leave it unset and the agent simply doesn't see the `ghostfolio_*` tools. Only the read-only subset listed in `GHOSTFOLIO_TOOL_ALLOWLIST` (`apps/web/server/llm/mcp.ts`) is exposed to the model; the server's write tools (create/delete accounts and activities, imports, balance transfers) are never reachable from chat.
+
+### Two portfolio layers, never summed
+
+Ghostfolio mirrors the moomoo account, so the two sources overlap on purpose:
+
+| Layer | Source | Chat tools | Page |
+|---|---|---|---|
+| **Investments** — what you own on moomoo live, with day change and P&L | moomoo OpenD | `investment_portfolio`, `investment_performance`, `holdings_context` | `/portfolio` (moomoo tables) |
+| **Net worth** — every account incl. cash and non-investment assets | Ghostfolio | `portfolio_performance`, `ghostfolio_*` reads | `/portfolio` (headline, allocation, planning) |
+
+`holdings_context` reports both quantities for a symbol and flags a mismatch as a reconciliation issue rather than extra shares. The daily net-worth snapshot is recorded only when Ghostfolio reports a total; a moomoo account total (live or paper) is never written as net worth.
+
+### Chat tool catalogue
+
+Tools are defined in `apps/web/server/llm/tools.ts` and the routing rules in `apps/web/server/llm/chat-context.ts`. A unit test (`tests/unit/chat-prompt-tool-names.test.ts`) fails when the prompt or a slash command names a tool that no longer exists.
+
+| Group | Tools |
+|---|---|
+| market | `market_kline`, `market_snapshot`, `market_order_book` |
+| watchlist | `watchlist_list`, `watchlist_add`, `watchlist_remove` |
+| news / web | `news_pulse` (stock news + the macro/sector context behind a move), `search_news` (topics that are not one ticker), `search_web` |
+| broker (moomoo) | `trade_accounts`, `trade_account_overview`, `trade_portfolio`, `trade_orders`, `trade_fills` (today by default, pass `start`/`end` for history), `trade_place_order`, `trade_modify_order`, `trade_cancel_order` |
+| portfolio | `investment_portfolio`, `investment_performance`, `holdings_context`, `portfolio_performance`, `portfolio_mpt_analysis`, `convert_fx` |
+| research | `agents_debate`, `research_start`, `research_status`, `research_get`, `investment_research`, `thesis_tracker`, `dyp_ask`, `value_stock`, `value_screen`, `technical_analysis` |
+| algo (paper only) | `algo_list`, `algo_backtest`, `algo_recent_signals`, `algo_state`, `algo_kill`, `algo_unkill` |
+| alerts / usage | `alert_create`, `alert_list`, `alert_cancel`, `usage_summary` |
+
+### Safety rails
+
+- Live (REAL) orders need `ALLOW_LIVE_TRADING=true` on the api **and** a typed confirmation phrase in the chat turn. Placement and modification both count against `MAX_DAILY_LIVE_NOTIONAL_USD`; orders moomoo reports at price 0 (market orders) are valued at the last trade.
+- The TradingAgents pipeline stops at `AGENTS_DAILY_COST_USD_CAP` per day across runs, resumes and every backtest pair.
+- Algo strategies run in an AST-validated sandbox: no imports beyond math/numpy/pandas/statistics, no dunder access, and no pandas/numpy file IO methods (`read_*`, `to_*`, `np.load`, ...). The scheduler only ever places paper orders.
 - The agent streams **NDJSON** chunks (`run-start`, `node-start`, `node-end`, `tool-call`, `tool-result`, `debate-round`, `risk-debate-turn`, `report`, `decision`, `synthesis`, `final-state`) which the chat + research UIs parse inline.
 
 ### Research pipeline
@@ -216,8 +248,8 @@ After every authorised decision, the Reflector reads the four analyst reports + 
 # api: pytest with fake OpenD client (no live OpenD needed)
 cd apps/api && uv run pytest
 
-# web: vitest unit
-cd apps/web && pnpm exec vitest run
+# web: vitest unit + typecheck
+cd apps/web && pnpm exec vitest run && pnpm exec nuxi typecheck
 
 # web: playwright e2e (requires the docker stack running + a real ANTHROPIC_API_KEY)
 cd apps/web && pnpm exec playwright test
