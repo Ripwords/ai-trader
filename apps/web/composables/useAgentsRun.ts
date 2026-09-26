@@ -77,6 +77,8 @@ export type Connection = 'idle' | 'open' | 'reconnecting' | 'lost'
 type ReadOutcome = 'ended' | 'not-found' | 'dropped' | 'aborted'
 
 const MAX_RECONNECTS = 6
+// Three missed server pings (PING_MS in agent-events.get.ts).
+const DEFAULT_IDLE_MS = 45_000
 const defaultBackoff = (attempt: number) => Math.min(1000 * 2 ** (attempt - 1), 15_000)
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -89,8 +91,9 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   })
 }
 
-export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number } = {}) {
+export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; idleMs?: number } = {}) {
   const backoffMs = opts.backoffMs ?? defaultBackoff
+  const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
   const view = shallowRef<RunView>(EMPTY_VIEW)
   const runId = ref<string | null>(null)
   const connection = ref<Connection>('idle')
@@ -107,21 +110,40 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number } =
     view.value = { ...EMPTY_VIEW, status: 'failed', error: message }
   }
 
-  async function readStream(id: string, signal: AbortSignal): Promise<ReadOutcome> {
+  async function readStream(id: string, signal: AbortSignal): Promise<{ outcome: ReadOutcome; progressed: boolean }> {
+    // A socket can stay open yet deliver nothing (proxy stall, sleeping
+    // laptop). The server pings every 15 s, so silence past idleMs means the
+    // connection is dead even though no error surfaced.
+    const conn = new AbortController()
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const stop = () => {
+      conn.abort()
+      void reader?.cancel().catch(() => {})
+    }
+    const arm = () => {
+      clearTimeout(timer)
+      timer = setTimeout(stop, idleMs)
+    }
+    signal.addEventListener('abort', stop, { once: true })
+    let progressed = false
+    const settle = (outcome: ReadOutcome) => ({ outcome: signal.aborted ? 'aborted' as const : outcome, progressed })
     try {
+      arm()
       const res = await fetch(
         `/api/research/agent-events?run_id=${encodeURIComponent(id)}&after=${view.value.lastSeq}`,
-        { signal, headers: { accept: 'text/event-stream' } },
+        { signal: conn.signal, headers: { accept: 'text/event-stream' } },
       )
-      if (res.status === 404) return 'not-found'
-      if (!res.ok || !res.body) return 'dropped'
+      if (res.status === 404) return settle('not-found')
+      if (!res.ok || !res.body) return settle('dropped')
       connection.value = 'open'
-      const reader = res.body.getReader()
+      reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
       while (true) {
         const { value, done } = await reader.read()
-        if (done) return 'dropped'
+        if (done) return settle('dropped')
+        arm()
         const { messages, rest } = parseSse(buf, decoder.decode(value, { stream: true }))
         buf = rest
         let v = view.value
@@ -129,34 +151,42 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number } =
           if (m.event === 'run') {
             const { startedAt: at } = JSON.parse(m.data) as { startedAt: string | null }
             startedAt.value = at ? new Date(at) : null
+            continue
           }
-          else if (m.event === 'message' && m.id !== null) {
+          progressed = true
+          if (m.event === 'message' && m.id !== null) {
             v = applyFrame(v, { kind: 'event', seq: Number(m.id), event: JSON.parse(m.data) as AgentEvent })
           }
           else if (m.event === 'end') {
             const end = JSON.parse(m.data) as { status: Exclude<RunStatus, 'running'>; error: string | null }
             view.value = applyFrame(v, { kind: 'end', ...end })
-            return 'ended'
+            return settle('ended')
           }
         }
         view.value = v
       }
     }
     catch {
-      return signal.aborted ? 'aborted' : 'dropped'
+      return settle('dropped')
+    }
+    finally {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', stop)
     }
   }
 
   async function subscribe(id: string, signal: AbortSignal) {
     let failures = 0
     while (!signal.aborted) {
-      const outcome = await readStream(id, signal)
+      const { outcome, progressed } = await readStream(id, signal)
       if (outcome === 'not-found') {
         reset()
         return
       }
       if (outcome !== 'dropped') break
-      failures = connection.value === 'open' ? 1 : failures + 1
+      // Only a connection that delivered something proves the link works; one
+      // that opens and closes empty keeps backing off.
+      failures = progressed ? 1 : failures + 1
       if (failures > MAX_RECONNECTS) {
         connection.value = 'lost'
         return
