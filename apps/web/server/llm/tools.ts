@@ -665,7 +665,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'thesis_tracker': tool({
       description:
-        "Read-only research history for a symbol: latest agents verdict, run history, confidence trend, staleness (stale after 21 days), and realized alpha. Use for \"how's my thesis on X\", \"thesis tracker\", \"has my research on X aged\". Does not start a run.",
+        "Read-only research history for a symbol: latest agents verdict, run history, confidence trend, and staleness (stale after 21 days). Use for \"how's my thesis on X\", \"thesis tracker\", \"has my research on X aged\". Does not start a run.",
       inputSchema: z.object({ symbol: z.string() }),
       execute: async ({ symbol }) => {
         const { getOwnerId } = await import('../db/repo')

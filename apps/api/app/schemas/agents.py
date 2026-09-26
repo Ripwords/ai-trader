@@ -24,8 +24,7 @@ class BacktestRequest(BaseModel):
 
     Knobs match :class:`RunRequest` so a backtest replicates the exact
     settings a forward run would use. ``horizon_days`` is the realised-
-    return window applied uniformly to every pair; the default mirrors
-    the reflection job's default.
+    return window applied uniformly to every pair.
     """
 
     pairs: list[BacktestPair] = Field(..., min_length=1, max_length=50)

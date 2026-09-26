@@ -1,7 +1,7 @@
 """Tests for the agents OpenD bridge wired in lifespan.
 
 The bridge translates SDK-style ktype strings (``K_DAY``) the toolkit and
-reflection use into the adapter's native ``1d``-style, and routes the sync
+the backtest's realized-return calculation use into the adapter's native ``1d``-style, and routes the sync
 adapter call through ``asyncio.to_thread``. Without this bridge,
 ``app.state.opend_client`` would be ``None`` and every market-data tool call
 would degrade to "Market data unavailable".

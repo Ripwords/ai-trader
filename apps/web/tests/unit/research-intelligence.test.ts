@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildResearchIntelligence } from '../../server/lib/research-intelligence'
 
 describe('research intelligence', () => {
-  it('prioritizes running, uncompleted, stale, and weak-reflection symbols', () => {
+  it('prioritizes running, uncompleted, and stale symbols; current theses stay off the queue', () => {
     const out = buildResearchIntelligence([
       {
         id: 'run-running',
@@ -12,8 +12,6 @@ describe('research intelligence', () => {
         finishedAt: null,
         rating: null,
         confidence: null,
-        alpha: null,
-        outcome: null,
         costUsd: null,
       },
       {
@@ -24,8 +22,6 @@ describe('research intelligence', () => {
         finishedAt: '2026-05-15T00:10:00.000Z',
         rating: null,
         confidence: null,
-        alpha: null,
-        outcome: null,
         costUsd: 0.2,
       },
       {
@@ -36,8 +32,6 @@ describe('research intelligence', () => {
         finishedAt: '2026-04-20T00:10:00.000Z',
         rating: 'buy',
         confidence: 72,
-        alpha: 3,
-        outcome: 'correct',
         costUsd: 0.5,
       },
       {
@@ -48,8 +42,6 @@ describe('research intelligence', () => {
         finishedAt: '2026-05-12T00:10:00.000Z',
         rating: 'hold',
         confidence: 60,
-        alpha: -8,
-        outcome: 'wrong',
         costUsd: 0.3,
       },
     ], new Date('2026-05-16T12:00:00.000Z'))
@@ -65,7 +57,6 @@ describe('research intelligence', () => {
     expect(out.queue.map(item => [item.symbol, item.action, item.severity])).toEqual([
       ['MSFT', 'monitor_running', 'high'],
       ['TSLA', 'rerun_failed', 'high'],
-      ['AAPL', 'review_thesis', 'medium'],
       ['NVDA', 'refresh_stale', 'medium'],
     ])
   })

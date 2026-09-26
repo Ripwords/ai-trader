@@ -1,6 +1,6 @@
 import { and, desc, eq, ne } from 'drizzle-orm'
 import { getDb } from '../../../db/client'
-import { agentRuns, agentDecisions, agentReflections } from '../../../db/schema'
+import { agentRuns, agentDecisions } from '../../../db/schema'
 
 export interface ThesisRun { runId: string; rating: string | null; confidence: number | null; finishedAt: string | null }
 export interface ThesisSummary {
@@ -9,15 +9,14 @@ export interface ThesisSummary {
   history: ThesisRun[]
   confidenceTrend: 'up' | 'down' | 'flat' | 'n/a'
   staleness: 'fresh' | 'stale' | 'none'
-  realizedAlpha: number | null
 }
 
 const STALE_DAYS = 21
 
 /** Pure summary from newest-first runs. */
-export function summarizeThesis(symbol: string, runs: ThesisRun[], reflectionAlpha: number | null, now: number): ThesisSummary {
+export function summarizeThesis(symbol: string, runs: ThesisRun[], now: number): ThesisSummary {
   if (runs.length === 0) {
-    return { symbol, latest: null, history: [], confidenceTrend: 'n/a', staleness: 'none', realizedAlpha: reflectionAlpha }
+    return { symbol, latest: null, history: [], confidenceTrend: 'n/a', staleness: 'none' }
   }
   const latest = runs[0]!
   const withConf = runs.filter(r => r.confidence != null)
@@ -31,7 +30,7 @@ export function summarizeThesis(symbol: string, runs: ThesisRun[], reflectionAlp
     const ageDays = (now - Date.parse(latest.finishedAt)) / 86_400_000
     if (ageDays > STALE_DAYS) staleness = 'stale'
   }
-  return { symbol, latest, history: runs, confidenceTrend, staleness, realizedAlpha: reflectionAlpha }
+  return { symbol, latest, history: runs, confidenceTrend, staleness }
 }
 
 export async function buildThesisSummary(userId: string, symbol: string): Promise<ThesisSummary> {
@@ -51,18 +50,5 @@ export async function buildThesisSummary(userId: string, symbol: string): Promis
     .filter(r => r.status !== 'running')
     .map(r => ({ runId: r.runId, rating: r.rating, confidence: r.confidence, finishedAt: r.finishedAt ? r.finishedAt.toISOString() : null }))
 
-  // Realized alpha from the most recent 'overall' reflection for this symbol's latest decided run, if any.
-  let alpha: number | null = null
-  if (runs[0]) {
-    const decRows = await db.select({ id: agentDecisions.id }).from(agentDecisions)
-      .where(eq(agentDecisions.runId, runs[0].runId)).limit(1)
-    const decId = decRows[0]?.id
-    if (decId) {
-      const refl = await db.select({ alpha: agentReflections.alpha }).from(agentReflections)
-        .where(and(eq(agentReflections.decisionId, decId), eq(agentReflections.role, 'overall'))).limit(1)
-      const raw = refl[0]?.alpha
-      alpha = raw != null ? Number(raw) : null
-    }
-  }
-  return summarizeThesis(symbol, runs, alpha, Date.now())
+  return summarizeThesis(symbol, runs, Date.now())
 }

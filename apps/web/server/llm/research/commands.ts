@@ -18,7 +18,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: 'Grouped news digest (ticker + macro + sector/peer) for a symbol.',
     args: [{ name: 'symbol', kind: 'symbol', required: true }] },
   { name: 'thesis-tracker', tool: 'thesis_tracker',
-    description: 'Read-only research history: latest verdict, confidence trend, staleness, realized alpha.',
+    description: 'Read-only research history: latest verdict, confidence trend, staleness.',
     args: [{ name: 'symbol', kind: 'symbol', required: true }] },
   { name: 'dyp-ask', tool: 'dyp_ask',
     description: 'First-principles reasoning answer to a pointed investment question.',

@@ -103,9 +103,8 @@ export class AgentRunTee {
               .where(this.stillRunning())
           }
           if (ev.type === 'final-state') {
-            // Persist the captured terminal AgentState so the per-role
-            // reflection job can read the four analyst reports + debate
-            // histories + plans without re-walking agent_messages.
+            // Persist the captured terminal AgentState (analyst reports,
+            // debate histories, plans) as the run's audit record.
             await db
               .update(agentRuns)
               .set({ finalState: ev.state })

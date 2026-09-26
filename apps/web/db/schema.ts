@@ -154,9 +154,8 @@ export const agentRuns = pgTable('agent_runs', {
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
   // Captured terminal AgentState (the four analyst reports + debate
-  // histories + plans + final_trade_decision). Populated by the tee on
-  // ``run-end`` so per-role reflection has the inputs it needs without
-  // re-walking the agent_messages stream.
+  // histories + plans + final_trade_decision), written by the tee as the
+  // run's audit record.
   finalState: jsonb('final_state'),
 }, t => ({
   userSymbolDate: index('agent_runs_user_symbol_date_idx').on(t.userId, t.symbol, t.tradeDate),
@@ -198,34 +197,6 @@ export const agentDecisions = pgTable('agent_decisions', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => ({
   bySymbol: index('agent_decisions_user_symbol_idx').on(t.userId, t.symbol, t.createdAt),
-}))
-
-// Post-hoc reflection on a decision after `horizonDays`. `outcome` ∈
-// {'correct','wrong','neutral'}.
-//
-// Schema is now ROLE-keyed (one reflection per role per decision —
-// ``trader``, ``bull_researcher``, ``bear_researcher``, ``invest_judge``,
-// ``risk_manager``, plus an aggregate ``overall``). TradingAgents writes
-// per-role lessons via its Reflector class; each role's lesson is fed
-// back into its own FinancialSituationMemory at the start of the next
-// run, so the bull researcher learns from past bull-side mistakes
-// without contaminating the bear's prompt context.
-export const agentReflections = pgTable('agent_reflections', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  decisionId: uuid('decision_id').notNull().references(() => agentDecisions.id, { onDelete: 'cascade' }),
-  role: text('role').notNull().default('overall'),
-  reflectedAt: timestamp('reflected_at', { withTimezone: true }).notNull().defaultNow(),
-  horizonDays: integer('horizon_days').notNull(),
-  realizedReturn: numeric('realized_return', { precision: 8, scale: 4 }),
-  benchmarkReturn: numeric('benchmark_return', { precision: 8, scale: 4 }),
-  alpha: numeric('alpha', { precision: 8, scale: 4 }),
-  outcome: text('outcome').notNull(),
-  text: text('text').notNull(),
-}, t => ({
-  // ``UNIQUE(decision_id, role)`` replaces the old ``UNIQUE(decision_id)``
-  // so the reflection job can write five rows per decision (one per
-  // role) without conflict.
-  uniqueDecisionRole: uniqueIndex('agent_reflections_decision_role_uq').on(t.decisionId, t.role),
 }))
 
 // Daily (or manual) portfolio value snapshot — the persistence layer behind
@@ -331,8 +302,8 @@ export const priceAlerts = pgTable('price_alerts', {
 // screener rows from the watchlist sweep. Inserts are best-effort on the
 // api side — a snapshot failure never fails the valuation itself. `result`
 // keeps the full ValuationResult JSON (Decimals serialized as strings by
-// pydantic) so the reflection job and future analytics can replay the
-// engine's view at decision time; the scalar columns are the hot filters.
+// pydantic) so analytics can replay the engine's view at decision
+// time; the scalar columns are the hot filters.
 export const valuationSnapshots = pgTable('valuation_snapshots', {
   id: uuid('id').defaultRandom().primaryKey(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -346,6 +317,6 @@ export const valuationSnapshots = pgTable('valuation_snapshots', {
   vetoTriggered: boolean('veto_triggered').notNull().default(false),
   result: jsonb('result').notNull(),
 }, t => ({
-  // Reflection's lookup: latest snapshot for a symbol at/before a decision.
+  // Latest snapshot for a symbol at/before a point in time.
   bySymbolCreated: index('valuation_snapshots_symbol_created_idx').on(t.symbol, t.createdAt),
 }))

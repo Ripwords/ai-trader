@@ -25,7 +25,7 @@ interface SymbolSummary {
 
 interface IntelligenceQueueItem {
   symbol: string
-  action: 'monitor_running' | 'rerun_failed' | 'review_thesis' | 'refresh_stale' | 'none'
+  action: 'monitor_running' | 'rerun_failed' | 'refresh_stale' | 'none'
   severity: 'high' | 'medium' | 'low'
   note: string
   latest_run_id: string
@@ -106,7 +106,6 @@ function ratingTone(r: string | null): 'up' | 'down' | 'neutral' {
 function actionLabel(action: IntelligenceQueueItem['action']): string {
   if (action === 'monitor_running') return 'monitor'
   if (action === 'rerun_failed') return 'rerun'
-  if (action === 'review_thesis') return 'review'
   if (action === 'refresh_stale') return 'refresh'
   return 'current'
 }

@@ -12,8 +12,6 @@ interface AgentRunRow {
   status: string
   rating: string | null
   confidence: number | null
-  alpha: string | null
-  outcome: string | null
   costUsd: string | null
   startedAt: string
   finishedAt: string | null

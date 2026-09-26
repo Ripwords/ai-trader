@@ -99,7 +99,7 @@ docker-compose.yml
 ```
 
 - The Nuxt server runs **`ai-sdk`** (plus `@modelcontextprotocol/sdk` for the Ghostfolio MCP client) and proxies market data + paper-trading calls to FastAPI.
-- The FastAPI side embeds [**TradingAgents**](https://github.com/TauricResearch/TradingAgents) — a LangGraph multi-agent debate (analysts → bull/bear researchers → trader → risk panel → portfolio manager). Run checkpoints + per-role reflections persist via `langgraph-checkpoint-postgres`. Algo strategies/runs/signals are also written from this side via asyncpg, so both services share the Drizzle-managed schema.
+- The FastAPI side embeds [**TradingAgents**](https://github.com/TauricResearch/TradingAgents) — a LangGraph multi-agent debate (analysts → bull/bear researchers → trader → risk panel → portfolio manager). Run checkpoints persist via `langgraph-checkpoint-postgres`. Algo strategies/runs/signals are also written from this side via asyncpg, so both services share the Drizzle-managed schema.
 - [**Ghostfolio MCP**](https://github.com/mhajder/ghostfolio-mcp) is a remote MCP endpoint you bring yourself (set `GHOSTFOLIO_MCP_URL` + bearer); it talks to your [**Ghostfolio**](https://github.com/ghostfolio/ghostfolio) instance and gives the agent cross-broker holdings/performance/dividends tools. Leave it unset and the agent simply doesn't see the `ghostfolio_*` tools. Only the read-only subset listed in `GHOSTFOLIO_TOOL_ALLOWLIST` (`apps/web/server/llm/mcp.ts`) is exposed to the model; the server's write tools (create/delete accounts and activities, imports, balance transfers) are never reachable from chat.
 
 ### Two portfolio layers, never summed
@@ -197,7 +197,7 @@ flowchart LR
         LIVE["moomoo live<br/>(REAL — gated by<br/>daily $ cap)"]
     end
 
-    DB[("Postgres<br/>langgraph checkpoints<br/>per-role reflections<br/>algo state · chat")]
+    DB[("Postgres<br/>langgraph checkpoints<br/>agent runs · decisions<br/>algo state · chat")]
     UI{{"Nuxt 4 + ai-sdk UI<br/>NDJSON stream<br/>chat · research · algo"}}
     GFMCP["Ghostfolio MCP<br/>(BYO endpoint)"]
     GF["Ghostfolio<br/>cross-broker holdings"]
@@ -264,7 +264,7 @@ flowchart LR
 | **Portfolio Manager** | Authorises BUY / SELL / HOLD with a confidence + reasoning. | Risk debate |
 | **Execution** | Places the order against `SIMULATE` (paper) by default; `REAL` is gated by `MAX_DAILY_LIVE_NOTIONAL_USD`. | Manager decision → moomoo OpenD |
 
-After every authorised decision, the Reflector reads the four analyst reports + both debate transcripts and writes a per-role reflection to Postgres — next time that role runs on a similar setup, its top-K nearest reflections are injected into context.
+Each run starts fresh: agents do not carry lessons from past decisions into later runs. The only extra context is the deterministic DCF valuation, which the Research Manager and Risk Manager see before they rule.
 
 ## Tests
 

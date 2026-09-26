@@ -8,8 +8,6 @@ interface Row {
   status: string
   rating?: Rating | string | null
   confidence?: number | null
-  alpha?: number | string | null
-  outcome?: string | null
   costUsd?: number | string | null
   durationSec?: number | null
   startedAt?: string | null
@@ -27,28 +25,12 @@ function ratingTone(r?: Rating | string | null): 'up' | 'down' | 'neutral' {
   return 'neutral'
 }
 
-function alphaTone(a?: number | string | null): 'up' | 'down' | 'neutral' {
-  if (a === null || a === undefined) return 'neutral'
-  const n = typeof a === 'number' ? a : Number(a)
-  if (!Number.isFinite(n)) return 'neutral'
-  return n > 0 ? 'up' : n < 0 ? 'down' : 'neutral'
-}
-
 function statusTone(s: string): 'up' | 'down' | 'neutral' | 'pending' {
   if (s === 'complete') return 'neutral'
   if (s === 'failed') return 'down'
   if (s === 'running') return 'pending'
   if (s === 'cancelled') return 'neutral'
   return 'neutral'
-}
-
-function fmtAlpha(a?: number | string | null): string {
-  if (a === null || a === undefined) return '—'
-  const n = typeof a === 'number' ? a : Number(a)
-  if (!Number.isFinite(n)) return '—'
-  // alpha arrives in percentage points (reflection.py already scaled it).
-  const sign = n >= 0 ? '+' : ''
-  return `${sign}${n.toFixed(2)}%`
 }
 
 function fmtCost(c?: number | string | null): string {
@@ -134,19 +116,8 @@ function rowClick(row: Row) {
         <span class="row__symbol" data-mono>{{ r.symbol }}</span>
         <span class="row__sep" aria-hidden="true">·</span>
 
-        <!-- Reflected runs surface alpha/outcome; otherwise dur+cost. -->
-        <template v-if="r.alpha !== null && r.alpha !== undefined">
-          <span class="row__alpha" :data-tone="alphaTone(r.alpha)" data-mono>
-            {{ fmtAlpha(r.alpha) }}
-          </span>
-          <span v-if="r.outcome" class="row__outcome" data-mono>
-            {{ r.outcome }}
-          </span>
-        </template>
-        <template v-else>
-          <span class="row__cost" data-mono>{{ fmtCost(r.costUsd) }}</span>
-          <span class="row__dur" data-mono>{{ fmtDuration(r) }}</span>
-        </template>
+        <span class="row__cost" data-mono>{{ fmtCost(r.costUsd) }}</span>
+        <span class="row__dur" data-mono>{{ fmtDuration(r) }}</span>
 
         <span
           class="row__status"
@@ -257,16 +228,6 @@ function rowClick(row: Row) {
   font-weight: 500;
 }
 .row__sep { color: var(--ink-line-strong); }
-.row__alpha { font-variant-numeric: tabular-nums; }
-.row__alpha[data-tone="up"]      { color: var(--tape-up); }
-.row__alpha[data-tone="down"]    { color: var(--tape-down); }
-.row__alpha[data-tone="neutral"] { color: var(--paper-2); }
-.row__outcome {
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 0.6rem;
-  color: var(--paper-3);
-}
 .row__cost,
 .row__dur {
   color: var(--paper-2);

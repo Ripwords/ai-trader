@@ -10,11 +10,6 @@ to ``thread_id == run_id``. Two endpoints leverage that:
   process-local task registry. Returns ``cancelled=False`` for unknown ids
   (no error: the registry is intentionally short-lived).
 
-Reflection recall is still wired in via
-:class:`app.services.agents.memory.PostgresMemoryProvider` when an asyncpg
-pool is available on ``app.state.pg_pool``; without a pool, runs proceed with
-empty memory.
-
 The cancellation registry (:data:`_active_runs`) is **process-local** — fine
 for v1's single-process api container, but wrong for a scaled-out deployment.
 A scaled deployment needs a broadcast cancel signal (Postgres LISTEN/NOTIFY,
@@ -37,11 +32,9 @@ from app.schemas.agents import BacktestRequest, RunRequest
 from app.services.agents import backtest as backtest_mod
 from app.services.agents import graph as graph_mod
 from app.services.agents import pricing as pricing_mod
-from app.services.agents import reflection as reflection_mod
 from app.services.agents import toolkit as toolkit_mod
 from app.services.agents.cost_cap import DailyCapExceeded, assert_under_daily_cap
 from app.services.agents.heartbeat import HEARTBEAT, with_heartbeats
-from app.services.agents.memory import PostgresMemoryProvider
 from app.services.agents.streaming import translate_chunks
 from app.services.agents.usage import UsageAccumulator
 from app.settings import get_settings
@@ -110,45 +103,6 @@ def _check_bearer(authorization: str | None) -> None:
     settings = get_settings()
     if authorization != f"Bearer {settings.INTERNAL_BEARER}":
         raise HTTPException(status_code=401, detail="Unauthorized")
-
-
-async def _recall_memory_by_role(
-    request: Request, user_id: str | None, symbol: str
-) -> dict[str, list[dict]]:
-    """Fetch prior reflections grouped by role for (user, symbol).
-
-    Returns ``{}`` if the asyncpg pool isn't ready or the caller didn't
-    forward an ``x-user-id``. The trust model is the same as ``_recall_memory``
-    — INTERNAL_BEARER on the upstream endpoint guarantees the caller is our
-    own web container.
-    """
-    pool = getattr(request.app.state, "pg_pool", None)
-    if pool is None or not user_id:
-        return {}
-    try:
-        provider = PostgresMemoryProvider(pool)
-        return await provider.recall_by_role(user_id=user_id, symbol=symbol, k=5)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("memory recall_by_role failed for %s/%s: %s", user_id, symbol, e)
-        return {}
-
-
-async def _recall_memory(
-    request: Request, user_id: str | None, symbol: str
-) -> list[dict]:
-    """Flat-list legacy recall. Kept for callers that don't care about role
-    attribution. New ``run_agents`` path uses ``_recall_memory_by_role``.
-    """
-    pool = getattr(request.app.state, "pg_pool", None)
-    if pool is None or not user_id:
-        return []
-    try:
-        provider = PostgresMemoryProvider(pool)
-        return await provider.recall(user_id=user_id, symbol=symbol, k=5)
-    except Exception as e:  # noqa: BLE001
-        # Memory recall is best-effort — a DB hiccup shouldn't block the run.
-        logger.warning("memory recall failed for %s/%s: %s", user_id, symbol, e)
-        return []
 
 
 @router.post("/run")
@@ -264,7 +218,6 @@ async def run_agents(
                 company_name=company_name,
                 checkpointer=checkpointer,
             )
-            memory_by_role = await _recall_memory_by_role(request, x_user_id, body.symbol)
             config = {
                 "max_debate_rounds": body.max_debate_rounds,
                 "max_risk_discuss_rounds": body.max_risk_discuss_rounds,
@@ -283,7 +236,6 @@ async def run_agents(
                     trade_date,
                     body.max_debate_rounds,
                     body.deep_thinking,
-                    memory_by_role=memory_by_role,
                     run_id=run_id,
                     usage=accumulator,
                 ),
@@ -328,29 +280,6 @@ async def run_agents(
             ).encode()
 
     return StreamingResponse(_stream(), media_type="application/x-ndjson")
-
-
-@router.post("/reflect")
-async def trigger_reflect(
-    request: Request,
-    authorization: str | None = Header(default=None),
-    horizon_days: int = 7,
-) -> dict[str, int]:
-    """Run the nightly reflection pass.
-
-    Iterates pending ``agent_decisions`` rows older than ``horizon_days``,
-    computes alpha vs SPY, asks the quick LLM for a lesson, and inserts a
-    paired ``agent_reflections`` row. The agents-cron container hits this
-    once a day; nothing about it is per-user, so no user header is needed
-    (just the internal bearer).
-    """
-    _check_bearer(authorization)
-    pool = getattr(request.app.state, "pg_pool", None)
-    if pool is None:
-        raise HTTPException(status_code=503, detail="db not ready")
-    opend = getattr(request.app.state, "opend_client", None)
-    n = await reflection_mod.reflect_pending(pool, opend, horizon_days=horizon_days)
-    return {"reflected": n}
 
 
 @router.post("/backtest")

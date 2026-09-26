@@ -63,8 +63,7 @@ async def get_valuation(symbol: str = Query(..., min_length=1)) -> ValuationResu
     result = value(vi)
     # Best-effort persistence — record_valuation_snapshot never raises.
     # Degraded 'unavailable' results (above) are deliberately not persisted:
-    # a current_price=0 placeholder row would only pollute the reflection
-    # loop's closest-snapshot lookup.
+    # a current_price=0 placeholder row would only pollute the history.
     await record_valuation_snapshot(result, source="chat")
     return result
 

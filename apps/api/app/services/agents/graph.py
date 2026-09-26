@@ -693,111 +693,29 @@ def _state_snapshot(state: Any) -> dict:
     return dict(state) if state else {}
 
 
-def _format_memory_situation(symbol: str, row: dict) -> str:
-    """Build the BM25 lookup key for a past reflection.
-
-    The trader's runtime ``curr_situation`` is the concatenation of the four
-    analyst reports for the current date, so to give past reflections a chance
-    of matching we lead the situation text with the symbol — analyst reports
-    routinely mention the company name and ticker. Outcome and rating give the
-    BM25 scorer extra terms when the trader's situation is dominated by
-    market commentary.
-    """
-    rating = row.get("rating") or "?"
-    outcome = row.get("outcome") or "?"
-    td = row.get("trade_date")
-    return f"{symbol} {rating} {outcome} on {td}"
-
-
-def _format_memory_recommendation(row: dict) -> str:
-    """Build the human-readable recommendation injected into the trader prompt.
-
-    Whatever string we return here is concatenated verbatim into
-    ``past_memory_str`` (see ``tradingagents.agents.trader.trader``) which is
-    formatted into the trader system prompt's ``{past_memory_str}`` slot.
-    Keeping each line short and parseable matters more than prose.
-    """
-    rating = row.get("rating") or "?"
-    outcome = row.get("outcome") or "?"
-    alpha = row.get("alpha")
-    text = row.get("text") or ""
-    # alpha is already in percentage points (see compute_realized_return).
-    alpha_str = f"{alpha:+.2f}%" if isinstance(alpha, (int, float)) else "n/a"
-    return f"Past {rating} -> alpha {alpha_str}, outcome {outcome}: {text}"
-
-
-def _seed_trader_memory(
-    graph: TradingAgentsGraph, symbol: str, memory: list[dict]
+def _seed_valuation_context(
+    graph: TradingAgentsGraph, symbol: str, trade_date: date, summary: str
 ) -> None:
-    """Seed the trader's BM25 memory with prior reflections (legacy path).
+    """Put the deterministic valuation summary in front of the two judges.
 
-    Kept for callers that pass a flat list. New callers should use
-    :func:`_seed_all_memories` so each role gets its own slice.
+    TradingAgents' Research Manager and Risk Manager read their
+    ``FinancialSituationMemory`` (a BM25 over situation/recommendation pairs)
+    at prompt time; seeding the summary there is how the DCF reaches them
+    without patching the upstream prompts. Other roles never see it.
     """
-    if not memory:
+    if not summary:
         return
-    pairs: list[tuple[str, str]] = [
-        (_format_memory_situation(symbol, row), _format_memory_recommendation(row))
-        for row in memory
-    ]
-    graph.trader_memory.add_situations(pairs)
-
-
-# Map our reflection ``role`` strings to the matching ``cached_property`` on
-# ``TradingAgentsGraph``. Each property exposes a ``FinancialSituationMemory``
-# we mutate in place so the corresponding agent node picks the lesson up at
-# prompt-construction time. ``overall`` is fanned out to the trader since
-# legacy single-row reflections were trader-flavoured.
-_ROLE_MEMORY_ATTR: dict[str, str] = {
-    "trader":          "trader_memory",
-    "bull_researcher": "bull_memory",
-    "bear_researcher": "bear_memory",
-    "invest_judge":    "invest_judge_memory",
-    "risk_manager":    "risk_manager_memory",
-    "overall":         "trader_memory",
-}
-
-
-def _seed_all_memories(
-    graph: TradingAgentsGraph,
-    symbol: str,
-    memory_by_role: dict[str, list[dict]],
-) -> None:
-    """Seed each per-role :class:`FinancialSituationMemory` from its slice.
-
-    TradingAgents instantiates five separate memory pools — one each for
-    bull/bear researchers, the trader, the investment judge (Research
-    Manager), and the risk manager. The Reflector writes lessons into each
-    pool keyed to that role's specific slip-ups; seeding them all here means
-    the bull researcher can learn that "I overweighted insider buys last
-    quarter" without that lesson contaminating the bear's prompt context.
-    Each pool is a BM25 over (situation, recommendation) pairs the agent
-    node consults at prompt time.
-    """
-    for role, rows in memory_by_role.items():
-        if not rows:
-            continue
-        attr = _ROLE_MEMORY_ATTR.get(role)
-        if attr is None:
-            continue
-        target = getattr(graph, attr, None)
-        if target is None:
-            continue
-        pairs: list[tuple[str, str]] = [
-            (_format_memory_situation(symbol, row), _format_memory_recommendation(row))
-            for row in rows
-        ]
-        target.add_situations(pairs)
+    pair = (f"{symbol} valuation on {trade_date.isoformat()}", summary)
+    graph.invest_judge_memory.add_situations([pair])
+    graph.risk_manager_memory.add_situations([pair])
 
 
 def _serialize_final_state(state: dict) -> dict:
     """Flatten the terminal AgentState into a JSON-serializable summary.
 
-    Reflection runs hours after the run completed and needs the same inputs
-    TradingAgents' Reflector reads — the four analyst reports, both debate
-    histories, the synthesised plans, the final decision — to write
-    role-specific lessons. We capture them at run-end so the reflection job
-    doesn't have to re-walk the agent_messages stream.
+    Captures the four analyst reports, both debate histories, the
+    synthesised plans and the final decision at run-end; the proxy tee
+    stores it on ``agent_runs.final_state`` as the run's audit record.
     """
     out: dict[str, Any] = {}
     for f in (
@@ -832,9 +750,8 @@ async def _compute_run_valuation(
     returns (None, "") so a valuation outage never aborts the agent run.
 
     On success the result is persisted to ``valuation_snapshots``
-    (source='agent_run', linked to ``run_id``) so the reflection job can
-    later compare the DCF fair value against the realized price. The
-    persist call is best-effort and separately guarded — even a raising
+    (source='agent_run', linked to ``run_id``) as a record of what the
+    judges saw. The persist call is best-effort and separately guarded — even a raising
     recorder must not kill the run's valuation context.
     """
     try:
@@ -856,8 +773,6 @@ async def run_graph(
     trade_date: date,
     max_debate_rounds: int,
     deep_thinking: bool,
-    memory: list[dict] | None = None,
-    memory_by_role: dict[str, list[dict]] | None = None,
     run_id: str | None = None,
     usage: AsyncCallbackHandler | None = None,
 ) -> AsyncIterator[dict]:
@@ -866,11 +781,6 @@ async def run_graph(
     ``max_debate_rounds`` and ``deep_thinking`` are accepted for API symmetry
     with the router but are baked into ``graph`` at construction time (see the
     module docstring) — to change them mid-process you must rebuild the graph.
-
-    ``memory`` is the legacy flat-list of trader reflections; deprecated in
-    favour of ``memory_by_role`` which carries one slice per role
-    (``trader``, ``bull_researcher``, ``bear_researcher``, ``invest_judge``,
-    ``risk_manager``). When both are provided, ``memory_by_role`` wins.
 
     ``run_id`` (optional) — when set, becomes the LangGraph ``thread_id`` so
     checkpoints written by an attached saver are scoped to this run. Resume
@@ -885,24 +795,12 @@ async def run_graph(
 
     After the upstream stream finishes, yields one final chunk with a
     ``final_state`` payload — the captured terminal AgentState the proxy tee
-    persists into ``agent_runs.final_state`` for the per-role reflection job
-    to read later.
+    persists into ``agent_runs.final_state``.
     """
     del max_debate_rounds, deep_thinking  # baked in at build_graph time
 
-    if memory_by_role:
-        _seed_all_memories(graph, symbol, memory_by_role)
-    else:
-        _seed_trader_memory(graph, symbol, memory or [])
-
     run_valuation, valuation_summary = await _compute_run_valuation(symbol, run_id=run_id)
-    if valuation_summary:
-        _seed_all_memories(graph, symbol, {
-            "invest_judge": [{"text": valuation_summary, "rating": "valuation",
-                              "outcome": "context", "trade_date": trade_date.isoformat()}],
-            "risk_manager": [{"text": valuation_summary, "rating": "valuation",
-                              "outcome": "context", "trade_date": trade_date.isoformat()}],
-        })
+    _seed_valuation_context(graph, symbol, trade_date, valuation_summary)
 
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
     args = graph.propagator.get_graph_args()
@@ -974,8 +872,7 @@ async def run_graph(
         prev = curr
 
     # End of stream — yield the captured terminal AgentState so the proxy
-    # tee can persist it on agent_runs.final_state. The reflection job reads
-    # it later to drive role-specific lessons.
+    # tee can persist it on agent_runs.final_state.
     if prev:
         snapshot = _serialize_final_state(prev)
         if snapshot:

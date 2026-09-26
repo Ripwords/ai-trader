@@ -6,12 +6,10 @@ export interface ResearchRunSignal {
   finishedAt: string | Date | null
   rating: string | null
   confidence: number | string | null
-  alpha: number | string | null
-  outcome: string | null
   costUsd: number | string | null
 }
 
-export type ResearchQueueAction = 'monitor_running' | 'rerun_failed' | 'review_thesis' | 'refresh_stale' | 'none'
+export type ResearchQueueAction = 'monitor_running' | 'rerun_failed' | 'refresh_stale' | 'none'
 export type ResearchQueueSeverity = 'high' | 'medium' | 'low'
 
 export interface ResearchQueueItem {
@@ -95,13 +93,9 @@ export function buildResearchIntelligence(rows: ResearchRunSignal[], now = new D
     const daysSinceComplete = latestCompleteTime === null
       ? null
       : Math.floor((nowMs - latestCompleteTime) / (24 * 60 * 60 * 1000))
-    const alpha = toNumber(latestComplete?.alpha ?? latest.alpha)
-    const outcome = latestComplete?.outcome ?? latest.outcome
     const failedRecent = sorted.some(row => row.status === 'failed' && (toTime(row.startedAt) ?? 0) >= sevenDaysAgo)
     const isRunning = sorted.some(row => row.status === 'running')
     const isStale = daysSinceComplete !== null && daysSinceComplete > STALE_DAYS
-    // alpha is stored in percentage points (reflection.py multiplies by 100).
-    const weakReflection = outcome === 'wrong' || (alpha !== null && alpha < -2)
 
     for (const row of sorted) {
       const started = toTime(row.startedAt) ?? 0
@@ -122,10 +116,6 @@ export function buildResearchIntelligence(rows: ResearchRunSignal[], now = new D
       action = 'rerun_failed'
       severity = 'high'
       note = completeRows.length === 0 ? 'No completed agent verdict yet.' : 'Recent run failed; rerun before relying on the thesis.'
-    } else if (weakReflection) {
-      action = 'review_thesis'
-      severity = 'medium'
-      note = alpha !== null ? `Latest reflection alpha is ${round(alpha, 2)}%.` : 'Latest reflection marked the call wrong.'
     } else if (isStale) {
       action = 'refresh_stale'
       severity = 'medium'

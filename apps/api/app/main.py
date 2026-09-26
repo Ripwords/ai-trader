@@ -37,10 +37,10 @@ _AGENTS_KTYPE_MAP = {
 
 
 class _AgentsOpenDClient:
-    """Async-compatible bridge from the agents toolkit/reflection to the sync
+    """Async-compatible bridge from the agents toolkit/backtest to the sync
     :class:`OpendAdapter`.
 
-    The toolkit and reflection were written against an async client that
+    The toolkit and backtest were written against an async client that
     accepts SDK-style ktype strings (``K_DAY``); the production adapter is
     sync and accepts adapter-style ktype strings (``1d``). This bridge:
 
@@ -206,12 +206,11 @@ async def _configure_checkpointer_connection(conn: Any) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Open the algo DB pool, the agents memory pool, and start the scheduler.
+    """Open the algo DB pool, the agents pool, and start the scheduler.
 
-    The agents memory pool is separate from ``algo_repo``'s pool so memory
-    recall can fail independently of algo persistence; both share
-    ``settings.DATABASE_URL``. ``app.state.pg_pool`` is what
-    :func:`app.routers.agents._recall_memory` looks up.
+    The agents pool (``app.state.pg_pool``) is separate from ``algo_repo``'s
+    pool so the agents router's cost-cap and status queries can fail
+    independently of algo persistence; both share ``settings.DATABASE_URL``.
 
     Additionally, when ``DATABASE_URL`` is set, we open a small psycopg pool
     for :class:`AsyncPostgresSaver` (LangGraph's Postgres checkpointer) and

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { getTableColumns } from 'drizzle-orm'
+import * as schema from '../../db/schema'
 import {
   agentDecisions,
   agentMessages,
-  agentReflections,
   agentRuns,
 } from '../../db/schema'
 
@@ -63,21 +63,7 @@ describe('agent_* schema', () => {
     expect(cols.paperOrderId.notNull).toBe(false)
   })
 
-  it('agent_reflections is keyed by decisionId uniquely', () => {
-    expect((agentReflections as unknown as Record<symbol, string>)[NAME]).toBe('agent_reflections')
-    const cols = Object.keys(getTableColumns(agentReflections))
-    for (const c of [
-      'id',
-      'decisionId',
-      'reflectedAt',
-      'horizonDays',
-      'realizedReturn',
-      'benchmarkReturn',
-      'alpha',
-      'outcome',
-      'text',
-    ]) {
-      expect(cols).toContain(c)
-    }
+  it('has no agent_reflections table (reflection was removed)', () => {
+    expect(Object.keys(schema)).not.toContain('agentReflections')
   })
 })

@@ -1,7 +1,7 @@
 import { defineEventHandler, getQuery } from 'h3'
 import { eq, desc, and, sql } from 'drizzle-orm'
 import { getDb } from '../../../db/client'
-import { agentRuns, agentDecisions, agentReflections } from '../../../db/schema'
+import { agentRuns, agentDecisions } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
 import { runSymbolPattern } from '../../../types/run-symbol'
 
@@ -42,17 +42,9 @@ export default defineEventHandler(async (event) => {
       error: agentRuns.error,
       rating: agentDecisions.rating,
       confidence: agentDecisions.confidence,
-      alpha: agentReflections.alpha,
-      outcome: agentReflections.outcome,
     })
     .from(agentRuns)
     .leftJoin(agentDecisions, eq(agentDecisions.runId, agentRuns.id))
-    // One reflection row exists per role; without the role filter a
-    // reflected run came back five times (duplicate keys, 5x cost samples).
-    .leftJoin(agentReflections, and(
-      eq(agentReflections.decisionId, agentDecisions.id),
-      eq(agentReflections.role, 'overall'),
-    ))
     .where(where)
     .orderBy(desc(agentRuns.startedAt))
     .limit(50)

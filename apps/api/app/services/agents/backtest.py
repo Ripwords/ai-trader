@@ -23,8 +23,7 @@ from datetime import date
 from typing import Any, Awaitable, Callable
 
 from app.services.agents import graph as graph_mod
-from app.services.agents import reflection as reflection_mod
-from app.services.agents.reflection import RealizedReturn, compute_realized_return
+from app.services.agents.realized_return import RealizedReturn, compute_realized_return
 from app.services.agents.toolkit import OpenDClient
 from app.services.agents.usage import UsageAccumulator
 
@@ -163,7 +162,6 @@ async def run_backtest(
                     p.trade_date,
                     max_debate_rounds,
                     deep_thinking,
-                    memory_by_role={},
                     usage=usage,
                 )
             )
@@ -208,10 +206,4 @@ async def run_backtest(
     if agg.n_runs > 0:
         agg.avg_alpha = agg.total_alpha / agg.n_runs
 
-    # Suppress unused-import warning when ``reflection_mod`` isn't actually
-    # touched yet — reserved for a future "auto-reflect after backtest"
-    # hook that writes per-role lessons from each pair into memory so the
-    # next forward run starts smarter. Keeping the import explicit here
-    # signals the intent to that future hook.
-    _ = reflection_mod
     return agg

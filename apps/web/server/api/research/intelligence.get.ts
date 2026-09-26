@@ -1,6 +1,6 @@
-import { and, desc, eq } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 import { getDb } from '../../../db/client'
-import { agentDecisions, agentReflections, agentRuns } from '../../../db/schema'
+import { agentDecisions, agentRuns } from '../../../db/schema'
 import { buildResearchIntelligence } from '../../lib/research-intelligence'
 import { getOwnerId } from '../../db/repo'
 
@@ -17,16 +17,10 @@ export default defineEventHandler(async () => {
       finishedAt: agentRuns.finishedAt,
       rating: agentDecisions.rating,
       confidence: agentDecisions.confidence,
-      alpha: agentReflections.alpha,
-      outcome: agentReflections.outcome,
       costUsd: agentRuns.costUsd,
     })
     .from(agentRuns)
     .leftJoin(agentDecisions, eq(agentDecisions.runId, agentRuns.id))
-    .leftJoin(agentReflections, and(
-      eq(agentReflections.decisionId, agentDecisions.id),
-      eq(agentReflections.role, 'overall'),
-    ))
     .where(eq(agentRuns.userId, userId))
     .orderBy(desc(agentRuns.startedAt))
     .limit(200)
@@ -39,8 +33,6 @@ export default defineEventHandler(async () => {
     finishedAt: row.finishedAt,
     rating: row.rating,
     confidence: row.confidence,
-    alpha: row.alpha == null ? null : Number(row.alpha),
-    outcome: row.outcome,
     costUsd: row.costUsd == null ? null : Number(row.costUsd),
   })))
 })
