@@ -12,11 +12,14 @@ const TERMINAL_EVENTS = new Set(['run-end', 'error', 'final-state', 'decision'])
 
 export class AgentRunTee {
   private queue: AgentEvent[] = []
-  private seq = 0
+  private seq: number
   private drained: Promise<void> = Promise.resolve()
   private draining = false
 
-  constructor(public runId: string, public userId: string) {}
+  /** `startSeq` continues a resumed run's timeline after its existing rows. */
+  constructor(public runId: string, public userId: string, startSeq = 0) {
+    this.seq = startSeq
+  }
 
   push(ev: AgentEvent) {
     if (ev.type === 'heartbeat') return

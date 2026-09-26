@@ -528,17 +528,20 @@ async def resume_run(
                 + "\n"
             ).encode()
             return
-        opend = getattr(request.app.state, "opend_client", None)
-        checkpointer = getattr(request.app.state, "checkpointer", None)
-        graph = await graph_mod.build_graph_locked(
-            opend,
-            max_debate_rounds=int(cfg.get("max_debate_rounds", 1)),
-            deep_thinking=bool(cfg.get("deep_thinking", True)),
-            checkpointer=checkpointer,
-        )
         accumulator = UsageAccumulator()
 
         async def payloads() -> AsyncIterator[dict]:
+            graph = await graph_mod.build_graph_locked(
+                getattr(request.app.state, "opend_client", None),
+                max_debate_rounds=int(cfg.get("max_debate_rounds", 1)),
+                max_risk_discuss_rounds=int(cfg.get("max_risk_discuss_rounds", 1)),
+                deep_thinking=bool(cfg.get("deep_thinking", True)),
+                reasoning_effort=cfg.get("reasoning_effort", "medium"),
+                response_language=cfg.get("response_language", "en-US"),
+                selected_analysts=cfg.get("selected_analysts"),
+                company_name=cfg.get("company_name"),
+                checkpointer=getattr(request.app.state, "checkpointer", None),
+            )
             async for chunk in graph.graph.astream(
                 None,
                 config={

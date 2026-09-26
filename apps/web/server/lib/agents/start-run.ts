@@ -144,10 +144,10 @@ export async function drainIntoTee(
   upstream: Response,
   runId: string,
   userId: string,
-  opts: { idleTimeoutMs?: number } = {},
+  opts: { idleTimeoutMs?: number; startSeq?: number } = {},
 ): Promise<void> {
   const idleTimeoutMs = opts.idleTimeoutMs ?? UPSTREAM_IDLE_TIMEOUT_MS
-  const tee = new AgentRunTee(runId, userId)
+  const tee = new AgentRunTee(runId, userId, opts.startSeq)
   const reader = upstream.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''
