@@ -327,7 +327,7 @@ async def test_get_stock_data_downsamples_long_ranges_to_weekly():
     )
 
     assert "downsampled to weekly" in result
-    data_lines = [l for l in result.splitlines() if l[:4].isdigit()]
+    data_lines = [line for line in result.splitlines() if line[:4].isdigit()]
     # ~300 calendar days → ~43 weekly bars, far fewer than 120
     assert 20 < len(data_lines) <= 120
 
@@ -340,7 +340,7 @@ async def test_get_stock_data_invalid_dates_keeps_default_window():
         {"symbol": "AAPL", "start_date": "n/a", "end_date": "n/a"}
     )
     assert opend.captured_num == 252
-    data_lines = [l for l in result.splitlines() if l[:4].isdigit()]
+    data_lines = [line for line in result.splitlines() if line[:4].isdigit()]
     assert len(data_lines) == 60
 
 

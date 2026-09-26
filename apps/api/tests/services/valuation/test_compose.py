@@ -166,7 +166,6 @@ def test_veto_branch_b_high_implied_growth():
         history=_history(),
         metrics=Metrics(),
     )
-    from app.services.valuation.assumptions import Assumptions
     fake_result = ValuationResult(
         symbol="X", current_price=D("100"), fair_value=D("143"),
         margin_of_safety_pct=D("-0.30"),  # price is 1.3x fair value — branch (a) threshold is -0.50

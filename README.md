@@ -28,7 +28,7 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 cp .env.example .env
 # Edit .env:
 #   APP_PASSWORD       — what you type to log in (anything)
-#   SESSION_SECRET     — at least 32 random bytes
+#   SESSION_SECRET     — at least 32 random bytes; changing it signs everyone out
 #   INTERNAL_BEARER    — used between Nuxt and FastAPI; generate with `openssl rand -base64 32`
 #   ENCRYPTION_KEY     — encrypts stored provider keys; generate with `openssl rand -base64 32`
 #   The web service refuses to start while INTERNAL_BEARER or ENCRYPTION_KEY is
@@ -43,6 +43,8 @@ open http://localhost:3000
 Sign in with `APP_PASSWORD`, open **Settings**, add a model provider, and pick a chat model and a quick model (see [Model providers](#model-providers)). Then type `Show me NVDA daily` in the chat box. The empty chat also offers four opening prompts drawn from your watchlist, holdings, and recently triggered alerts; they redraw on every new chat and fall back to a static set when nothing is configured yet.
 
 If the chat says "No model provider is configured", nothing has been saved in Settings yet. The link under the chat box goes there.
+
+A sign-in lasts 30 days, then the app asks for the password again. After 10 wrong passwords from one address in 15 minutes, login answers 429 until the window passes. The count lives in memory and resets when the web container restarts. Behind a reverse proxy every visitor shares the proxy's address, so the limit applies to everyone at once. The session cookie is marked `Secure` when the request arrived over https (directly or with `X-Forwarded-Proto: https`); set `SESSION_COOKIE_SECURE=true` or `false` in `.env` to force it.
 
 ## Model providers
 
@@ -133,7 +135,8 @@ Tools are defined in `apps/web/server/llm/tools.ts` and the routing rules in `ap
 
 - Live (REAL) orders need `ALLOW_LIVE_TRADING=true` on the api **and** a typed confirmation phrase in the chat turn. Placement and modification both count against `MAX_DAILY_LIVE_NOTIONAL_USD`; orders moomoo reports at price 0 (market orders) are valued at the last trade.
 - The TradingAgents pipeline stops at `AGENTS_DAILY_COST_USD_CAP` per day across runs, resumes and every backtest pair.
-- Algo strategies run in an AST-validated sandbox: no imports beyond math/numpy/pandas/statistics, no dunder access, and no pandas/numpy file IO methods (`read_*`, `to_*`, `np.load`, ...). Every backtest and every live `on_bar` call runs in a child process with a wall-clock limit (`ALGO_BACKTEST_TIMEOUT_SEC`, `ALGO_STRATEGY_TIMEOUT_SEC`), so a runaway loop is killed and reported instead of stalling the api. The scheduler only ever places paper orders.
+- Algo strategies run in an AST-validated sandbox: no imports beyond math/numpy/pandas/statistics, no dunder access, and no pandas/numpy file IO methods (`read_*`, `to_*`, `np.load`, ...). Every backtest and every live `on_bar` call runs in a child process with a wall-clock limit (`ALGO_BACKTEST_TIMEOUT_SEC`, `ALGO_STRATEGY_TIMEOUT_SEC`), so a runaway loop is killed and reported instead of stalling the api. The scheduler only ever places paper orders. A tick that fails before the strategy decides (klines, compile, position query, `on_bar`) is recorded as an `ERROR` signal. After an api restart the pyramiding count is rebuilt from the signal history, so a held position does not get a fresh `pyramiding_max` budget.
+- When OpenD is down, each api call to it makes one connection attempt (at most 20 s) and then fails with 502, or reports `reachable: false` for `/quote/state`. OpenD calls run off the event loop, so the other api routes keep answering.
 - Valuations are computed in the currency the company reports in. When the quote trades in another currency (an HKD-listed company reporting in CNY) the price series is converted at the current FX rate and the result says so; the card labels prices with the ISO code.
 - The agent streams **NDJSON** chunks (`run-start`, `node-start`, `node-end`, `tool-call`, `tool-result`, `debate-round`, `risk-debate-turn`, `report`, `decision`, `synthesis`, `final-state`) which the chat + research UIs parse inline.
 

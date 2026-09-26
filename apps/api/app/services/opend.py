@@ -42,6 +42,54 @@ _KTYPE_TO_SDK = {
 }
 
 
+# Bound for how long a query waits for a context that never reached READY.
+# The SDK's own connect attempt is already capped at 20s by NetManager.
+_SYNC_QUERY_CONNECT_TIMEOUT_S = 5.0
+
+_single_attempt_classes: dict[type, type] = {}
+
+
+def _single_attempt(cls: type) -> type:
+    """Subclass of an SDK context that connects once instead of forever.
+
+    The SDK constructor loops ``connect; sleep(6)`` until OpenD answers and
+    only exits early when ``_auto_reconnect`` is false, but it sets that flag
+    to True just before the loop and exposes no parameter for it. The first
+    ``_init_connect_sync`` call inside the loop is the only hook, so we clear
+    the flag there.
+    """
+    cached = _single_attempt_classes.get(cls)
+    if cached is not None:
+        return cached
+
+    def _init_connect_sync(self: Any) -> Any:
+        self._auto_reconnect = False
+        self.set_sync_query_connect_timeout(_SYNC_QUERY_CONNECT_TIMEOUT_S)
+        return cls._init_connect_sync(self)  # type: ignore[attr-defined]
+
+    def close(self: Any, *args: Any, **kwargs: Any) -> Any:
+        # A context whose connect failed is already CLOSED, so the SDK's
+        # close() returns early and leaves its non-daemon callback thread
+        # running; one leaked thread per failed poll, and the process can't
+        # exit. CallbackExecutor.close() is safe to repeat.
+        try:
+            return cls.close(self, *args, **kwargs)  # type: ignore[attr-defined]
+        finally:
+            self._callback_executor.close()
+
+    sub = type(
+        f"SingleAttempt{cls.__name__}",
+        (cls,),
+        {"_init_connect_sync": _init_connect_sync, "close": close},
+    )
+    _single_attempt_classes[cls] = sub
+    return sub
+
+
+def _is_real_sdk(ctx: Any) -> bool:
+    return any(c.__module__.startswith("moomoo") for c in type(ctx).__mro__)
+
+
 class OpendAdapter:
     """Thin synchronous wrapper around moomoo OpenQuoteContext.
 
@@ -84,7 +132,7 @@ class OpendAdapter:
         if self._rsa_key_path:
             SysConfig.set_init_rsa_file(self._rsa_key_path)
             kwargs["is_encrypt"] = True
-        return OpenQuoteContext(**kwargs)
+        return _single_attempt(OpenQuoteContext)(**kwargs)
 
     def _default_trade_ctx_factory(self) -> Any:
         # Trade has the same encryption requirement as quote (see
@@ -101,7 +149,7 @@ class OpendAdapter:
         if self._rsa_key_path:
             SysConfig.set_init_rsa_file(self._rsa_key_path)
             kwargs["is_encrypt"] = True
-        return OpenSecTradeContext(**kwargs)
+        return _single_attempt(OpenSecTradeContext)(**kwargs)
 
     def get_kline(self, code: str, *, ktype: KLineType, num: int) -> KLineResponse:
         """Fetch latest N bars via request_history_kline (no subscribe needed).
@@ -134,7 +182,7 @@ class OpendAdapter:
         try:
             try:
                 from moomoo import AuType, KLType  # type: ignore[import-not-found]
-                is_real_sdk = "moomoo" in str(type(ctx))
+                is_real_sdk = _is_real_sdk(ctx)
                 sdk_ktype = getattr(KLType, _KTYPE_TO_SDK[ktype]) if is_real_sdk else _KTYPE_TO_SDK[ktype]
                 au_type = AuType.QFQ if is_real_sdk else "QFQ"
             except ImportError:
@@ -142,7 +190,7 @@ class OpendAdapter:
                 au_type = "QFQ"
 
             # Fake ctx in tests still uses get_cur_kline shape; production uses request_history_kline.
-            if hasattr(ctx, "request_history_kline") and "moomoo" in str(type(ctx)):
+            if hasattr(ctx, "request_history_kline") and _is_real_sdk(ctx):
                 ret, data, _page_key = ctx.request_history_kline(
                     code,
                     start=start.isoformat(),
@@ -305,7 +353,7 @@ class OpendAdapter:
         try:
             try:
                 from moomoo import SubType  # type: ignore[import-not-found]
-                is_real_sdk = "moomoo" in str(type(ctx))
+                is_real_sdk = _is_real_sdk(ctx)
                 subtype = SubType.ORDER_BOOK if is_real_sdk else "ORDER_BOOK"
             except ImportError:
                 subtype = "ORDER_BOOK"

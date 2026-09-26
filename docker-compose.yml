@@ -96,6 +96,7 @@ services:
       # reads process.env directly).
       NUXT_APP_PASSWORD: ${APP_PASSWORD}
       NUXT_SESSION_SECRET: ${SESSION_SECRET}
+      NUXT_SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-}
       NUXT_INTERNAL_BEARER: ${INTERNAL_BEARER}
       # Encrypts stored LLM provider keys (llm_providers.api_key).
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}

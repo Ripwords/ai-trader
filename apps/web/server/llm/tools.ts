@@ -5,6 +5,9 @@ import type { ApiClient } from './http'
 import { searchWithFallback } from '../lib/search'
 import { getContextualNews } from '../lib/contextual-news'
 
+// Self-fetches to this app's own /api routes; none of them stream.
+const SELF_FETCH_TIMEOUT_MS = 30_000
+
 interface MakeToolsOptions {
   event?: H3Event
   latestUserText?: string
@@ -298,6 +301,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/valuation?symbol=${encodeURIComponent(symbol)}`, {
+          signal: AbortSignal.timeout(SELF_FETCH_TIMEOUT_MS),
           headers: {
             ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}),
           },
@@ -577,6 +581,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/agents-run`, {
+          signal: AbortSignal.timeout(SELF_FETCH_TIMEOUT_MS),
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -607,6 +612,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/agent-messages?run_id=${encodeURIComponent(runId)}&since=999999`, {
+          signal: AbortSignal.timeout(SELF_FETCH_TIMEOUT_MS),
           headers: { ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}) },
         })
         if (!res.ok) return { runId, status: 'unknown', error: `status check failed: ${res.status}` }
@@ -703,8 +709,9 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       }),
       // Async generator: each yield is sent as a preliminary
       // `tool-output-available` frame, which keeps the chat stream moving
-      // during the run and drives AgentsDebateCard's node timeline. The
-      // return value is the final output the LLM consumes.
+      // during the run and drives AgentsDebateCard's node timeline. The SDK
+      // takes the LAST YIELD as the final output the LLM consumes and drops
+      // the return value, so every outcome, errors included, is yielded.
       execute: async function* (args, { abortSignal }) {
         const events: Array<{ type: 'node-start'; node: string }> = []
         yield { events: [...events] }
@@ -713,6 +720,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         // Without the session cookie the self-fetch is 401'd by auth middleware.
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/agents-run`, {
+          signal: AbortSignal.timeout(SELF_FETCH_TIMEOUT_MS),
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -724,11 +732,15 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         if (res.status === 409) {
           // A run is already in flight for this symbol; report on that one.
           const body = await res.json().catch(() => ({})) as { data?: { run_id?: string | null } }
-          if (!body.data?.run_id) return { events, error: 'a run is already in progress for this symbol' }
+          if (!body.data?.run_id) {
+            yield { events, error: 'a run is already in progress for this symbol' }
+            return
+          }
           runId = body.data.run_id
         }
         else if (!res.ok) {
-          return { events, error: `agents service failed: ${res.status}` }
+          yield { events, error: `agents service failed: ${res.status}` }
+          return
         }
         else {
           runId = (await res.json() as { runId: string }).runId
@@ -739,7 +751,8 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         for await (const frame of tailRun(runId, { signal: abortSignal })) {
           if (frame.kind === 'end') {
             if (frame.status !== 'complete') {
-              return { runId, events, ...verdict, error: `run ${frame.status}: ${frame.error ?? 'no reason recorded'}` }
+              yield { runId, events, ...verdict, error: `run ${frame.status}: ${frame.error ?? 'no reason recorded'}` }
+              return
             }
             break
           }
@@ -752,9 +765,10 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         }
 
         if (!verdict.rating) {
-          return { runId, events, error: 'no decision emitted' }
+          yield { runId, events, error: 'no decision emitted' }
+          return
         }
-        return { runId, events, ...verdict }
+        yield { runId, events, ...verdict }
       },
     }),
 

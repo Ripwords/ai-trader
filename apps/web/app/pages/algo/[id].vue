@@ -595,7 +595,7 @@ async function runBacktest() {
                   <td class="py-1.5 text-[var(--paper-2)]">{{ shortTs(sig.ts) }}</td>
                   <td
                     class="py-1.5"
-                    :class="sig.side === 'BUY' ? 'text-[var(--tape-up)]' : 'text-[var(--tape-down)]'"
+                    :class="sig.side === 'BUY' ? 'text-[var(--tape-up)]' : sig.side === 'SELL' ? 'text-[var(--tape-down)]' : 'text-[var(--paper-3)]'"
                   >{{ sig.side }}</td>
                   <td class="py-1.5 text-right text-[var(--paper-1)]">{{ sig.qty }}</td>
                   <td class="py-1.5 text-right text-[var(--paper-1)]">

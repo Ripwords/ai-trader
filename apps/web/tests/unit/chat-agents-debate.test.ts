@@ -47,18 +47,12 @@ function startResponse() {
   return fetchSpy
 }
 
+// Mirrors the AI SDK's executeTool: a generator's final output is its last
+// yield; whatever it returns is discarded.
 async function drain(gen: ExecuteReturn): Promise<{ yields: unknown[]; final: unknown }> {
   const yields: unknown[] = []
-  let final: unknown
-  while (true) {
-    const r = await gen.next()
-    if (r.done) {
-      final = r.value
-      break
-    }
-    yields.push(r.value)
-  }
-  return { yields, final }
+  for await (const output of gen) yields.push(output)
+  return { yields, final: yields.at(-1) }
 }
 
 describe('agents_debate tool catalogue', () => {

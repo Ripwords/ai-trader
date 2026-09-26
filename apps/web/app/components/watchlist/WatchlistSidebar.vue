@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useOpendStatus } from '~/composables/useOpendStatus'
 
 interface Item { code: string; name: string | null; group: string }
-interface OpendStatus { reachable: boolean; qot_logined: boolean; trd_logined: boolean; server_ver?: string }
 
 const items = ref<Item[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 const newCode = ref('')
-const status = ref<OpendStatus>({ reachable: false, qot_logined: false, trd_logined: false })
+const { status } = useOpendStatus()
 
 const emit = defineEmits<{ select: [code: string] }>()
 
@@ -24,27 +24,19 @@ async function refresh() {
   }
 }
 
-async function refreshStatus() {
-  try {
-    status.value = await $fetch<OpendStatus>('/api/opend-status')
-  } catch {
-    status.value = { reachable: false, qot_logined: false, trd_logined: false }
-  }
-}
-
 const statusLabel = computed(() => {
+  if (status.value === null) return 'opend checking'
   if (!status.value.reachable) return 'opend down'
   if (!status.value.qot_logined) return 'opend unlocked'
   return 'opend live'
 })
 
 const statusColor = computed(() => {
+  if (status.value === null) return 'var(--paper-3)'
   if (!status.value.reachable) return 'var(--tape-down)'
   if (!status.value.qot_logined) return 'var(--accent)'
   return 'var(--tape-up)'
 })
-
-let pollHandle: ReturnType<typeof setInterval> | undefined
 
 async function add() {
   const code = newCode.value.trim().toUpperCase()
@@ -77,12 +69,6 @@ function split(code: string): [string, string] {
 
 onMounted(() => {
   refresh()
-  refreshStatus()
-  pollHandle = setInterval(refreshStatus, 6000)
-})
-
-onUnmounted(() => {
-  if (pollHandle) clearInterval(pollHandle)
 })
 </script>
 
@@ -159,7 +145,7 @@ onUnmounted(() => {
     <div class="px-5 py-3 border-t hairline flex items-center gap-2">
       <span
         class="w-1.5 h-1.5 rounded-full"
-        :class="{ 'dot-pulse': status.reachable && status.qot_logined }"
+        :class="{ 'dot-pulse': status?.reachable && status?.qot_logined }"
         :style="{ background: statusColor }"
       />
       <span class="font-mono text-xs uppercase tracking-[0.15em] text-[var(--paper-3)]">{{ statusLabel }}</span>

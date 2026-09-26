@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { Rating } from '../../../types/agents'
 import { parseVerdictReport } from '../../lib/verdictReport'
 import MarkdownText from './MarkdownText.vue'
+import TechnicalDetails from '../shared/TechnicalDetails.vue'
 
 interface Props {
   rating: Rating
@@ -63,9 +64,6 @@ const ringDash = computed(() => {
   <section class="verdict" :data-tone="tone" data-testid="agent-verdict">
     <header class="verdict__head">
       <span class="verdict__eyebrow">verdict transmitted</span>
-      <span v-if="runId" class="verdict__runid" data-mono>
-        run · {{ runId.slice(0, 8) }}
-      </span>
     </header>
 
     <div class="verdict__hero">
@@ -133,6 +131,8 @@ const ringDash = computed(() => {
         <MarkdownText :content="section.body" flush class="verdict__section-body" />
       </article>
     </div>
+
+    <TechnicalDetails :rows="runId ? [{ label: 'run id', value: runId }] : []" />
   </section>
 </template>
 
@@ -188,13 +188,6 @@ const ringDash = computed(() => {
 .verdict[data-tone="up"]      .verdict__eyebrow { color: var(--tape-up); }
 .verdict[data-tone="down"]    .verdict__eyebrow { color: var(--tape-down); }
 .verdict[data-tone="neutral"] .verdict__eyebrow { color: var(--accent); }
-
-.verdict__runid {
-  font-size: 0.66rem;
-  letter-spacing: 0.18em;
-  color: var(--paper-3);
-  text-transform: uppercase;
-}
 
 /* ─── Hero row: rating slab + confidence ring ─── */
 .verdict__hero {

@@ -28,6 +28,12 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, TypedDict
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
+from app.schemas.algo import Strategy
+from app.services.algo import repo
+from app.services.algo.sandbox import compile_strategy
+
 
 class AccountSummary(TypedDict):
     """Lightweight subset of moomoo's portfolio response — only the totals
@@ -52,11 +58,6 @@ def _now_naive_utc() -> datetime:
     """Naive UTC datetime, matching the timestamp (sans-tz) columns Drizzle owns."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-import pandas as pd
-
-from app.schemas.algo import Strategy
-from app.services.algo import repo
-from app.services.algo.sandbox import compile_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,26 @@ def _code_hash(code: str) -> str:
     return hashlib.sha256(code.encode("utf-8")).hexdigest()[:16]
 
 
+def adds_since_flat(position: int, executed: list[tuple[str, int]]) -> int:
+    """BUY orders since the position was last flat.
+
+    Walks executed orders newest first, undoing each one from the live
+    position until it reaches zero. History that runs out before flat (a
+    position partly opened by hand) counts every recorded BUY.
+    """
+    count = 0
+    remaining = position
+    for side, qty in executed:
+        if remaining <= 0:
+            break
+        if side == "BUY":
+            count += 1
+            remaining -= qty
+        elif side == "SELL":
+            remaining += qty
+    return count
+
+
 class Scheduler:
     """A single asyncio loop that ticks enabled strategies on cadence.
 
@@ -247,8 +268,8 @@ class Scheduler:
         self._last_fire: dict[str, float] = {}
         # Live pyramiding state: BUY adds since the position was last seen
         # flat, per strategy (mirrors the backtester's adds_since_flat).
-        # In-memory only — a process restart with an open position forgets
-        # prior adds and allows up to pyramiding_max fresh ones.
+        # Rebuilt from algo_signals the first time a strategy is seen
+        # holding, so a restart doesn't hand out a fresh pyramiding budget.
         self._adds_since_flat: dict[str, int] = {}
         # Compiled strategy cache, keyed by code-hash.
         self._validated: set[str] = set()
@@ -320,7 +341,7 @@ class Scheduler:
             bars = await self._get_klines(s.symbol, 200)
         except Exception as exc:  # noqa: BLE001
             await repo.append_signal(
-                s.id, _now_naive_utc(), "BUY", 0, None, None,
+                s.id, _now_naive_utc(), "ERROR", 0, None, None,
                 f"klines failed: {exc}",
             )
             return
@@ -337,7 +358,7 @@ class Scheduler:
                 compile_strategy(s.code)
             except Exception as exc:  # noqa: BLE001
                 await repo.append_signal(
-                    s.id, _now_naive_utc(), "BUY", 0, None, None,
+                    s.id, _now_naive_utc(), "ERROR", 0, None, None,
                     f"compile failed: {exc}",
                 )
                 return
@@ -350,13 +371,17 @@ class Scheduler:
             # believes it holds nothing will happily re-buy. Record the
             # failure and sit this tick out.
             await repo.append_signal(
-                s.id, _now_naive_utc(), "BUY", 0, None, None,
+                s.id, _now_naive_utc(), "ERROR", 0, None, None,
                 f"get_position failed: {exc}",
             )
             return
         if position <= 0:
             # Observed flat → pyramiding counter resets (backtester parity).
             self._adds_since_flat[s.id] = 0
+        elif s.id not in self._adds_since_flat:
+            self._adds_since_flat[s.id] = adds_since_flat(
+                position, await repo.list_executed_signals(s.id)
+            )
 
         # Pull live paper-account totals (in the symbol's quote currency, so
         # they are comparable with its price) so strategies can gate on
@@ -409,7 +434,7 @@ class Scheduler:
             )
         except Exception as exc:  # noqa: BLE001
             await repo.append_signal(
-                s.id, _now_naive_utc(), "BUY", 0, None, None,
+                s.id, _now_naive_utc(), "ERROR", 0, None, None,
                 f"on_bar raised: {exc}",
             )
             return

@@ -139,7 +139,7 @@ async def update_strategy(strategy_id: str, body: StrategyUpdate) -> Strategy | 
     for i, (k, v) in enumerate(fields.items(), start=1):
         set_parts.append(f"{k} = ${i}")
         args.append(v)
-    set_parts.append(f"updated_at = now()")
+    set_parts.append("updated_at = now()")
     args.append(strategy_id)
     sql = (
         f"UPDATE algo_strategies SET {', '.join(set_parts)} "
@@ -278,6 +278,24 @@ async def append_signal(
         order_id=row["order_id"],
         error=row["error"],
     )
+
+
+async def list_executed_signals(
+    strategy_id: str, limit: int = 500
+) -> list[tuple[str, int]]:
+    """(side, qty) of signals that became orders, newest first."""
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT side, qty FROM algo_signals
+            WHERE strategy_id = $1 AND order_id IS NOT NULL
+            ORDER BY ts DESC, id DESC
+            LIMIT $2
+            """,
+            strategy_id,
+            limit,
+        )
+    return [(r["side"], int(r["qty"])) for r in rows]
 
 
 async def count_orders_today(strategy_id: str) -> int:

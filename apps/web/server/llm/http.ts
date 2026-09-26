@@ -1,8 +1,16 @@
 import { ofetch } from 'ofetch'
 
+// The api's own OpenD connect attempt can take 20 s, plus a query.
+export const API_TIMEOUT_MS = 30_000
+// The api caps one backtest at ALGO_BACKTEST_TIMEOUT_SEC (120 s by default).
+export const BACKTEST_TIMEOUT_MS = 150_000
+// One Yahoo-backed valuation per watchlist symbol.
+export const SCREEN_TIMEOUT_MS = 120_000
+
 export interface ApiClientOptions {
   baseUrl: string
   bearer: string
+  timeoutMs?: number
 }
 
 export interface Bar {
@@ -131,6 +139,7 @@ export class ApiClient {
     this.fetch = ofetch.create({
       baseURL: opts.baseUrl,
       headers: { Authorization: `Bearer ${opts.bearer}` },
+      timeout: opts.timeoutMs ?? API_TIMEOUT_MS,
     })
   }
 
@@ -241,7 +250,7 @@ export class ApiClient {
 
   valuationScreen(args: { symbols?: string[] } = {}): Promise<ValuationScreenResponse> {
     const query = args.symbols?.length ? { symbols: args.symbols.join(',') } : undefined
-    return this.fetch('/valuation/screen', { query })
+    return this.fetch('/valuation/screen', { query, timeout: SCREEN_TIMEOUT_MS })
   }
 }
 
@@ -362,7 +371,8 @@ export interface AlgoSignal {
   id: number
   strategy_id: string
   ts: string
-  side: 'BUY' | 'SELL'
+  // ERROR: the tick failed before the strategy produced an intent.
+  side: 'BUY' | 'SELL' | 'ERROR'
   qty: number
   price: number | null
   order_id: string | null
@@ -401,6 +411,7 @@ export function getAlgoApi(): AlgoApi {
   const fetch = ofetch.create({
     baseURL: cfg.apiBaseUrl as string,
     headers: { Authorization: `Bearer ${cfg.internalBearer as string}` },
+    timeout: API_TIMEOUT_MS,
   })
   return {
     listStrategies: () => fetch('/algo/strategies'),
@@ -408,7 +419,7 @@ export function getAlgoApi(): AlgoApi {
     getStrategy: (id) => fetch(`/algo/strategies/${id}`),
     updateStrategy: (id, body) => fetch(`/algo/strategies/${id}`, { method: 'PUT', body }),
     deleteStrategy: async (id) => { await fetch(`/algo/strategies/${id}`, { method: 'DELETE' }) },
-    backtest: (id, body) => fetch(`/algo/strategies/${id}/backtest`, { method: 'POST', body }),
+    backtest: (id, body) => fetch(`/algo/strategies/${id}/backtest`, { method: 'POST', body, timeout: BACKTEST_TIMEOUT_MS }),
     getRun: (runId) => fetch(`/algo/runs/${runId}`),
     validateCode: (body) => fetch('/algo/validate', { method: 'POST', body }),
     listSignals: (args = {}) => fetch('/algo/signals', { query: args }),

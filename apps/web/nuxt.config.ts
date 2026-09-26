@@ -42,6 +42,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     appPassword: '',
     sessionSecret: '',
+    sessionCookieSecure: '',
     internalBearer: '',
     apiBaseUrl: 'http://api:8000',
     // Search keys are read directly from process.env in the chat layer;
