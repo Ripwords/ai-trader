@@ -9,6 +9,7 @@ const repo = vi.hoisted(() => ({
   appendMessages: vi.fn(async () => {}),
   createThread: vi.fn(async () => 'th-new'),
   getThread: vi.fn(async (_u: string, id: string) => (id === 'th-1' ? { id } : null)),
+  lastMessageId: vi.fn(async (_thread: string): Promise<string | null> => null),
 }))
 
 /** The model's token stream, fed by the test. */
@@ -160,6 +161,20 @@ describe('POST /api/chat', () => {
 
     finish()
     await until(() => !chatStreams.isActive('th-1'))
+  })
+})
+
+describe('POST /api/chat retry', () => {
+  it('does not save the question again when retrying its reply', async () => {
+    repo.lastMessageId.mockResolvedValueOnce('u1')
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    finish()
+    await until(() => !chatStreams.isActive('th-1'))
+
+    const roles = (repo.appendMessages.mock.calls as unknown as Array<[string, Array<{ role: string }>]>)
+      .flatMap(([, msgs]) => msgs.map(m => m.role))
+    expect(roles).toEqual(['assistant'])
   })
 })
 

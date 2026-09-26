@@ -59,6 +59,18 @@ export async function getThreadMessages(threadId: string) {
   }>
 }
 
+/** The UIMessage id of the thread's newest saved message, if any. */
+export async function lastMessageId(threadId: string): Promise<string | null> {
+  const db = getDb()
+  const [row] = await db
+    .select({ id: sql<string | null>`${chatMessages.content}->>'id'` })
+    .from(chatMessages)
+    .where(eq(chatMessages.threadId, threadId))
+    .orderBy(desc(chatMessages.id))
+    .limit(1)
+  return row?.id ?? null
+}
+
 export async function createThread(userId: string, title: string): Promise<string> {
   const db = getDb()
   const inserted = await db

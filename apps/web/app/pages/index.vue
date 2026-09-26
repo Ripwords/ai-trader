@@ -12,6 +12,7 @@ import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
 import { useMediaQuery } from '@vueuse/core'
 import { BorderBeam } from 'vue-border-beam'
 import { requestRunNotificationPermission } from '../lib/notify'
+import { followRunningReply, interruptionOf, reattach, recoverReply, replyEnding } from '../lib/chat-recovery'
 import { buildMirrorStyle, cycleIndex, filterCommandPalette, splitSlashHighlight, type PaletteItem } from '../lib/slash'
 import { DEFAULT_SUGGESTIONS } from '../../server/lib/chat-suggestions'
 
@@ -239,14 +240,22 @@ const conversationMessage = ref('')
 let contextTimer: ReturnType<typeof setTimeout> | null = null
 let contextSeq = 0
 
+// The server generates each reply detached from this page. A broken stream,
+// a reload, or a second tab reattaches to it instead of asking again.
+const settling = ref(false)
+// The server refused a send because this thread is still generating a reply.
+let refusedBusy = false
+
 const chat = new Chat({
   transport: new DefaultChatTransport({
     api: '/api/chat',
     prepareSendMessagesRequest: ({ messages, body }) => ({
       body: { ...body, messages, chatId: chatId.value, maxSteps: maxSteps.value },
     }),
+    prepareReconnectToStreamRequest: () => ({ api: `/api/chat/${chatId.value}/stream` }),
     fetch: async (url, init) => {
       const res = await fetch(url, init)
+      if (res.status === 409) refusedBusy = true
       const headerId = res.headers.get('X-Chat-Id')
       if (headerId && headerId !== chatId.value) {
         chatId.value = headerId
@@ -257,7 +266,74 @@ const chat = new Chat({
     },
   }),
   onError(err) { console.error('chat error', err) },
+  onFinish({ isError }) {
+    if (isError && !settling.value) void recoverFromError()
+  },
 })
+
+function whenOnline(): Promise<void> {
+  if (navigator.onLine) return Promise.resolve()
+  return new Promise(resolve => window.addEventListener('online', () => resolve(), { once: true }))
+}
+
+async function settle<T>(work: () => Promise<T>): Promise<T> {
+  settling.value = true
+  try {
+    return await work()
+  } finally {
+    settling.value = false
+  }
+}
+
+async function recoverFromError() {
+  const id = chatId.value
+  if (!id) return
+  const reload = () => loadConversation(id)
+  await nextTick()
+  if (refusedBusy) {
+    refusedBusy = false
+    const unsent = await settle(() => followRunningReply(chat, reload))
+    if (unsent) input.value = unsent
+    return
+  }
+  await settle(() => recoverReply(chat, { reload, online: whenOnline }))
+}
+
+async function openConversation(id: string | null) {
+  await settle(async () => {
+    await loadConversation(id)
+    if (id && id === chatId.value) await reattach(chat, () => loadConversation(id))
+  })
+}
+
+// Stop ends the generation on the server too; the saved partial reply, marked
+// stopped, then replaces the one on screen.
+async function stopReply() {
+  chat.stop()
+  const id = chatId.value
+  if (!id) return
+  await $fetch(`/api/chat/${id}/stop`, { method: 'POST' }).catch(() => {})
+  if (id === chatId.value) await loadConversation(id)
+}
+
+const interruption = computed(() => interruptionOf({
+  status: chat.status,
+  error: chat.error,
+  messages: chat.messages,
+  settling: settling.value,
+}))
+const interruptionText = computed(() => {
+  const i = interruption.value
+  if (!i) return ''
+  if (i.kind === 'error') return i.message
+  return i.kind === 'stopped'
+    ? 'Reply stopped.'
+    : 'This message has no reply. The reply may have been cut off by a restart.'
+})
+function retryReply() {
+  chat.clearError()
+  void chat.regenerate()
+}
 
 async function loadConversation(id: string | null) {
   if (!id) {
@@ -283,7 +359,7 @@ async function loadConversation(id: string | null) {
 }
 
 onMounted(async () => {
-  if (chatId.value) await loadConversation(chatId.value)
+  if (chatId.value) await openConversation(chatId.value)
   else scheduleContextEstimate(0)
 })
 
@@ -304,7 +380,7 @@ watch(() => route.query.c, async (next) => {
   // threads without stopping it copies the old reply into the new thread.
   chat.stop()
   chatId.value = nextId
-  await loadConversation(nextId)
+  await openConversation(nextId)
 })
 
 function startNewChat() {
@@ -611,8 +687,34 @@ function agentsVerdict(output: unknown) {
               >{{ part.text }}</p>
             </template>
           </template>
+          <p
+            v-if="replyEnding(message) && message.id !== chat.messages.at(-1)?.id"
+            class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)]"
+          >
+            {{ replyEnding(message)?.kind === 'stopped' ? 'stopped' : 'ended with an error' }}
+          </p>
         </template>
       </UChatMessages>
+      <div
+        v-if="hasMessages && interruption"
+        class="max-w-3xl mx-auto w-full page-x pb-3"
+        data-testid="chat-interruption"
+      >
+        <div
+          class="flex items-start justify-between gap-4 border hairline bg-[var(--ink-2)] px-3 py-2"
+          :class="interruption.kind === 'error' ? 'border-[var(--tape-down)]' : ''"
+        >
+          <p class="min-w-0 text-sm text-[var(--paper-2)] break-words">{{ interruptionText }}</p>
+          <button
+            type="button"
+            class="shrink-0 font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--accent)]"
+            data-testid="chat-retry"
+            @click="retryReply()"
+          >
+            retry
+          </button>
+        </div>
+      </div>
     </main>
 
     <footer class="composer-footer page-x border-t hairline shrink-0">
@@ -765,7 +867,7 @@ function agentsVerdict(output: unknown) {
                   color="neutral"
                   variant="solid"
                   :ui="SUBMIT_UI"
-                  @stop="chat.stop()"
+                  @stop="stopReply()"
                   @reload="chat.regenerate()"
                 />
               </UChatPrompt>
@@ -783,7 +885,7 @@ function agentsVerdict(output: unknown) {
                   color="neutral"
                   variant="solid"
                   :ui="SUBMIT_UI"
-                  @stop="chat.stop()"
+                  @stop="stopReply()"
                   @reload="chat.regenerate()"
                 />
               </UChatPrompt>

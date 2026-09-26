@@ -5,6 +5,7 @@ import {
   createThread,
   getOwnerId,
   getThread,
+  lastMessageId,
   titleFromText,
 } from '../db/repo'
 import { getApiClient } from '../llm/http'
@@ -53,7 +54,9 @@ export default defineEventHandler(async (event) => {
   if (chatStreams.isActive(thread)) throw busy()
 
   // Persist the user message immediately so it survives a refresh during streaming.
-  if (newestUser) {
+  // A retry resends the question; it is saved already unless its first send
+  // never reached us.
+  if (newestUser && (!newestUser.id || newestUser.id !== await lastMessageId(thread))) {
     await appendMessages(thread, [newestUser])
   }
 
