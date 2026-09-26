@@ -68,8 +68,7 @@ export function modelSpec(kind: ProviderKind, modelId: string): string {
 }
 
 export function buildLanguageModel(config: ModelConfig): LanguageModel {
-  // An explicit '' stops each SDK from falling back to its *_API_KEY env var.
-  const apiKey = config.apiKey ?? ''
+  const apiKey = config.apiKey
   const baseURL = config.baseUrl ?? undefined
   switch (config.kind) {
     case 'anthropic':
@@ -80,11 +79,9 @@ export function buildLanguageModel(config: ModelConfig): LanguageModel {
       return createGoogleGenerativeAI({ apiKey, baseURL })(config.modelId)
     case 'deepseek':
       return createDeepSeek({ apiKey, baseURL })(config.modelId)
-    // Gateways and local servers speak chat completions, not OpenAI's Responses API.
+    // OpenRouter speaks chat completions, not OpenAI's Responses API.
     case 'openrouter':
-      return createOpenAI({ apiKey, baseURL: baseURL ?? PROVIDER_KIND_META.openrouter.defaultBaseUrl ?? undefined }).chat(config.modelId)
-    case 'openai_compatible':
-      return createOpenAI({ apiKey, baseURL }).chat(config.modelId)
+      return createOpenAI({ apiKey, baseURL: baseURL ?? PROVIDER_KIND_META.openrouter.defaultBaseUrl }).chat(config.modelId)
     default: {
       const unhandled: never = config.kind
       throw new Error(`Unhandled provider kind ${String(unhandled)}`)

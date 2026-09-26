@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import ValidationError
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_litellm import ChatLiteLLM
@@ -82,10 +83,11 @@ def test_openrouter_defaults_to_the_openrouter_endpoint() -> None:
     assert model.openai_api_base == "https://openrouter.ai/api/v1"
 
 
-def test_openai_compatible_runs_without_a_key() -> None:
-    model = build_role_model(_role("openai_compatible", api_key=None, base_url="http://ollama:11434/v1"))
-    assert isinstance(model, ChatOpenAI)
-    assert model.openai_api_base == "http://ollama:11434/v1"
+def test_only_online_providers_with_a_key_are_accepted() -> None:
+    with pytest.raises(ValidationError):
+        _role("openai_compatible", base_url="http://ollama:11434/v1")
+    with pytest.raises(ValidationError):
+        _role("openai", api_key=None)
 
 
 def test_google_gets_key_and_base_url_without_the_api_version() -> None:
@@ -108,9 +110,9 @@ def test_reasoning_effort_maps_to_the_native_knob_only_for_native_providers() ->
     anthropic = build_role_model(_role("anthropic"), reasoning_effort="high")
     assert isinstance(anthropic, ChatAnthropic)
     assert anthropic.effort == "high"
-    local = build_role_model(_role("openai_compatible", base_url="http://ollama:11434/v1"), reasoning_effort="high")
-    assert isinstance(local, ChatOpenAI)
-    assert local.reasoning_effort is None
+    gateway = build_role_model(_role("openrouter"), reasoning_effort="high")
+    assert isinstance(gateway, ChatOpenAI)
+    assert gateway.reasoning_effort is None
 
 
 def test_models_are_built_through_tradingagents_init_chat_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,13 +135,13 @@ def test_build_graph_gives_the_chat_role_to_deep_agents_and_quick_to_fast_ones(t
 
     config = LlmRuntimeConfig(
         chat=_role("anthropic"),
-        quick=_role("openai_compatible", api_key=None, base_url="http://ollama:11434/v1"),
+        quick=_role("openrouter", base_url="https://gateway.example/v1"),
     )
     ta = build_graph(None, models=config, results_dir=tmp_path)
     assert isinstance(ta.deep_thinking_llm, ChatAnthropic)
     assert ta.deep_thinking_llm.anthropic_api_key.get_secret_value() == "sk-test"
     assert isinstance(ta.quick_thinking_llm, ChatOpenAI)
-    assert ta.quick_thinking_llm.openai_api_base == "http://ollama:11434/v1"
+    assert ta.quick_thinking_llm.openai_api_base == "https://gateway.example/v1"
 
 
 def test_build_graph_without_deep_thinking_uses_an_effort_tradingagents_accepts(tmp_path: Any) -> None:

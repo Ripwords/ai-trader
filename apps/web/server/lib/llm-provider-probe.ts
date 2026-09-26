@@ -9,22 +9,22 @@ export type ProviderConnection = Omit<ModelConfig, 'modelId'>
 const TIMEOUT_MS = 15_000
 
 interface ModelListing {
-  headers: (apiKey: string | null) => Record<string, string>
+  headers: (apiKey: string) => Record<string, string>
   parse: (body: unknown) => string[]
 }
 
 const openAiListing: ModelListing = {
-  headers: (apiKey): Record<string, string> => (apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+  headers: apiKey => ({ authorization: `Bearer ${apiKey}` }),
   parse: body => z.object({ data: z.array(z.object({ id: z.string() })) }).parse(body).data.map(m => m.id),
 }
 
 const LISTINGS: Record<ProviderKind, ModelListing> = {
   anthropic: {
-    headers: apiKey => ({ 'x-api-key': apiKey ?? '', 'anthropic-version': '2023-06-01' }),
+    headers: apiKey => ({ 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }),
     parse: openAiListing.parse,
   },
   google: {
-    headers: apiKey => ({ 'x-goog-api-key': apiKey ?? '' }),
+    headers: apiKey => ({ 'x-goog-api-key': apiKey }),
     parse: body => z
       .object({ models: z.array(z.object({ name: z.string(), supportedGenerationMethods: z.array(z.string()).default([]) })) })
       .parse(body)
@@ -34,11 +34,10 @@ const LISTINGS: Record<ProviderKind, ModelListing> = {
   openai: openAiListing,
   deepseek: openAiListing,
   openrouter: openAiListing,
-  openai_compatible: openAiListing,
 }
 
-function redact(message: string, apiKey: string | null): string {
-  const clean = apiKey ? message.split(apiKey).join('[key]') : message
+function redact(message: string, apiKey: string): string {
+  const clean = message.split(apiKey).join('[key]')
   return clean.length > 300 ? `${clean.slice(0, 300)}…` : clean
 }
 
@@ -48,7 +47,6 @@ function errorMessage(err: unknown): string {
 
 export async function listProviderModels(conn: ProviderConnection, fetchImpl: typeof fetch = fetch): Promise<string[]> {
   const baseUrl = conn.baseUrl ?? PROVIDER_KIND_META[conn.kind].defaultBaseUrl
-  if (!baseUrl) throw new Error('No base URL configured')
   const listing = LISTINGS[conn.kind]
   const res = await fetchImpl(`${baseUrl.replace(/\/+$/, '')}/models`, {
     headers: listing.headers(conn.apiKey),
@@ -63,7 +61,7 @@ export async function listProviderModels(conn: ProviderConnection, fetchImpl: ty
 
 /**
  * With a model id, a one-token generation is the verdict and the model list is
- * a bonus: some local servers do not implement /models. Without one, listing
+ * a bonus: a proxy behind an overridden base URL may not serve /models. Without one, listing
  * models is the only check available.
  */
 export async function testProviderConnection(

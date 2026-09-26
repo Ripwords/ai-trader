@@ -55,7 +55,7 @@ async def test_unknown_model_uses_fallback_rates(
 
 @pytest.mark.asyncio
 async def test_unpriced_provider_uses_fallback_rates(monkeypatch: pytest.MonkeyPatch) -> None:
-    await _start_run_with_chat(monkeypatch, "openai_compatible", "qwen3:8b")
+    await _start_run_with_chat(monkeypatch, "openrouter", "qwen/qwen3-32b")
     # Default conservative fallback: $15 per 1M input tokens.
     assert _compute_run_cost(1_000_000, 0) == pytest.approx(15.0)
 

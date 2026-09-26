@@ -1,12 +1,12 @@
-CREATE TYPE "public"."llm_provider_kind" AS ENUM('anthropic', 'openai', 'google', 'deepseek', 'openrouter', 'openai_compatible');--> statement-breakpoint
+CREATE TYPE "public"."llm_provider_kind" AS ENUM('anthropic', 'openai', 'google', 'deepseek', 'openrouter');--> statement-breakpoint
 CREATE TABLE "llm_providers" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"owner_id" uuid NOT NULL,
 	"kind" "llm_provider_kind" NOT NULL,
 	"label" varchar(64) NOT NULL,
 	"base_url" text,
-	"api_key" text,
-	"api_key_hint" varchar(8),
+	"api_key" text NOT NULL,
+	"api_key_hint" varchar(8) NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );

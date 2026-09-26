@@ -19,7 +19,7 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 
 - Docker Desktop (or compose v2)
 - moomoo OpenD installed on the host machine and **logged in**, listening on `127.0.0.1:11111`
-- An API key for at least one model provider (Anthropic, OpenAI, Google, DeepSeek, or OpenRouter), or a local OpenAI-compatible server such as Ollama or LM Studio. You add it in the app under Settings, not in `.env`.
+- An API key for at least one online model provider: Anthropic, OpenAI, Google, DeepSeek, or OpenRouter. You add it in the app under Settings, not in `.env`.
 - (Optional but recommended) Tavily API key for news/web search — without it, search tools surface a clean error message and the rest still works
 
 ## First run
@@ -46,13 +46,13 @@ If the chat says "No model provider is configured", nothing has been saved in Se
 
 Settings (`/settings`, also reachable from the `model · …` badge in the header) holds the LLM configuration. Nothing about models lives in `.env` except `ENCRYPTION_KEY`.
 
-- **Providers.** Add as many as you like: Anthropic, OpenAI, Google, DeepSeek, OpenRouter, or any OpenAI-compatible server (Ollama, LM Studio, vLLM). The OpenAI-compatible kind needs a base URL, such as `http://host.docker.internal:11434/v1` for Ollama on the host. The hosted kinds use their public endpoint unless you switch on **Override base URL**.
+- **Providers.** Add as many as you like from the online providers: Anthropic, OpenAI, Google, DeepSeek, and OpenRouter. Local model servers such as Ollama are not supported. Every provider needs an API key. Each uses its public endpoint unless you switch on **Override base URL**, for example to route through a company proxy. For models none of these host directly, use OpenRouter.
 - **Keys.** A key is encrypted with AES-256-GCM under `ENCRYPTION_KEY` before it is stored. The page shows only its last four characters. Editing a provider with the key field blank keeps the stored key. Changing or losing `ENCRYPTION_KEY` makes stored keys unreadable, so re-enter them if you rotate it.
 - **Test connection.** Lists the provider's models. When the provider is selected for a role, it also sends a short request to the selected model, so a wrong model id shows up here rather than in chat.
 - **Models.** Two roles. The **chat model** runs chat, risk reports, strategy authoring, and the research debate's deep-thinking agents. The **quick model** runs news angles and the debate's fast analyst passes. Each role picks a provider and a model id. The model field suggests the provider's model list and accepts any id you type.
 - **Removing a provider.** Blocked while either role uses it. Point the role at another provider and save first.
 - **Upgrading from `LLM_MODEL` env vars.** On first start with an empty provider table, the web service imports `LLM_MODEL`, `LLM_MODEL_QUICK`, and the matching `*_API_KEY` from its environment into Settings and logs `[llm] imported …`. It runs once. After that the env vars are ignored and can be deleted.
-- **Cost.** `/usage` prices calls for models in the built-in price table. Other models, including local ones, show as unpriced.
+- **Cost.** `/usage` prices calls for models in the built-in price table. Other models show as unpriced.
 
 Behind a reverse proxy, long chat and research streams can sit quiet between tokens. nginx drops a proxied response after 60 s of silence by default. Raising `proxy_read_timeout` (for example to `600s`) on the location that serves the web app is optional but avoids cut-off replies.
 

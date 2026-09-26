@@ -28,8 +28,8 @@ export const llmProviders = pgTable('llm_providers', {
   kind: llmProviderKind('kind').notNull(),
   label: varchar('label', { length: 64 }).notNull(),
   baseUrl: text('base_url'),
-  apiKey: encryptedText('api_key'),
-  apiKeyHint: varchar('api_key_hint', { length: 8 }),
+  apiKey: encryptedText('api_key').notNull(),
+  apiKeyHint: varchar('api_key_hint', { length: 8 }).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 })

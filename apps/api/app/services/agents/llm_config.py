@@ -20,13 +20,13 @@ from app.settings import get_settings
 
 from .llm_timeouts import install_llm_timeout_patch
 
-ProviderKind = Literal["anthropic", "openai", "google", "deepseek", "openrouter", "openai_compatible"]
+ProviderKind = Literal["anthropic", "openai", "google", "deepseek", "openrouter"]
 
 
 class RoleModel(BaseModel):
     kind: ProviderKind
     model_id: str
-    api_key: str | None
+    api_key: str
     # Null means the provider's default endpoint.
     base_url: str | None
 
@@ -72,14 +72,13 @@ def last_chat_model() -> RoleModel | None:
 
 # TradingAgents' ``init_chat_model`` registry key per kind. DeepSeek goes
 # through litellm so ``deepseek_compat``'s thinking-mode patch applies;
-# OpenRouter and local servers speak the OpenAI API.
+# OpenRouter speaks the OpenAI API.
 _TA_PROVIDER: dict[ProviderKind, ta_llm.LLMProvider] = {
     "anthropic": "anthropic",
     "openai": "openai",
     "google": "google_genai",
     "deepseek": "litellm",
     "openrouter": "openai",
-    "openai_compatible": "openai",
 }
 
 # Kinds whose client exposes TradingAgents' unified reasoning knob.
@@ -136,6 +135,4 @@ def build_role_model(
         kwargs["base_url"] = base_url or _OPENROUTER_BASE_URL
     elif base_url:
         kwargs["base_url"] = base_url
-    # Local servers take no key, but the OpenAI client refuses to start without one.
-    api_key = role.api_key or "not-needed"
-    return ta_llm.init_chat_model(role.model_id, model_provider=provider, api_key=api_key, **kwargs)
+    return ta_llm.init_chat_model(role.model_id, model_provider=provider, api_key=role.api_key, **kwargs)

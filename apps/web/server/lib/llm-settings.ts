@@ -10,7 +10,7 @@ export const LLM_SETTINGS_KEY = 'llm'
 export interface ModelConfig {
   kind: ProviderKind
   modelId: string
-  apiKey: string | null
+  apiKey: string
   baseUrl: string | null
 }
 

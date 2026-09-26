@@ -24,8 +24,6 @@ const saving = ref(false)
 const serverError = ref<string | null>(null)
 
 const meta = computed(() => PROVIDER_KIND_META[state.kind])
-const baseUrlRequired = computed(() => meta.value.defaultBaseUrl === null)
-const showBaseUrl = computed(() => baseUrlRequired.value || overrideBaseUrl.value)
 const kindItems = PROVIDER_KINDS.map(kind => ({ label: PROVIDER_KIND_META[kind].label, value: kind }))
 
 watch(() => state.kind, (kind, previous) => {
@@ -34,16 +32,13 @@ watch(() => state.kind, (kind, previous) => {
   }
 })
 
-const keyPlaceholder = computed(() => {
-  if (editing?.apiKeyHint) return `${editing.apiKeyHint} stored. Leave blank to keep it.`
-  return meta.value.requiresKey ? 'Paste your API key' : 'Optional'
-})
+const keyPlaceholder = editing ? `${editing.apiKeyHint} stored. Leave blank to keep it.` : 'Paste your API key'
+
 
 function payload() {
-  const baseUrl = showBaseUrl.value && state.baseUrl.trim() ? state.baseUrl.trim() : null
-  const apiKey = state.apiKey.trim() || null
-  if (!editing) return providerCreateSchema.safeParse({ kind: state.kind, label: state.label, baseUrl, apiKey })
-  return providerUpdateSchema.safeParse({ label: state.label, baseUrl, ...(apiKey && { apiKey }) })
+  const baseUrl = overrideBaseUrl.value && state.baseUrl.trim() ? state.baseUrl.trim() : null
+  if (!editing) return providerCreateSchema.safeParse({ kind: state.kind, label: state.label, baseUrl, apiKey: state.apiKey })
+  return providerUpdateSchema.safeParse({ label: state.label, baseUrl, ...(state.apiKey.trim() && { apiKey: state.apiKey }) })
 }
 
 function validate(): FormError[] {
@@ -91,13 +86,12 @@ async function onSubmit(): Promise<void> {
           <UInput v-model="state.apiKey" type="password" autocomplete="off" :placeholder="keyPlaceholder" class="w-full" />
         </UFormField>
         <USwitch
-          v-if="!baseUrlRequired"
           v-model="overrideBaseUrl"
           label="Override base URL"
           :description="`Default: ${meta.defaultBaseUrl}`"
         />
-        <UFormField v-if="showBaseUrl" name="baseUrl" label="Base URL" :hint="baseUrlRequired ? 'Required' : undefined">
-          <UInput v-model="state.baseUrl" :placeholder="meta.defaultBaseUrl ?? 'http://ollama:11434/v1'" class="w-full" />
+        <UFormField v-if="overrideBaseUrl" name="baseUrl" label="Base URL">
+          <UInput v-model="state.baseUrl" :placeholder="meta.defaultBaseUrl" class="w-full" />
         </UFormField>
         <UAlert v-if="serverError" color="error" variant="subtle" :description="serverError" />
       </UForm>

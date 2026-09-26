@@ -74,7 +74,7 @@ def _compute_run_cost(tokens_in: int, tokens_out: int) -> float:
     TradingAgents' registry names (``litellm``, ``google_genai``).
 
     An unknown model (no pricing entry, a kind with no pricing table such as
-    a local server, or no run having fetched its models) is charged at
+    OpenRouter, or no run having fetched its models) is charged at
     conservative fallback rates from settings (``AGENTS_FALLBACK_INPUT_USD_PER_1M``
     / ``AGENTS_FALLBACK_OUTPUT_USD_PER_1M``) with a warning — never ``0.0``,
     so an unknown model can't free-ride under the daily cap. Token totals land in the DB regardless.

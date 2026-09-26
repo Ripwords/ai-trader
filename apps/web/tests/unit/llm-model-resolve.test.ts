@@ -58,12 +58,12 @@ describe('buildLanguageModel', () => {
     }])
   })
 
-  it('routes an OpenAI-compatible server through its base URL without requiring a key', () => {
-    buildLanguageModel({ kind: 'openai_compatible', modelId: 'qwen3:8b', apiKey: null, baseUrl: 'http://ollama:11434/v1' })
+  it('points OpenRouter at an overridden base URL', () => {
+    buildLanguageModel({ kind: 'openrouter', modelId: 'qwen/qwen3-32b', apiKey: 'or-key', baseUrl: 'https://gateway.example.com/v1' })
     expect(factoryCalls).toEqual([{
       factory: 'openai',
-      options: { apiKey: '', baseURL: 'http://ollama:11434/v1' },
-      modelId: 'qwen3:8b',
+      options: { apiKey: 'or-key', baseURL: 'https://gateway.example.com/v1' },
+      modelId: 'qwen/qwen3-32b',
       api: 'chat',
     }])
   })

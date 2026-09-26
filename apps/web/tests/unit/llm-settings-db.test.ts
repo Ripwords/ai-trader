@@ -111,13 +111,6 @@ describe.skipIf(!url)('llm settings API (TEST_DATABASE_URL)', () => {
     expect((await providers.getProviderConnection(created.id))?.apiKey).toBe('sk-ant-new-1111')
   })
 
-  it('refuses an update that leaves the provider unusable', async () => {
-    const created = await providers.createProvider(anthropic)
-    expect(await thrownStatus(providers.updateProvider(created.id, { apiKey: null }))).toBe(400)
-    const local = await providers.createProvider({ kind: 'openai_compatible', label: 'Ollama', baseUrl: 'http://ollama:11434/v1', apiKey: null })
-    expect(await thrownStatus(providers.updateProvider(local.id, { baseUrl: null }))).toBe(400)
-  })
-
   it('returns null for an unknown provider', async () => {
     expect(await providers.updateProvider('00000000-0000-4000-8000-000000000000', { label: 'x' })).toBeNull()
     expect(await providers.deleteProvider('00000000-0000-4000-8000-000000000000')).toBe('not-found')
@@ -145,7 +138,7 @@ describe.skipIf(!url)('llm settings API (TEST_DATABASE_URL)', () => {
   it('serves the decrypted runtime config to the api only behind the bearer', async () => {
     const handler = (await import('../../server/api/internal/llm-config.get')).default
     const created = await providers.createProvider(anthropic)
-    const local = await providers.createProvider({ kind: 'openai_compatible', label: 'Ollama', baseUrl: 'http://ollama:11434/v1', apiKey: null })
+    const gateway = await providers.createProvider({ kind: 'openrouter', label: 'Gateway', baseUrl: 'https://gateway.example.com/v1', apiKey: 'or-key-4321' })
 
     expect(await thrownStatus(Promise.resolve().then(() => handler(makeEvent())))).toBe(401)
     const authed = makeEvent({ authorization: 'Bearer test-bearer' })
@@ -153,11 +146,11 @@ describe.skipIf(!url)('llm settings API (TEST_DATABASE_URL)', () => {
 
     await settings.saveLlmSettings({
       chat: { providerId: created.id, modelId: 'claude-sonnet-4-6' },
-      quick: { providerId: local.id, modelId: 'qwen3:8b' },
+      quick: { providerId: gateway.id, modelId: 'qwen/qwen3-32b' },
     })
     expect(await handler(authed)).toEqual({
       chat: { kind: 'anthropic', model_id: 'claude-sonnet-4-6', api_key: 'sk-ant-secret-9876', base_url: null },
-      quick: { kind: 'openai_compatible', model_id: 'qwen3:8b', api_key: null, base_url: 'http://ollama:11434/v1' },
+      quick: { kind: 'openrouter', model_id: 'qwen/qwen3-32b', api_key: 'or-key-4321', base_url: 'https://gateway.example.com/v1' },
     })
   })
 })

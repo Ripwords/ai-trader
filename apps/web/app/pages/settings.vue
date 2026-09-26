@@ -96,7 +96,7 @@ async function removeProvider(provider: LlmProviderView): Promise<void> {
   const modal = overlay.create(ConfirmModal, { destroyOnClose: true })
   const confirmed = await modal.open({
     title: `Remove ${provider.label}?`,
-    description: provider.apiKeyHint ? 'Its stored API key is deleted with it.' : 'This cannot be undone.',
+    description: 'Its stored API key is deleted with it.',
     confirmLabel: 'Remove',
   }).result
   if (!confirmed) return
@@ -164,7 +164,7 @@ async function saveSelection(): Promise<void> {
                   <div class="font-mono text-xs text-[var(--paper-3)] mt-1 break-words">
                     {{ PROVIDER_KIND_META[provider.kind].label }}
                     <template v-if="provider.baseUrl"> · {{ provider.baseUrl }}</template>
-                    · <span class="whitespace-nowrap">{{ provider.apiKeyHint ? `key ${provider.apiKeyHint}` : 'no key' }}</span>
+                    · <span class="whitespace-nowrap">key {{ provider.apiKeyHint }}</span>
                   </div>
                 </div>
                 <div class="flex shrink-0 items-center gap-2">

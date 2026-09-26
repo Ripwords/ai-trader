@@ -1,5 +1,5 @@
 {
-  "id": "00dfb0a1-824e-460d-ae16-46aae5eb3da7",
+  "id": "db9af176-24a9-4553-b3b6-2fbf6a0fdb19",
   "prevId": "4c20f8c0-c172-45c0-9694-072cfa253669",
   "version": "7",
   "dialect": "postgresql",
@@ -1123,13 +1123,13 @@
           "name": "api_key",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "api_key_hint": {
           "name": "api_key_hint",
           "type": "varchar(8)",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
@@ -1729,8 +1729,7 @@
         "openai",
         "google",
         "deepseek",
-        "openrouter",
-        "openai_compatible"
+        "openrouter"
       ]
     }
   },

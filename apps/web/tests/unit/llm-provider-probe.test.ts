@@ -28,11 +28,10 @@ describe('listProviderModels', () => {
     expect(f.calls[0]).toEqual({ url: 'https://api.openai.com/v1/models', headers: expect.objectContaining({ authorization: 'Bearer sk-1' }) })
   })
 
-  it('sends no auth header to a keyless local server and honours its base URL', async () => {
-    const f = fakeFetch(200, { data: [{ id: 'qwen3:8b' }] })
-    await listProviderModels({ kind: 'openai_compatible', apiKey: null, baseUrl: 'http://ollama:11434/v1/' }, f.impl)
-    expect(f.calls[0]!.url).toBe('http://ollama:11434/v1/models')
-    expect(f.calls[0]!.headers.authorization).toBeUndefined()
+  it('honours an overridden base URL', async () => {
+    const f = fakeFetch(200, { data: [{ id: 'qwen/qwen3-32b' }] })
+    await listProviderModels({ kind: 'openrouter', apiKey: 'or-key', baseUrl: 'https://gateway.example.com/v1/' }, f.impl)
+    expect(f.calls[0]!.url).toBe('https://gateway.example.com/v1/models')
   })
 
   it('uses Anthropic headers', async () => {

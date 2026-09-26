@@ -23,6 +23,6 @@ describe('llm cost estimation', () => {
   })
 
   it('returns null for an unpriced model rather than calling it free', () => {
-    expect(estimateCost('openai_compatible/qwen3:8b', 1_000_000, 1_000_000)).toBeNull()
+    expect(estimateCost('openrouter/qwen/qwen3-32b', 1_000_000, 1_000_000)).toBeNull()
   })
 })

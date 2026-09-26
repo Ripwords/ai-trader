@@ -11,7 +11,8 @@ describe('llm_providers schema', () => {
     expect(Object.keys(cols)).toEqual(expect.arrayContaining([
       'id', 'ownerId', 'kind', 'label', 'baseUrl', 'apiKey', 'apiKeyHint', 'createdAt', 'updatedAt',
     ]))
-    expect(cols.apiKey.notNull).toBe(false)
+    expect(cols.apiKey.notNull).toBe(true)
+    expect(cols.apiKeyHint.notNull).toBe(true)
     expect(cols.baseUrl.notNull).toBe(false)
   })
 
