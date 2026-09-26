@@ -8,13 +8,14 @@ import {
   titleFromText,
 } from '../db/repo'
 import { getApiClient } from '../llm/http'
-import { getGhostfolioStatus, getGhostfolioTools } from '../llm/mcp'
+import { getGhostfolioStatus, getGhostfolioTools, type GhostfolioStatus } from '../llm/mcp'
 import { buildSystemPrompt } from '../llm/chat-context'
 import { buildModel, DEFAULT_MODEL_SPEC, supportsForcedToolChoice } from '../llm/model'
 import { makeTools } from '../llm/tools'
 import { settleStoppedParts, stopOnAbort } from '../llm/chat-stop'
 import { resolveMaxSteps } from '../llm/chat-steps'
 import { ChatStreamBusyError, chatSseResponse, chatStreams } from '../lib/chat-streams'
+import { within } from '../lib/within'
 
 interface ChatBody {
   messages?: Array<{ id?: string; role: string; parts?: unknown[]; [k: string]: unknown }>
@@ -78,27 +79,15 @@ export default defineEventHandler(async (event) => {
     chatStreams.start(thread, abortSignal => createUIMessageStream({
       execute: async ({ writer }) => {
         const client = getApiClient()
-        const [ghostfolioTools, ghostfolioStatus] = await Promise.all([
-          getGhostfolioTools(),
-          getGhostfolioStatus(),
+        const [[ghostfolioTools, ghostfolioStatus], recallContext] = await Promise.all([
+          within(
+            Promise.all([getGhostfolioTools(), getGhostfolioStatus()]),
+            MCP_PREP_MS,
+            [{}, 'failing'] as [Awaited<ReturnType<typeof getGhostfolioTools>>, GhostfolioStatus],
+          ),
+          buildRecall(client, ownerId, newestUserText),
         ])
         const tools = stopOnAbort({ ...makeTools(client, { event, latestUserText: newestUserText }), ...ghostfolioTools })
-
-        // Auto-hint: surface recent research runs for tickers in the user's latest
-        // message so the model references the agents' prior assessment instead of
-        // being blind to it. Best-effort — never block the chat on it.
-        let recallContext = ''
-        try {
-          const { buildRecallContext } = await import('../llm/recall')
-          const watch = await client.listWatchlist({ group: 'All' }).catch(() => [] as Array<{ code?: string }>)
-          const watchSymbols = (Array.isArray(watch) ? watch : []).map(w => String(w?.code ?? '')).filter(Boolean)
-          recallContext = await Promise.race([
-            buildRecallContext({ userId: ownerId, text: newestUserText, watchlist: watchSymbols }),
-            new Promise<string>(r => setTimeout(() => r(''), 800)),
-          ])
-        } catch (err) {
-          console.error('[chat] recall build failed', err)
-        }
 
         const modelMessages = await convertToModelMessages(
           body.messages as Parameters<typeof convertToModelMessages>[0],
@@ -167,6 +156,27 @@ export default defineEventHandler(async (event) => {
     headers: { 'X-Chat-Id': thread, 'Access-Control-Expose-Headers': 'X-Chat-Id' },
   })
 })
+
+// A slow Ghostfolio or watchlist must not hold up the reply. mcp.ts bounds the
+// connect; this also covers listing tools on a server that accepted the
+// connection and then went quiet.
+const MCP_PREP_MS = 3_000
+const WATCHLIST_MS = 2_000
+const RECALL_MS = 800
+
+// Surface recent research runs for tickers in the user's latest message so the
+// model references the agents' prior assessment. Best-effort.
+async function buildRecall(client: ReturnType<typeof getApiClient>, userId: string, text: string): Promise<string> {
+  try {
+    const { buildRecallContext } = await import('../llm/recall')
+    const watch = await within(client.listWatchlist({ group: 'All' }), WATCHLIST_MS, [])
+    const watchlist = watch.map(w => String(w?.code ?? '')).filter(Boolean)
+    return await within(buildRecallContext({ userId, text, watchlist }), RECALL_MS, '')
+  } catch (err) {
+    console.error('[chat] recall build failed', err)
+    return ''
+  }
+}
 
 function busy() {
   return createError({ statusCode: 409, statusMessage: 'a reply is still in progress on this chat' })

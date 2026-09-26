@@ -163,6 +163,44 @@ describe('POST /api/chat', () => {
   })
 })
 
+describe('POST /api/chat pre-flight', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    deps.listWatchlist = async () => []
+    deps.getGhostfolioTools = async () => ({})
+    deps.getGhostfolioStatus = async () => 'ok'
+  })
+
+  it('sends the first bytes at once and starts without a hung MCP or watchlist', async () => {
+    vi.useFakeTimers()
+    const hang = () => new Promise<never>(() => {})
+    deps.getGhostfolioTools = hang
+    deps.getGhostfolioStatus = hang
+    deps.listWatchlist = hang
+    const prompts: string[] = []
+    const realPrompt = deps.buildSystemPrompt
+    deps.buildSystemPrompt = (status, recall) => {
+      prompts.push(status)
+      return realPrompt(status, recall)
+    }
+
+    const res = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    const reader = res.body!.getReader()
+    const first = await reader.read()
+    expect(new TextDecoder().decode(first.value)).toBe(': connected\n\n')
+
+    await vi.advanceTimersByTimeAsync(2_900)
+    expect(feeder).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(feeder).toBeDefined()
+    expect(prompts).toEqual(['failing'])
+
+    deps.buildSystemPrompt = realPrompt
+    finish()
+    await reader.cancel()
+  })
+})
+
 describe('GET /api/chat/:id/stream', () => {
   it('answers 204 when no reply is in progress', async () => {
     const res = await resume(event(undefined, { id: 'th-1' }))

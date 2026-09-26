@@ -35,26 +35,43 @@ export const GHOSTFOLIO_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
 let _client: Client | null = null
 let _connecting: Promise<Client | null> | null = null
 let _toolsCache: Record<string, McpTool> | null = null
+// Every chat message asks for the client, so a down server would otherwise
+// cost each message a full connect attempt before the model starts.
+let _failedAt: number | null = null
+
+const CONNECT_TIMEOUT_MS = 3_000
+const FAILED_CONNECT_TTL_MS = 60_000
 
 async function getClient(): Promise<Client | null> {
   if (_client) return _client
   if (_connecting) return _connecting
+  if (_failedAt !== null && Date.now() - _failedAt < FAILED_CONNECT_TTL_MS) return null
   const url = process.env.GHOSTFOLIO_MCP_URL
   const bearer = process.env.GHOSTFOLIO_MCP_BEARER
   if (!url || !bearer) return null
   _connecting = (async () => {
+    const client = new Client({ name: 'ai-trader', version: '0.1.0' }, { capabilities: {} })
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const transport = new StreamableHTTPClientTransport(new URL(url), {
         requestInit: { headers: { Authorization: `Bearer ${bearer}` } },
       })
-      const client = new Client({ name: 'ai-trader', version: '0.1.0' }, { capabilities: {} })
-      await client.connect(transport)
+      await Promise.race([
+        client.connect(transport),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`connect timed out after ${CONNECT_TIMEOUT_MS} ms`)), CONNECT_TIMEOUT_MS)
+        }),
+      ])
       _client = client
+      _failedAt = null
       return client
     } catch (err) {
       console.warn('[mcp] ghostfolio connect failed:', err instanceof Error ? err.message : String(err))
+      _failedAt = Date.now()
+      void client.close().catch(() => {})
       return null
     } finally {
+      clearTimeout(timer)
       _connecting = null
     }
   })()
@@ -122,6 +139,7 @@ export function resetMcp() {
   _client = null
   _connecting = null
   _toolsCache = null
+  _failedAt = null
 }
 
 /**
