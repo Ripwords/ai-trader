@@ -146,6 +146,48 @@ describe('ChatStreamRegistry', () => {
   })
 })
 
+describe('ChatStreamRegistry.stopRequest', () => {
+  it('stops a request that has not started yet as soon as it starts', async () => {
+    const reg = new ChatStreamRegistry()
+    const stopping = reg.stopRequest('req-1')
+    const src = manualSource()
+    const entry = reg.start('th-1', src.produce, { requestId: 'req-1' })
+
+    expect(src.signal.aborted).toBe(true)
+    expect(await stopping).toBe(entry)
+    expect(await entry.done).toBe('aborted')
+  })
+
+  it('stops a request that is already generating', async () => {
+    const reg = new ChatStreamRegistry()
+    const src = manualSource()
+    const entry = reg.start('th-1', src.produce, { requestId: 'req-1' })
+
+    expect(await reg.stopRequest('req-1')).toBe(entry)
+    expect(src.signal.aborted).toBe(true)
+  })
+
+  it('leaves other requests alone', () => {
+    const reg = new ChatStreamRegistry()
+    void reg.stopRequest('req-1')
+    const src = manualSource()
+    reg.start('th-1', src.produce, { requestId: 'req-2' })
+    expect(src.signal.aborted).toBe(false)
+    reg.stop('th-1')
+  })
+
+  it('forgets a stop whose request never arrived', () => {
+    vi.useFakeTimers()
+    const reg = new ChatStreamRegistry()
+    void reg.stopRequest('req-1')
+    vi.advanceTimersByTime(61_000)
+    const src = manualSource()
+    reg.start('th-1', src.produce, { requestId: 'req-1' })
+    expect(src.signal.aborted).toBe(false)
+    reg.stop('th-1')
+  })
+})
+
 describe('chatSseResponse', () => {
   it('frames chunks as SSE, pings while idle, and ends with [DONE]', async () => {
     vi.useFakeTimers()

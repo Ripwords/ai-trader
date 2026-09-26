@@ -85,6 +85,7 @@ const { chatStreams } = await import('../../server/lib/chat-streams')
 const post = (await import('../../server/api/chat.post')).default as (e: H3Event) => Promise<Response>
 const resume = (await import('../../server/api/chat/[id]/stream.get')).default as (e: H3Event) => Promise<Response | null>
 const stop = (await import('../../server/api/chat/[id]/stop.post')).default as (e: H3Event) => Promise<unknown>
+const stopSend = (await import('../../server/api/chat/stop.post')).default as (e: H3Event) => Promise<unknown>
 
 const event = (body: unknown, params: Record<string, string> = {}) =>
   ({ _body: body, _params: params, context: {}, node: { req: {}, res: {} } }) as unknown as H3Event
@@ -379,5 +380,44 @@ describe('POST /api/chat/:id/stop', () => {
 
   it('reports nothing to stop when idle', async () => {
     expect(await stop(event(undefined, { id: 'th-1' }))).toEqual({ stopped: false })
+  })
+})
+
+describe('POST /api/chat/stop', () => {
+  it('stops a send that has not reached the model yet, and names its new thread', async () => {
+    const stopping = stopSend(event({ requestId: 'req-1' }))
+    await post(event({ messages: [userMessage('hi')], requestId: 'req-1' }))
+
+    expect(await stopping).toEqual({ stopped: true, threadId: 'th-new' })
+    expect(chatStreams.isActive('th-new')).toBe(false)
+    expect(feeder).toBeUndefined()
+    const [saved] = assistantSaves()
+    expect(saved).toMatchObject({ thread: 'th-new', metadata: { stopped: true } })
+    const questions = (repo.appendMessages.mock.calls as unknown as Array<[string, Array<{ role: string }>]>)
+      .flatMap(([, msgs]) => msgs.filter(m => m.role === 'user'))
+    expect(questions).toHaveLength(1)
+  })
+
+  it('stops a send that is already generating', async () => {
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1', requestId: 'req-2' }))
+    await until(() => chatStreams.isActive('th-1') && feeder !== undefined)
+
+    expect(await stopSend(event({ requestId: 'req-2' }))).toEqual({ stopped: true, threadId: 'th-1' })
+    expect(chatStreams.isActive('th-1')).toBe(false)
+  })
+
+  it('rejects a missing request id', async () => {
+    await expect(stopSend(event({}))).rejects.toMatchObject({ statusCode: 400 })
+  })
+
+  it('gives up on a send that never arrives', async () => {
+    vi.useFakeTimers()
+    try {
+      const stopping = stopSend(event({ requestId: 'req-lost' }))
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(await stopping).toEqual({ stopped: false })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
