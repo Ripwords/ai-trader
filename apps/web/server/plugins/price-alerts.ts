@@ -2,6 +2,7 @@ import { defineNitroPlugin } from 'nitropack/runtime'
 import { getApiClient } from '../llm/http'
 import { evaluateAlert } from '../lib/alerts-core'
 import { loadActiveAlerts, markAlertTriggered } from '../lib/alerts'
+import { createGuardedTick } from '../lib/guarded-tick'
 
 /**
  * Price-alerts evaluation loop. Every PRICE_ALERTS_INTERVAL_MS (default 60s)
@@ -28,11 +29,7 @@ export default defineNitroPlugin(() => {
   const parsed = Number(process.env.PRICE_ALERTS_INTERVAL_MS)
   const intervalMs = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_INTERVAL_MS
 
-  let inFlight = false
-
-  async function tick() {
-    if (inFlight) return
-    inFlight = true
+  async function evaluate() {
     try {
       const alerts = await loadActiveAlerts()
       if (alerts.length === 0) return
@@ -61,10 +58,14 @@ export default defineNitroPlugin(() => {
     } catch (err) {
       // DB down etc — log and let the next tick retry.
       console.error('[alerts] evaluation tick failed', err)
-    } finally {
-      inFlight = false
     }
   }
+
+  // Each snapshot already times out; this bounds the whole tick (DB included)
+  // so one stuck await can't stop alert checks until a restart.
+  const tick = createGuardedTick(evaluate, intervalMs * 5, () => {
+    console.error('[alerts] evaluation tick timed out; starting fresh next interval')
+  })
 
   const timer = setInterval(() => { void tick() }, intervalMs)
   // Don't let the poll loop keep a short-lived process (prerender, scripts) alive.

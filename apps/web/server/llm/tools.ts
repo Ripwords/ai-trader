@@ -5,6 +5,9 @@ import type { ApiClient } from './http'
 import { searchWithFallback } from '../lib/search'
 import { getContextualNews } from '../lib/contextual-news'
 
+// Self-fetches to this app's own /api routes; none of them stream.
+const SELF_FETCH_TIMEOUT_MS = 30_000
+
 interface MakeToolsOptions {
   event?: H3Event
   latestUserText?: string
@@ -298,6 +301,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/valuation?symbol=${encodeURIComponent(symbol)}`, {
+          signal: AbortSignal.timeout(SELF_FETCH_TIMEOUT_MS),
           headers: {
             ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}),
           },
@@ -577,6 +581,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/agents-run`, {
+          signal: AbortSignal.timeout(SELF_FETCH_TIMEOUT_MS),
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -607,6 +612,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/agent-messages?run_id=${encodeURIComponent(runId)}&since=999999`, {
+          signal: AbortSignal.timeout(SELF_FETCH_TIMEOUT_MS),
           headers: { ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}) },
         })
         if (!res.ok) return { runId, status: 'unknown', error: `status check failed: ${res.status}` }
@@ -713,6 +719,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         // Without the session cookie the self-fetch is 401'd by auth middleware.
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/agents-run`, {
+          signal: AbortSignal.timeout(SELF_FETCH_TIMEOUT_MS),
           method: 'POST',
           headers: {
             'content-type': 'application/json',
