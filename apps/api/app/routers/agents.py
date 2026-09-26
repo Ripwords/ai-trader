@@ -366,8 +366,8 @@ async def cancel_run(
     Returns ``{ok: True, cancelled: True}`` if the task was found and
     cancellation was issued, or ``{ok: True, cancelled: False}`` if the run
     isn't tracked here (already finished, ran on another worker, or never
-    existed). The web layer is responsible for reflecting state in the DB
-    (it already updates ``agent_runs.status`` to ``'cancelled'``).
+    existed). A cancelled stream ends with ``error: cancelled`` then
+    ``run-end``, which is how the web tee records the cancellation.
     """
     _check_bearer(authorization)
     task = _active_runs.pop(run_id, None)
@@ -375,11 +375,6 @@ async def cancel_run(
         task.cancel()
         return {"ok": True, "cancelled": True}
     return {"ok": True, "cancelled": False}
-
-
-async def _one(payload: dict) -> AsyncIterator[dict]:
-    """Wrap a single normalized chunk as an async iterator for translate_chunks."""
-    yield payload
 
 
 @router.post("/run/{run_id}/resume")
@@ -390,13 +385,10 @@ async def resume_run(
 ) -> StreamingResponse:
     """Resume a previously-failed/cancelled run from its last checkpoint.
 
-    LangGraph's resume contract: ``astream(None, config={...thread_id: id})``
-    means "continue from the latest checkpoint for this thread". If no
-    checkpoint exists for ``run_id`` (e.g. the original run failed before
-    LangGraph wrote its first checkpoint, or the saver isn't wired),
-    LangGraph treats the input as an empty state and the graph effectively
-    no-ops. That's acceptable for v1 — the UI surfaces it as a quick
-    "complete" with no new events.
+    Streams the same events as a fresh run (minus ``run-start``, which the
+    client already holds) via :func:`graph_mod.resume_graph`. Without a
+    checkpoint for ``run_id`` LangGraph has nothing to continue, and the
+    stream ends with an ``error`` event.
     """
     _check_bearer(authorization)
     pool = getattr(request.app.state, "pg_pool", None)
@@ -414,6 +406,7 @@ async def resume_run(
         raise HTTPException(status_code=409, detail="run is still in flight")
 
     symbol = row["symbol"]
+    trade_date = row["trade_date"]
     cfg = row["config"] or {}
     if isinstance(cfg, str):
         # asyncpg returns ``jsonb`` columns as strings unless you register a
@@ -465,18 +458,10 @@ async def resume_run(
                 company_name=cfg.get("company_name"),
                 checkpointer=getattr(request.app.state, "checkpointer", None),
             )
-            async for chunk in graph.graph.astream(
-                None,
-                config={
-                    "configurable": {"thread_id": run_id},
-                    "callbacks": [accumulator],
-                },
-                stream_mode="values",
+            async for chunk in graph_mod.resume_graph(
+                graph, symbol, trade_date, run_id=run_id, usage=accumulator
             ):
-                yield {
-                    "metadata": {"langgraph_node": None, "node_finished": False},
-                    "values": chunk if isinstance(chunk, dict) else {},
-                }
+                yield chunk
 
         try:
             events = translate_chunks(payloads(), run_id=run_id, symbol=symbol, config=cfg)

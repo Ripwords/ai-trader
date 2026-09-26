@@ -803,24 +803,63 @@ async def run_graph(
     _seed_valuation_context(graph, symbol, trade_date, valuation_summary)
 
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
-    args = graph.propagator.get_graph_args()
-    if run_id is not None or usage is not None:
-        # Merge our thread_id and/or callback into the propagator's config
-        # (which already carries recursion_limit, etc) without losing the
-        # propagator's fields.
-        existing_config = args.get("config") or {}
-        configurable = dict(existing_config.get("configurable") or {})
-        if run_id is not None:
-            configurable["thread_id"] = run_id
-        new_config = {**existing_config, "configurable": configurable}
-        if usage is not None:
-            existing_callbacks = list(new_config.get("callbacks") or [])
-            existing_callbacks.append(usage)
-            new_config["callbacks"] = existing_callbacks
-        args = {**args, "config": new_config}
+    args = _graph_args(graph, run_id, usage)
+    async for chunk in _translate_states(
+        graph.graph.astream(init_state, **args), run_valuation, prev={}
+    ):
+        yield chunk
 
-    prev: dict = {}
-    async for chunk in graph.graph.astream(init_state, **args):
+
+async def resume_graph(
+    graph: TradingAgentsGraph,
+    symbol: str,
+    trade_date: date,
+    run_id: str,
+    usage: AsyncCallbackHandler | None = None,
+) -> AsyncIterator[dict]:
+    """Continue ``run_id``'s thread from its latest checkpoint.
+
+    Yields the same normalized chunks as :func:`run_graph`. LangGraph's resume
+    (``astream(None, ...)``) first re-emits the checkpointed state, so diffing
+    starts from that state: only what the resumed steps add is streamed, and
+    the final-state chunk still covers the whole run.
+    """
+    run_valuation, valuation_summary = await _compute_run_valuation(symbol, run_id=run_id)
+    _seed_valuation_context(graph, symbol, trade_date, valuation_summary)
+
+    args = _graph_args(graph, run_id, usage)
+    checkpoint = await graph.graph.aget_state(args["config"])
+    prev = _state_snapshot(checkpoint.values) if checkpoint is not None else {}
+    async for chunk in _translate_states(
+        graph.graph.astream(None, **args), run_valuation, prev=prev
+    ):
+        yield chunk
+
+
+def _graph_args(
+    graph: TradingAgentsGraph, run_id: str | None, usage: AsyncCallbackHandler | None
+) -> dict:
+    """The propagator's stream args with our thread_id and usage callback merged
+    into its config (which already carries recursion_limit)."""
+    args = graph.propagator.get_graph_args()
+    existing_config = args.get("config") or {}
+    configurable = dict(existing_config.get("configurable") or {})
+    if run_id is not None:
+        configurable["thread_id"] = run_id
+    new_config = {**existing_config, "configurable": configurable}
+    if usage is not None:
+        new_config["callbacks"] = [*(new_config.get("callbacks") or []), usage]
+    return {**args, "config": new_config}
+
+
+async def _translate_states(
+    states: AsyncIterator[Any],
+    run_valuation: ValuationResult | None,
+    prev: dict,
+) -> AsyncIterator[dict]:
+    """Diff successive AgentState snapshots into normalized chunks, then yield
+    the terminal state as a ``final_state`` chunk."""
+    async for chunk in states:
         curr = _state_snapshot(chunk)
         # ``node`` from a report-field change means "this analyst just finished".
         # We mark such chunks ``node_finished=True`` so the UI flips the card to

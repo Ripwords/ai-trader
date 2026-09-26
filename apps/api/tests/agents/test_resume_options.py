@@ -50,13 +50,88 @@ async def _resume(monkeypatch: pytest.MonkeyPatch, fake_build: Any, config: Any)
             return [json.loads(line) async for line in r.aiter_lines() if line.strip()]
 
 
+# What the run had checkpointed before it halted: two analyst reports done.
+CHECKPOINT = {
+    "company_of_interest": "NVDA",
+    "trade_date": "2026-01-05",
+    "messages": [],
+    "market_report": "market says up",
+    "news_report": "news is mixed",
+}
+
+
+class _Snapshot:
+    def __init__(self, values: dict[str, Any]) -> None:
+        self.values = values
+
+
+class _Propagator:
+    def get_graph_args(self) -> dict[str, Any]:
+        return {"stream_mode": "values", "config": {"recursion_limit": 77}}
+
+
 class _Compiled:
-    async def astream(self, *_a: Any, **_kw: Any):
-        yield {"decision": {"rating": "hold", "confidence": 50, "rationale": "resumed"}}
+    """Mimics LangGraph resume: raw AgentState snapshots, starting with the
+    checkpoint itself, then one per superstep."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, dict[str, Any]]] = []
+
+    async def aget_state(self, config: dict[str, Any]) -> _Snapshot:
+        return _Snapshot(dict(CHECKPOINT))
+
+    async def astream(self, input: Any, **kw: Any):
+        self.calls.append((input, kw))
+        yield dict(CHECKPOINT)
+        state = {**CHECKPOINT, "fundamentals_report": "fundamentals are fine"}
+        yield state
+        yield {**state, "final_trade_decision": "FINAL TRANSACTION PROPOSAL: **SELL**"}
 
 
 class _Graph:
-    graph = _Compiled()
+    def __init__(self) -> None:
+        self.graph = _Compiled()
+        self.propagator = _Propagator()
+
+
+@pytest.fixture(autouse=True)
+def _no_valuation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.agents import graph as graph_mod
+
+    async def fake_valuation(*_a: Any, **_kw: Any) -> tuple[None, str]:
+        return None, ""
+
+    monkeypatch.setattr(graph_mod, "_compute_run_valuation", fake_valuation)
+
+
+@pytest.mark.asyncio
+async def test_resume_streams_the_same_shape_as_a_normal_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built = _Graph()
+
+    async def fake_build(_opend: Any, **_kw: Any) -> _Graph:
+        return built
+
+    lines = await _resume(monkeypatch, fake_build, STORED_CONFIG)
+    types = [e["type"] for e in lines]
+
+    [(input_, kw)] = built.graph.calls
+    assert input_ is None
+    assert kw["stream_mode"] == "values"
+    assert kw["config"]["configurable"]["thread_id"] == "run-1"
+    assert kw["config"]["recursion_limit"] == 77
+
+    decision = next(e for e in lines if e["type"] == "decision")
+    assert decision["rating"] == "sell"
+    reports = [e for e in lines if e["type"] == "report"]
+    # Only what the resume produced; the checkpointed reports were already streamed.
+    assert [r["kind"] for r in reports] == ["fundamentals"]
+    final = next(e for e in lines if e["type"] == "final-state")
+    assert final["state"]["market_report"] == "market says up"
+    assert final["state"]["final_trade_decision"].endswith("**SELL**")
+    assert "run-start" not in types
+    assert types[-1] == "run-end"
 
 
 @pytest.mark.asyncio
