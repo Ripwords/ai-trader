@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAgentsRun } from '../../../composables/useAgentsRun'
 import { activeRuns } from '../../../composables/useActiveRuns'
+import { runSymbolMatches } from '../../../types/run-symbol'
 import { requestRunNotificationPermission } from '../../lib/notify'
 
 definePageMeta({ section: 'research' })
@@ -72,7 +73,7 @@ const liveRun = computed(() => {
 // Runs started from chat or another tab show up in the global active-runs
 // poll before this page's history refreshes.
 const liveRunId = computed(() =>
-  activeRuns.value.find(r => r.symbol === symbol.value)?.runId ?? liveRun.value?.id ?? null,
+  activeRuns.value.find(r => runSymbolMatches(r.symbol, symbol.value))?.runId ?? liveRun.value?.id ?? null,
 )
 
 const costSamples = computed(() =>

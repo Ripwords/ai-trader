@@ -1,8 +1,9 @@
 import { defineEventHandler, getQuery } from 'h3'
-import { eq, desc, and } from 'drizzle-orm'
+import { eq, desc, and, sql } from 'drizzle-orm'
 import { getDb } from '../../../db/client'
 import { agentRuns, agentDecisions, agentReflections } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
+import { runSymbolPattern } from '../../../types/run-symbol'
 
 /**
  * GET /api/research/agent-runs
@@ -23,7 +24,7 @@ export default defineEventHandler(async (event) => {
 
   const db = getDb()
   const filters = [eq(agentRuns.userId, userId)]
-  if (typeof symbol === 'string' && symbol.length > 0) filters.push(eq(agentRuns.symbol, symbol))
+  if (typeof symbol === 'string' && symbol.length > 0) filters.push(sql`${agentRuns.symbol} ~ ${runSymbolPattern(symbol.toUpperCase())}`)
   if (typeof run_id === 'string' && run_id.length > 0) filters.push(eq(agentRuns.id, run_id))
   const where = filters.length === 1 ? filters[0]! : and(...filters)!
 
