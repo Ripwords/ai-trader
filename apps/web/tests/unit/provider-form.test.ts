@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { baseUrlChanged, providerFormRequest, type ProviderFormState } from '../../composables/providerForm'
+import { baseUrlChanged, providerFormRequest, settingsErrorMessage, type ProviderFormState } from '../../composables/providerForm'
 import { KEY_REQUIRED_FOR_BASE_URL, type LlmProviderView } from '../../types/llm'
 
 const stored: LlmProviderView = {
@@ -13,6 +13,18 @@ const stored: LlmProviderView = {
 function state(patch: Partial<ProviderFormState> = {}): ProviderFormState {
   return { kind: 'openai', label: 'OpenAI', baseUrl: stored.baseUrl!, apiKey: '', overrideBaseUrl: true, ...patch }
 }
+
+describe('settingsErrorMessage', () => {
+  it('shows the explanation for a key that no longer decrypts', () => {
+    const err = { statusMessage: 'llm_key_unreadable', data: { message: 'Re-enter its key.', data: { code: 'llm_key_unreadable' } } }
+    expect(settingsErrorMessage(err, 'Test failed.')).toBe('Re-enter its key.')
+  })
+
+  it('falls back to the status message, then the default', () => {
+    expect(settingsErrorMessage({ statusMessage: 'Provider not found' }, 'Test failed.')).toBe('Provider not found')
+    expect(settingsErrorMessage(new Error('network'), 'Test failed.')).toBe('Test failed.')
+  })
+})
 
 describe('provider form request', () => {
   it('leaves the base URL out of an edit that does not change it, so the key may stay blank', () => {

@@ -62,5 +62,15 @@ describe('encryptedText column', () => {
     const stored = table.secret.mapToDriverValue('sk-live-key')
     process.env.ENCRYPTION_KEY = 'rotated-secret-0123456789abcdef0123456789'
     expect(() => table.secret.mapFromDriverValue(stored)).toThrow(/ENCRYPTION_KEY/)
+    const err = (() => {
+      try {
+        table.secret.mapFromDriverValue(stored)
+      }
+      catch (e) {
+        return e as { statusCode?: number; statusMessage?: string; data?: { code?: string }; message: string }
+      }
+    })()
+    expect(err).toMatchObject({ statusCode: 409, statusMessage: 'llm_key_unreadable', data: { code: 'llm_key_unreadable' } })
+    expect(err?.message).toMatch(/re-enter/)
   })
 })

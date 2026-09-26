@@ -272,6 +272,7 @@ const chat = new Chat({
   },
 })
 const llmNotConfigured = computed(() => chat.error?.message.includes('llm_not_configured') ?? false)
+const llmKeyUnreadable = computed(() => chat.error?.message.includes('llm_key_unreadable') ?? false)
 
 async function isChatBusy(res: Response): Promise<boolean> {
   const body: unknown = await res.json().catch(() => null)
@@ -850,6 +851,10 @@ function agentsVerdict(output: unknown) {
           </div>
           <p v-if="llmNotConfigured" class="mb-2 font-mono text-xs text-[var(--tape-down)]">
             No model provider is configured. <NuxtLink to="/settings" class="underline">Add one in Settings</NuxtLink>.
+          </p>
+          <p v-else-if="llmKeyUnreadable" class="mb-2 font-mono text-xs text-[var(--tape-down)]">
+            The stored API key can't be decrypted because ENCRYPTION_KEY changed.
+            <NuxtLink to="/settings" class="underline">Re-enter it in Settings</NuxtLink>.
           </p>
           <!-- BorderBeam gates its render on onMounted, so it must be
                client-only to avoid a hydration mismatch. It wraps the input

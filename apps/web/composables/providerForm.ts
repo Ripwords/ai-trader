@@ -5,6 +5,18 @@ import {
   type ProviderKind,
 } from '../types/llm'
 
+interface SettingsFetchError {
+  statusMessage?: string
+  data?: { message?: string; data?: { code?: string } }
+}
+
+/** A settings request's error for display: h3 keeps the useful text in the body's `message`. */
+export function settingsErrorMessage(err: unknown, fallback: string): string {
+  const e = (typeof err === 'object' && err !== null ? err : {}) as SettingsFetchError
+  if (e.data?.data?.code === 'llm_key_unreadable' && e.data.message) return e.data.message
+  return e.statusMessage ?? fallback
+}
+
 export interface ProviderFormState {
   kind: ProviderKind
   label: string

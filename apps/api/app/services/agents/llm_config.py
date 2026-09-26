@@ -45,6 +45,21 @@ _transport: httpx.AsyncBaseTransport | None = None
 _last_chat: RoleModel | None = None
 
 
+def _conflict_message(res: httpx.Response) -> str:
+    """Web answers 409 both when nothing is configured and when a stored key
+    no longer decrypts; the latter carries its own instructions."""
+    try:
+        body = res.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        data = body.get("data")
+        message = body.get("message")
+        if isinstance(data, dict) and data.get("code") == "llm_key_unreadable" and isinstance(message, str):
+            return message
+    return "No model provider is configured. Add one in Settings."
+
+
 async def fetch_llm_config() -> LlmRuntimeConfig:
     global _last_chat
     settings = get_settings()
@@ -54,7 +69,7 @@ async def fetch_llm_config() -> LlmRuntimeConfig:
             headers={"authorization": f"Bearer {settings.INTERNAL_BEARER}"},
         )
     if res.status_code == 409:
-        raise LlmNotConfigured("No model provider is configured. Add one in Settings.")
+        raise LlmNotConfigured(_conflict_message(res))
     res.raise_for_status()
     config = LlmRuntimeConfig.model_validate(res.json())
     _last_chat = config.chat

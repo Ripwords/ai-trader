@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import ConfirmModal from '~/components/settings/ConfirmModal.vue'
 import ProviderFormModal from '~/components/settings/ProviderFormModal.vue'
+import { settingsErrorMessage } from '../../composables/providerForm'
 import {
   PROVIDER_KIND_META,
   type LlmProviderView,
@@ -66,7 +67,7 @@ async function testProvider(provider: LlmProviderView): Promise<void> {
       : { ok: false, message: result.error }
   }
   catch (err) {
-    testOutcomes[provider.id] = { ok: false, message: (err as { statusMessage?: string }).statusMessage ?? 'Test failed.' }
+    testOutcomes[provider.id] = { ok: false, message: settingsErrorMessage(err, 'Test failed.') }
   }
   finally {
     testing[provider.id] = false

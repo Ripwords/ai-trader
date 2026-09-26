@@ -58,6 +58,21 @@ async def test_fetch_raises_a_readable_error_when_nothing_is_configured(
         await fetch_llm_config()
 
 
+@pytest.mark.asyncio
+async def test_fetch_passes_on_web_s_explanation_for_an_unreadable_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = {
+        "statusCode": 409,
+        "statusMessage": "llm_key_unreadable",
+        "message": "A stored API key could not be decrypted. Open Settings and re-enter its key.",
+        "data": {"code": "llm_key_unreadable"},
+    }
+    _serve(monkeypatch, 409, body, [])
+    with pytest.raises(LlmNotConfigured, match="re-enter its key"):
+        await fetch_llm_config()
+
+
 def _role(kind: str, *, api_key: str | None = "sk-test", base_url: str | None = None) -> RoleModel:
     return RoleModel.model_validate({"kind": kind, "model_id": "m-1", "api_key": api_key, "base_url": base_url})
 
