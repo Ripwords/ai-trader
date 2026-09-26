@@ -633,47 +633,45 @@ function agentsVerdict(output: unknown) {
 
             <template v-else-if="isToolUIPart(part)">
               <ChartCard
-                v-if="hasOutput(part) && getToolName(part) === 'market_kline' && (getToolOutput(part) as { bars?: unknown[] })?.bars"
-                :code="(getToolOutput(part) as { code: string }).code"
-                :ktype="(getToolOutput(part) as { ktype: string }).ktype"
-                :bars="(getToolOutput(part) as { bars: any[] }).bars"
+                v-if="toolOutputOf(part, 'market_kline')?.bars"
+                :code="toolOutputOf(part, 'market_kline')!.code"
+                :ktype="toolOutputOf(part, 'market_kline')!.ktype"
+                :bars="toolOutputOf(part, 'market_kline')!.bars"
               />
               <NewsCard
-                v-else-if="hasOutput(part) && (getToolName(part) === 'search_news' || getToolName(part) === 'search_web') && (getToolOutput(part) as { results?: unknown[] })?.results"
-                :results="(getToolOutput(part) as { results: any[] }).results"
+                v-else-if="toolOutputOf(part, 'search_news')?.results"
+                :results="toolOutputOf(part, 'search_news')!.results"
+              />
+              <NewsCard
+                v-else-if="toolOutputOf(part, 'search_web')?.results"
+                :results="toolOutputOf(part, 'search_web')!.results"
               />
               <PortfolioCard
-                v-else-if="hasOutput(part) && getToolName(part) === 'trade_portfolio' && (getToolOutput(part) as { positions?: unknown[] })?.positions"
-                :cash="(getToolOutput(part) as any).cash"
-                :market_val="(getToolOutput(part) as any).market_val"
-                :total_assets="(getToolOutput(part) as any).total_assets"
-                :positions="(getToolOutput(part) as any).positions"
-                :currency="(getToolOutput(part) as any).currency"
-                :cash_by_currency="(getToolOutput(part) as any).cash_by_currency"
-                :trd_env="(getToolOutput(part) as any).trd_env"
+                v-else-if="toolOutputOf(part, 'trade_portfolio')?.positions"
+                v-bind="toolOutputOf(part, 'trade_portfolio')!"
               />
               <PortfolioMptCard
-                v-else-if="hasOutput(part) && getToolName(part) === 'portfolio_mpt_analysis'"
-                :analysis="getToolOutput(part) as any"
+                v-else-if="toolOutputOf(part, 'portfolio_mpt_analysis')"
+                :analysis="toolOutputOf(part, 'portfolio_mpt_analysis')!"
               />
               <OrderCard
-                v-else-if="hasOutput(part) && getToolName(part) === 'trade_place_order' && (getToolOutput(part) as { order_id?: string })?.order_id"
-                :result="getToolOutput(part) as any"
+                v-else-if="toolOutputOf(part, 'trade_place_order')?.order_id"
+                :result="toolOutputOf(part, 'trade_place_order')!"
               />
               <AgentsDebateCard
-                v-else-if="hasOutput(part) && getToolName(part) === 'agents_debate'"
-                :events="(getToolOutput(part) as { events?: any[] })?.events ?? []"
+                v-else-if="toolOutputOf(part, 'agents_debate')"
+                :events="toolOutputOf(part, 'agents_debate')!.events ?? []"
                 :verdict="agentsVerdict(getToolOutput(part))"
-                :error="(getToolOutput(part) as { error?: string })?.error ?? null"
+                :error="toolOutputOf(part, 'agents_debate')!.error ?? null"
                 :running="isToolStreaming(part) && !agentsVerdict(getToolOutput(part))"
               />
               <ValuationCard
-                v-else-if="hasOutput(part) && getToolName(part) === 'value_stock'"
-                :result="getToolOutput(part) as any"
+                v-else-if="toolOutputOf(part, 'value_stock')"
+                :result="toolOutputOf(part, 'value_stock')!"
               />
               <TechnicalsCard
-                v-else-if="hasOutput(part) && getToolName(part) === 'technical_analysis'"
-                :result="getToolOutput(part) as any"
+                v-else-if="toolOutputOf(part, 'technical_analysis')"
+                :result="toolOutputOf(part, 'technical_analysis')!"
               />
               <ToolStatusCard
                 v-else
