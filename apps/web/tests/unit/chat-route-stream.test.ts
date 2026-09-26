@@ -361,6 +361,22 @@ describe('POST /api/chat/:id/stop', () => {
     expect(prompt).not.toContain('tool-call')
   })
 
+  it('clears its settle timer once the stopped reply is saved', async () => {
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => chatStreams.isActive('th-1') && feeder !== undefined)
+    const set = vi.spyOn(globalThis, 'setTimeout')
+    const clear = vi.spyOn(globalThis, 'clearTimeout')
+    try {
+      expect(await stop(event(undefined, { id: 'th-1' }))).toEqual({ stopped: true })
+      const settle = set.mock.calls.findIndex(([, ms]) => ms === 5_000)
+      expect(settle).toBeGreaterThanOrEqual(0)
+      expect(clear).toHaveBeenCalledWith(set.mock.results[settle]!.value)
+    } finally {
+      set.mockRestore()
+      clear.mockRestore()
+    }
+  })
+
   it('reports nothing to stop when idle', async () => {
     expect(await stop(event(undefined, { id: 'th-1' }))).toEqual({ stopped: false })
   })
