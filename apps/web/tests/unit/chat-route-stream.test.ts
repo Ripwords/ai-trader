@@ -16,9 +16,12 @@ const repo = vi.hoisted(() => ({
 let feeder: ReadableStreamDefaultController<LanguageModelV3StreamPart> | undefined
 const feed = { enqueue: (p: LanguageModelV3StreamPart) => feeder!.enqueue(p), close: () => feeder!.close() }
 let lastModel: MockLanguageModelV3 | undefined
+/** When set, the provider call itself fails, before any chunk. */
+let providerFailure: Error | null = null
 function makeModel() {
   return lastModel = new MockLanguageModelV3({
     doStream: async ({ abortSignal }) => {
+      if (providerFailure) throw providerFailure
       const stream = new ReadableStream<LanguageModelV3StreamPart>({
         start(c) {
           feeder = c
@@ -135,6 +138,21 @@ describe('POST /api/chat', () => {
     expect(await res.text()).toContain('The assistant stopped early: context window exceeded')
     const [saved] = assistantSaves()
     expect(saved?.metadata).toMatchObject({ error: 'The assistant stopped early: context window exceeded' })
+  })
+
+  it('saves a reply that failed before its first chunk, carrying the error', async () => {
+    providerFailure = new Error('401 invalid api key')
+    try {
+      const res = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+      expect(await res.text()).toContain('The assistant stopped early: 401 invalid api key')
+      await until(() => !chatStreams.isActive('th-1'))
+
+      const [saved] = assistantSaves()
+      expect(saved?.thread).toBe('th-1')
+      expect(saved?.metadata).toMatchObject({ error: 'The assistant stopped early: 401 invalid api key' })
+    } finally {
+      providerFailure = null
+    }
   })
 
   it('keeps generating and saves the reply after the client disconnects', async () => {

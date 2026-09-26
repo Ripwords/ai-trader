@@ -144,7 +144,9 @@ export default defineEventHandler(async (event) => {
               metadata: { ...(responseMessage.metadata ?? {}), ...ending },
             }
           : responseMessage
-        if (saved.parts.length > 0) await appendMessages(thread, [saved])
+        // A reply that failed or was stopped before its first chunk is saved
+        // with no parts, so a reload shows why instead of an unanswered question.
+        if (ending || saved.parts.length > 0) await appendMessages(thread, [saved])
       },
     }))
   } catch (err) {
