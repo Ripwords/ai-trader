@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDb } from '../../../db/client'
-import { agentRuns } from '../../../db/schema'
+import { agentRuns, RUNNING_PER_SYMBOL_UQ } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
 import { resolveSymbol } from '../../lib/yahoo'
 import { AgentRunTee } from '../../utils/agents-tee'
@@ -46,22 +46,8 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
   const tradeDate = body.trade_date ?? new Date().toISOString().slice(0, 10)
   const db = getDb()
 
-  const inflight = await db
-    .select({ id: agentRuns.id })
-    .from(agentRuns)
-    .where(and(
-      eq(agentRuns.userId, userId),
-      eq(agentRuns.symbol, symbol),
-      eq(agentRuns.status, 'running'),
-    ))
-    .limit(1)
-  if (inflight[0]) {
-    throw createError({
-      statusCode: 409,
-      statusMessage: 'a run is already in progress for this symbol',
-      data: { run_id: inflight[0].id },
-    })
-  }
+  const inflight = await runningRunId(userId, symbol)
+  if (inflight) throw alreadyRunning(inflight)
   const inserted = await db
     .insert(agentRuns)
     .values({
@@ -80,6 +66,11 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
       },
     })
     .returning()
+    .catch(async (e: unknown) => {
+      // The pre-check races a concurrent start; the partial unique index decides.
+      if (!isRunningPerSymbolViolation(e)) throw e
+      throw alreadyRunning(await runningRunId(userId, symbol))
+    })
   const run = inserted[0]!
 
   const apiBase = process.env.NUXT_API_BASE_URL ?? 'http://api:8000'
@@ -119,6 +110,36 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
   }
 
   return { run, userId, upstream }
+}
+
+async function runningRunId(userId: string, symbol: string): Promise<string | null> {
+  const rows = await getDb()
+    .select({ id: agentRuns.id })
+    .from(agentRuns)
+    .where(and(
+      eq(agentRuns.userId, userId),
+      eq(agentRuns.symbol, symbol),
+      eq(agentRuns.status, 'running'),
+    ))
+    .limit(1)
+  return rows[0]?.id ?? null
+}
+
+function alreadyRunning(runId: string | null) {
+  return createError({
+    statusCode: 409,
+    statusMessage: 'a run is already in progress for this symbol',
+    data: { run_id: runId },
+  })
+}
+
+/** Drizzle wraps the pg error, so check the error and its cause. */
+export function isRunningPerSymbolViolation(e: unknown): boolean {
+  for (let err: unknown = e; err instanceof Error; err = err.cause) {
+    const pg = err as Error & { code?: string; constraint?: string }
+    if (pg.code === '23505' && pg.constraint === RUNNING_PER_SYMBOL_UQ) return true
+  }
+  return false
 }
 
 // The api heartbeats every 15 s, so this much silence means it is gone.

@@ -42,7 +42,9 @@ export const chatThreads = pgTable('chat_threads', {
   title: text('title').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-})
+}, t => ({
+  user: index('chat_threads_user_idx').on(t.userId),
+}))
 
 export const chatMessages = pgTable('chat_messages', {
   id: serial('id').primaryKey(),
@@ -54,7 +56,9 @@ export const chatMessages = pgTable('chat_messages', {
   toolCalls: jsonb('tool_calls'),
   reasoning: jsonb('reasoning'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-})
+}, t => ({
+  thread: index('chat_messages_thread_idx').on(t.threadId),
+}))
 
 // Algo trading: strategies, runs, signals.
 // `code` is a Python source string executed inside the FastAPI container's
@@ -98,7 +102,9 @@ export const algoRuns = pgTable('algo_runs', {
   error: text('error'),
   startedAt: timestamp('started_at').defaultNow().notNull(),
   finishedAt: timestamp('finished_at'),
-})
+}, t => ({
+  strategy: index('algo_runs_strategy_idx').on(t.strategyId),
+}))
 
 // Live signal emitted by the scheduler. `orderId` is the moomoo paper order
 // id once the place_order succeeds (null if signal was emitted but order
@@ -114,7 +120,9 @@ export const algoSignals = pgTable('algo_signals', {
   price: numeric('price', { precision: 18, scale: 6 }),
   orderId: varchar('order_id', { length: 64 }),
   error: text('error'),
-})
+}, t => ({
+  strategy: index('algo_signals_strategy_idx').on(t.strategyId),
+}))
 
 // Per-call LLM token usage + estimated USD cost. One row per chat turn or
 // agents pipeline LLM call. `source` distinguishes 'chat' from agents-side
@@ -132,13 +140,18 @@ export const llmUsage = pgTable('llm_usage', {
   totalTokens: integer('total_tokens').notNull(),
   estimatedCostUsd: numeric('estimated_cost_usd', { precision: 12, scale: 6 }).default('0'),
   ts: timestamp('ts').defaultNow().notNull(),
-})
+}, t => ({
+  userTs: index('llm_usage_user_ts_idx').on(t.userId, t.ts),
+}))
 
 // TradingAgents (LangGraph) run record. One row per analyze invocation —
 // captures inputs (symbol/date/config), terminal status, and token/cost
 // telemetry. `resumedFrom` lets a re-run reference its parent. The partial
 // index on status='running' is the hot lookup for the "is this user already
-// running an agent?" check.
+// running an agent?" check; the partial unique index makes that check hold
+// under concurrent starts and resumes.
+export const RUNNING_PER_SYMBOL_UQ = 'agent_runs_one_running_per_symbol_uq'
+
 export const agentRuns = pgTable('agent_runs', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').notNull().references(() => users.id),
@@ -160,6 +173,7 @@ export const agentRuns = pgTable('agent_runs', {
 }, t => ({
   userSymbolDate: index('agent_runs_user_symbol_date_idx').on(t.userId, t.symbol, t.tradeDate),
   runningOnly: index('agent_runs_running_idx').on(t.status).where(sql`status = 'running'`),
+  oneRunningPerSymbol: uniqueIndex(RUNNING_PER_SYMBOL_UQ).on(t.userId, t.symbol).where(sql`status = 'running'`),
 }))
 
 // Streamed messages from a run — analyst chatter, tool calls, debate turns,

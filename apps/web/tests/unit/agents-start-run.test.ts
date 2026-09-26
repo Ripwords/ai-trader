@@ -19,6 +19,11 @@ function setup(runningRows: unknown[], opts: FakeDbOptions = {}) {
   )
 }
 
+class UniqueViolation extends Error {
+  code = '23505'
+  constraint = 'agent_runs_one_running_per_symbol_uq'
+}
+
 beforeEach(() => {
   setup([])
 })
@@ -35,5 +40,21 @@ describe('startAgentRun', () => {
     expect(failed?.set.error).toMatch(/unreachable/)
     expect(failed?.set.finishedAt).toBeInstanceOf(Date)
     expect(failed?.params).toContain('run-new')
+  })
+
+  it('turns a concurrent start that loses the unique index race into a 409 naming the live run', async () => {
+    let checks = 0
+    fake = createFakeDb(
+      // The pre-check sees nothing; the lookup after the violation finds the winner.
+      table => table === 'agent_runs' ? (checks++ === 0 ? [] : [{ id: 'run-winner' }]) : [],
+      { insertReturning: () => { throw Object.assign(new Error('insert failed'), { cause: new UniqueViolation('dup') }) } },
+    )
+    vi.stubGlobal('fetch', vi.fn())
+
+    await expect(startAgentRun({ symbol: 'NVDA' })).rejects.toMatchObject({
+      statusCode: 409,
+      data: { run_id: 'run-winner' },
+    })
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
