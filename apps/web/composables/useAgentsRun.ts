@@ -99,6 +99,8 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number } =
   const resolution = ref<SymbolResolution | null>(null)
   // agent_runs.started_at, so a refreshed page shows cumulative elapsed time.
   const startedAt = ref<Date | null>(null)
+  // A resume request is in flight; the page disables its button meanwhile.
+  const resuming = ref(false)
   let controller: AbortController | null = null
 
   function fail(message: string) {
@@ -217,12 +219,13 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number } =
 
   /** Continue a halted run from its last checkpoint, keeping its timeline. */
   async function resume(id: string) {
-    if (view.value.status === 'running') return
+    if (view.value.status === 'running' || resuming.value) return
+    resuming.value = true
     const res = await fetch('/api/research/agents-resume', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ run_id: id }),
-    }).catch(() => null)
+    }).catch(() => null).finally(() => { resuming.value = false })
     if (!res?.ok) {
       view.value = { ...view.value, status: 'failed', error: `resume failed (${res?.status ?? 'network'})` }
       return
@@ -257,7 +260,7 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number } =
     currentNode: computed(() => view.value.currentNode),
     verdict: computed(() => view.value.verdict),
     error: computed(() => view.value.error),
-    runId, resolution, startedAt, connection,
+    runId, resolution, startedAt, connection, resuming,
     start, resume, cancel, follow, reconnect, reset,
   }
 }

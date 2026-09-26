@@ -32,7 +32,7 @@ useHead({ title: () => `research · ${symbol.value}` })
 
 const {
   events, status, verdict, runId, error, resolution, startedAt, connection,
-  start, resume, cancel, follow, reconnect, reset,
+  start, resume, cancel, follow, reconnect, reset, resuming,
 } = useAgentsRun()
 
 // Candidates to offer when the symbol couldn't be uniquely resolved (422).
@@ -302,6 +302,7 @@ watch(
               type="button"
               class="resume-card__btn"
               data-testid="agent-resume-button"
+              :disabled="resuming"
               @click="onResume"
             >
               <span data-mono>resume from checkpoint</span>
@@ -615,7 +616,11 @@ watch(
   cursor: pointer;
   transition: color 160ms ease, border-color 160ms ease;
 }
-.resume-card__btn:hover {
+.resume-card__btn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+.resume-card__btn:hover:not(:disabled) {
   color: var(--accent);
   border-color: var(--accent);
 }

@@ -28,7 +28,14 @@ function ndjson(lines: string[]): Response {
 
 beforeEach(() => {
   runRow = { id: 'run-1', userId: 'user-1', status: 'failed', symbol: 'NVDA', tradeDate: '2026-05-10' }
-  fake = createFakeDb(table => table === 'agent_runs' ? [runRow] : [{ maxSeq: 5 }])
+  fake = createFakeDb(table => table === 'agent_runs' ? [runRow] : [{ maxSeq: 5 }], {
+    // Postgres runs the claiming UPDATE atomically: only one caller sees the row.
+    updateReturning: (u) => {
+      if (u.set.status !== 'running' || !['failed', 'cancelled'].includes(String(runRow.status))) return []
+      runRow.status = 'running'
+      return [{ id: runRow.id }]
+    },
+  })
   vi.stubGlobal('fetch', vi.fn(async () => ndjson([
     '{"type":"decision","rating":"hold","confidence":50,"rationale":"resumed"}',
     '{"type":"run-end","run_id":"run-1","tokens_in":1,"tokens_out":1,"cost_usd":0}',
@@ -51,5 +58,26 @@ describe('POST /api/research/agents-resume', () => {
     runRow.status = 'running'
     await expect(handler(makeEvent({ run_id: 'run-1' }))).rejects.toMatchObject({ statusCode: 409 })
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('refuses to resume a run that completed', async () => {
+    runRow.status = 'complete'
+    await expect(handler(makeEvent({ run_id: 'run-1' }))).rejects.toMatchObject({ statusCode: 409 })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('lets only one of two concurrent resumes through', async () => {
+    const results = await Promise.allSettled([
+      handler(makeEvent({ run_id: 'run-1' })),
+      handler(makeEvent({ run_id: 'run-1' })),
+    ])
+
+    expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    const rejected = results.find(r => r.status === 'rejected') as PromiseRejectedResult
+    expect(rejected.reason).toMatchObject({ statusCode: 409 })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const claim = fake.updates[0]!
+    expect(claim.where).toMatch(/"status" in/)
+    expect(claim.params).toEqual(expect.arrayContaining(['failed', 'cancelled']))
   })
 })

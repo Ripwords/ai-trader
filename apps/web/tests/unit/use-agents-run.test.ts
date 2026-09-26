@@ -191,4 +191,23 @@ describe('useAgentsRun.resume', () => {
     expect(run.error.value).toBeNull()
     expect(run.events.value).toHaveLength(4)
   })
+
+  it('sends one resume request however often it is clicked while pending', async () => {
+    let release: (r: Response) => void = () => {}
+    const fetchSpy = mockFetch((url) => {
+      if (url === '/api/research/agents-resume') return new Promise<Response>((r) => { release = r })
+      return sseResponse(sse(msg(2, decision), end('complete')))
+    })
+    const run = useAgentsRun()
+
+    const first = run.resume('r-7')
+    expect(run.resuming.value).toBe(true)
+    const second = run.resume('r-7')
+    release(Response.json({ runId: 'r-7' }))
+    await Promise.all([first, second])
+
+    expect(fetchSpy.mock.calls.filter(c => c[0] === '/api/research/agents-resume')).toHaveLength(1)
+    expect(run.resuming.value).toBe(false)
+    expect(run.status.value).toBe('complete')
+  })
 })
