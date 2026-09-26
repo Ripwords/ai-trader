@@ -34,11 +34,11 @@ function makeModel() {
     },
   })
 }
-function finish() {
+function finish(unified: 'stop' | 'length' = 'stop') {
   feed.enqueue({ type: 'text-end', id: 'x' })
   feed.enqueue({
     type: 'finish',
-    finishReason: { unified: 'stop', raw: 'stop' },
+    finishReason: { unified, raw: unified },
     usage: {
       inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
       outputTokens: { total: 2, text: 2, reasoning: 0 },
@@ -138,6 +138,27 @@ describe('POST /api/chat', () => {
     expect(await res.text()).toContain('The assistant stopped early: context window exceeded')
     const [saved] = assistantSaves()
     expect(saved?.metadata).toMatchObject({ error: 'The assistant stopped early: context window exceeded' })
+  })
+
+  it('marks a reply that ended with no answer, live and when saved', async () => {
+    const res = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    finish()
+
+    expect(await res.text()).toContain('"messageMetadata":{"error":"The model returned no answer."}')
+    const [saved] = assistantSaves()
+    expect(saved?.metadata).toMatchObject({ error: 'The model returned no answer.' })
+  })
+
+  it('marks a reply cut off at the output limit', async () => {
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    feed.enqueue({ type: 'text-delta', id: 'x', delta: 'half an ans' })
+    finish('length')
+    await until(() => !chatStreams.isActive('th-1'))
+
+    const [saved] = assistantSaves()
+    expect(saved?.metadata).toMatchObject({ error: expect.stringMatching(/output limit/) })
   })
 
   it('saves a reply that failed before its first chunk, carrying the error', async () => {

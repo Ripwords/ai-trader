@@ -15,6 +15,7 @@ import { resolveModel, supportsForcedToolChoice } from '../llm/model'
 import { makeTools } from '../llm/tools'
 import { settleStoppedParts, stopOnAbort } from '../llm/chat-stop'
 import { resolveMaxSteps } from '../llm/chat-steps'
+import { watchReplyEnding } from '../llm/chat-ending'
 import { ChatStreamBusyError, chatSseResponse, chatStreams } from '../lib/chat-streams'
 import { within } from '../lib/within'
 
@@ -131,7 +132,8 @@ export default defineEventHandler(async (event) => {
             outputTokens: steps.reduce((n, s) => n + (s.usage.outputTokens ?? 0), 0),
           }),
         })
-        writer.merge(result.toUIMessageStream({ onError }))
+        const replyEnding = watchReplyEnding(maxSteps)
+        writer.merge(result.toUIMessageStream({ onError, messageMetadata: ({ part }) => replyEnding(part) }))
       },
       onError,
       onFinish: async ({ responseMessage, isAborted }) => {
