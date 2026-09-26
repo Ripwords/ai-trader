@@ -15,6 +15,7 @@ import { resolveModel, supportsForcedToolChoice } from '../llm/model'
 import { makeTools } from '../llm/tools'
 import { settleStoppedParts, stopOnAbort } from '../llm/chat-stop'
 import { resolveMaxSteps } from '../llm/chat-steps'
+import { watchReplyEnding } from '../llm/chat-ending'
 import { ChatStreamBusyError, chatSseResponse, chatStreams } from '../lib/chat-streams'
 import { within } from '../lib/within'
 
@@ -28,6 +29,9 @@ interface ChatBody {
   // Max agentic steps (model generations) for this turn. Client-controlled so
   // the user can raise it for deep multi-tool work; defaults to 30 server-side.
   maxSteps?: number
+  // The client's id for this send, so Stop can reach it before the client
+  // knows the thread or before the generation has started.
+  requestId?: string
 }
 
 export default defineEventHandler(async (event) => {
@@ -52,14 +56,6 @@ export default defineEventHandler(async (event) => {
   }
 
   const thread = threadId
-  if (chatStreams.isActive(thread)) throw busy()
-
-  // Persist the user message immediately so it survives a refresh during streaming.
-  // A retry resends the question; it is saved already unless its first send
-  // never reached us.
-  if (newestUser && (!newestUser.id || newestUser.id !== await lastMessageId(thread))) {
-    await appendMessages(thread, [newestUser])
-  }
 
   const recordUsage = async (usage: { inputTokens?: number; outputTokens?: number }) => {
     const { recordUsageSafely } = await import('../lib/llm-cost')
@@ -81,6 +77,19 @@ export default defineEventHandler(async (event) => {
   try {
     chatStreams.start(thread, abortSignal => createUIMessageStream({
       execute: async ({ writer }) => {
+        // Saved here, once the thread is reserved, so a send refused as busy
+        // leaves no question behind. Still before any model work, so it
+        // survives a refresh during streaming. A retry resends the question;
+        // it is saved already unless its first send never reached us.
+        if (newestUser && (!newestUser.id || newestUser.id !== await lastMessageId(thread))) {
+          await appendMessages(thread, [newestUser])
+        }
+        // Stop pressed before the model was called: end as stopped without calling it.
+        const stoppedEarly = () => {
+          if (abortSignal.aborted) writer.write({ type: 'abort' })
+          return abortSignal.aborted
+        }
+        if (stoppedEarly()) return
         const client = getApiClient()
         const [[ghostfolioTools, ghostfolioStatus], recallContext] = await Promise.all([
           within(
@@ -96,6 +105,8 @@ export default defineEventHandler(async (event) => {
           body.messages as Parameters<typeof convertToModelMessages>[0],
           { ignoreIncompleteToolCalls: true },
         )
+
+        if (stoppedEarly()) return
 
         const { slashDispatch, stepToolChoice } = await import('../llm/research/dispatch')
         const dispatch = slashDispatch(newestUserText)
@@ -131,7 +142,8 @@ export default defineEventHandler(async (event) => {
             outputTokens: steps.reduce((n, s) => n + (s.usage.outputTokens ?? 0), 0),
           }),
         })
-        writer.merge(result.toUIMessageStream({ onError }))
+        const replyEnding = watchReplyEnding(maxSteps)
+        writer.merge(result.toUIMessageStream({ onError, messageMetadata: ({ part }) => replyEnding(part) }))
       },
       onError,
       onFinish: async ({ responseMessage, isAborted }) => {
@@ -144,11 +156,12 @@ export default defineEventHandler(async (event) => {
               metadata: { ...(responseMessage.metadata ?? {}), ...ending },
             }
           : responseMessage
-        if (saved.parts.length > 0) await appendMessages(thread, [saved])
+        // A reply that failed or was stopped before its first chunk is saved
+        // with no parts, so a reload shows why instead of an unanswered question.
+        if (ending || saved.parts.length > 0) await appendMessages(thread, [saved])
       },
-    }))
+    }), { requestId: typeof body.requestId === 'string' ? body.requestId : undefined })
   } catch (err) {
-    // Two sends raced past the isActive check above.
     if (err instanceof ChatStreamBusyError) throw busy()
     throw err
   }

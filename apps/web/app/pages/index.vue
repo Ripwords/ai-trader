@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DefaultChatTransport, type UIMessage } from 'ai'
+import { DefaultChatTransport, generateId, type UIMessage } from 'ai'
 import { Chat } from '@ai-sdk/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
@@ -12,7 +12,8 @@ import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
 import { useMediaQuery } from '@vueuse/core'
 import { BorderBeam } from 'vue-border-beam'
 import { requestRunNotificationPermission } from '../lib/notify'
-import { followRunningReply, interruptionOf, reattach, recoverReply, replyEnding } from '../lib/chat-recovery'
+import { afterRequest, endedWithoutFinish, followRunningReply, interruptionOf, reattach, recoverReply, replyEnding } from '../lib/chat-recovery'
+import { createChatFetch } from '../lib/chat-transport'
 import { buildMirrorStyle, cycleIndex, filterCommandPalette, splitSlashHighlight, type PaletteItem } from '../lib/slash'
 import { DEFAULT_SUGGESTIONS } from '../../server/lib/chat-suggestions'
 
@@ -245,40 +246,58 @@ let contextSeq = 0
 const settling = ref(false)
 // The server refused a send because this thread is still generating a reply.
 let refusedBusy = false
+// `data.code` of the last failed chat request, e.g. llm_not_configured.
+const requestErrorCode = ref<string | null>(null)
+// The send in flight, so Stop reaches it before the server has started it
+// or, on a new chat, before this page knows the thread.
+let pendingRequest: string | null = null
+// A stream followed while settling closed without a finish; reattach takes it.
+let cutShort = false
+function takeCutShort(): boolean {
+  const was = cutShort
+  cutShort = false
+  return was
+}
+
+function adoptThread(id: string) {
+  if (id === chatId.value) return
+  chatId.value = id
+  router.replace({ query: { ...route.query, c: id } })
+  setTimeout(() => conversationsList.value?.refresh(), 250)
+}
+
+const chatFetch = createChatFetch({
+  onChatId: adoptThread,
+  onRequestError(error) {
+    refusedBusy = error?.code === 'chat_busy'
+    requestErrorCode.value = error?.code ?? null
+  },
+})
 
 const chat = new Chat({
   transport: new DefaultChatTransport({
     api: '/api/chat',
-    prepareSendMessagesRequest: ({ messages, body }) => ({
-      body: { ...body, messages, chatId: chatId.value, maxSteps: maxSteps.value },
-    }),
-    prepareReconnectToStreamRequest: () => ({ api: `/api/chat/${chatId.value}/stream` }),
-    fetch: async (url, init) => {
-      const res = await fetch(url, init)
-      // 409 also means no model provider is configured; only chat_busy is a running reply.
-      if (res.status === 409) refusedBusy = await isChatBusy(res.clone())
-      const headerId = res.headers.get('X-Chat-Id')
-      if (headerId && headerId !== chatId.value) {
-        chatId.value = headerId
-        router.replace({ query: { ...route.query, c: headerId } })
-        setTimeout(() => conversationsList.value?.refresh(), 250)
+    prepareSendMessagesRequest: ({ messages, body }) => {
+      pendingRequest = generateId()
+      return {
+        body: { ...body, messages, chatId: chatId.value, maxSteps: maxSteps.value, requestId: pendingRequest },
       }
-      return res
     },
+    prepareReconnectToStreamRequest: () => ({ api: `/api/chat/${chatId.value}/stream` }),
+    fetch: chatFetch.fetch,
   }),
   onError(err) { console.error('chat error', err) },
-  onFinish({ isError }) {
-    if (isError && !settling.value) void recoverFromError()
+  onFinish(ending) {
+    pendingRequest = null
+    if (settling.value) {
+      cutShort = endedWithoutFinish(ending)
+      return
+    }
+    const next = afterRequest({ ...ending, error: chat.error, refusedBusy })
+    if (next) void recoverAfterRequest(next)
   },
 })
-const llmNotConfigured = computed(() => chat.error?.message.includes('llm_not_configured') ?? false)
-
-async function isChatBusy(res: Response): Promise<boolean> {
-  const body: unknown = await res.json().catch(() => null)
-  if (typeof body !== 'object' || body === null || !('data' in body)) return false
-  const data: unknown = body.data
-  return typeof data === 'object' && data !== null && 'code' in data && data.code === 'chat_busy'
-}
+const llmNotConfigured = computed(() => !!chat.error && requestErrorCode.value === 'llm_not_configured')
 
 function whenOnline(): Promise<void> {
   if (navigator.onLine) return Promise.resolve()
@@ -294,34 +313,55 @@ async function settle<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-async function recoverFromError() {
+// Reloads the thread only while it is still the one on screen.
+function reloadIfOpen(id: string) {
+  return () => (id === chatId.value ? loadConversation(id) : Promise.resolve())
+}
+
+async function recoverAfterRequest(next: 'follow-running' | 'recover') {
   const id = chatId.value
   if (!id) return
-  const reload = () => loadConversation(id)
+  const reload = reloadIfOpen(id)
   await nextTick()
-  if (refusedBusy) {
+  if (next === 'follow-running') {
     refusedBusy = false
-    const unsent = await settle(() => followRunningReply(chat, reload))
+    const unsent = await settle(() => followRunningReply(chat, reload, takeCutShort))
     if (unsent) input.value = unsent
     return
   }
-  await settle(() => recoverReply(chat, { reload, online: whenOnline }))
+  await settle(() => recoverReply(chat, { reload, online: whenOnline, takeCutShort }))
 }
 
 async function openConversation(id: string | null) {
   await settle(async () => {
     await loadConversation(id)
-    if (id && id === chatId.value) await reattach(chat, () => loadConversation(id))
+    if (id && id === chatId.value) await reattach(chat, reloadIfOpen(id), takeCutShort)
   })
 }
 
+// Ends whatever this page is streaming: a send, or a reply it resumed.
+function stopStreams() {
+  void chat.stop()
+  chatFetch.abortResume()
+}
+
 // Stop ends the generation on the server too; the saved partial reply, marked
-// stopped, then replaces the one on screen.
+// stopped, then replaces the one on screen. A send still "submitted" may not
+// have reached the model or, on a new chat, told this page its thread yet, so
+// it is stopped by its request id.
 async function stopReply() {
-  chat.stop()
+  const requestId = chat.status === 'submitted' ? pendingRequest : null
+  stopStreams()
+  if (requestId) {
+    const r = await $fetch<{ stopped: boolean; threadId?: string }>('/api/chat/stop', {
+      method: 'POST',
+      body: { requestId },
+    }).catch(() => null)
+    if (r?.threadId) adoptThread(r.threadId)
+  }
   const id = chatId.value
   if (!id) return
-  await $fetch(`/api/chat/${id}/stop`, { method: 'POST' }).catch(() => {})
+  if (!requestId) await $fetch(`/api/chat/${id}/stop`, { method: 'POST' }).catch(() => {})
   if (id === chatId.value) await loadConversation(id)
 }
 
@@ -387,13 +427,13 @@ watch(() => route.query.c, async (next) => {
   if (nextId === chatId.value) return
   // An in-flight stream keeps appending to chat.messages, so switching
   // threads without stopping it copies the old reply into the new thread.
-  chat.stop()
+  stopStreams()
   chatId.value = nextId
   await openConversation(nextId)
 })
 
 function startNewChat() {
-  chat.stop()
+  stopStreams()
   chatId.value = null
   chat.messages = []
   activeConversationMetadata.value = null

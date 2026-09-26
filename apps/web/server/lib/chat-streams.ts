@@ -4,6 +4,8 @@ export type ChatStreamStatus = 'streaming' | 'done' | 'error' | 'aborted'
 
 export interface ActiveChatStream {
   readonly threadId: string
+  /** The client's id for the send that started it, if it gave one. */
+  readonly requestId?: string
   readonly chunks: UIMessageChunk[]
   status: ChatStreamStatus
   readonly abort: AbortController
@@ -30,19 +32,33 @@ export class ChatStreamBusyError extends Error {
  * by which point the reply has been persisted, so a reader arriving later
  * loads it from the thread instead.
  */
+/** How long a stop for a send that has not arrived yet waits for it. */
+const STOP_MARK_MS = 60_000
+
+interface StopMark {
+  at: number
+  claim: (entry: ActiveChatStream) => void
+}
+
 export class ChatStreamRegistry {
   private entries = new Map<string, Entry>()
+  private stopMarks = new Map<string, StopMark>()
 
   isActive(threadId: string): boolean {
     return this.entries.has(threadId)
   }
 
-  start(threadId: string, produce: (signal: AbortSignal) => ReadableStream<UIMessageChunk>): ActiveChatStream {
+  start(
+    threadId: string,
+    produce: (signal: AbortSignal) => ReadableStream<UIMessageChunk>,
+    opts: { requestId?: string } = {},
+  ): ActiveChatStream {
     if (this.entries.has(threadId)) throw new ChatStreamBusyError(threadId)
     const abort = new AbortController()
     let resolveDone!: (s: Exclude<ChatStreamStatus, 'streaming'>) => void
     const entry: Entry = {
       threadId,
+      requestId: opts.requestId,
       chunks: [],
       status: 'streaming',
       abort,
@@ -75,6 +91,11 @@ export class ChatStreamRegistry {
       resolveDone(entry.status)
     })()
 
+    const mark = opts.requestId ? this.takeStopMark(opts.requestId) : undefined
+    if (mark) {
+      abort.abort()
+      mark.claim(entry)
+    }
     return entry
   }
 
@@ -90,6 +111,37 @@ export class ChatStreamRegistry {
         else controller.close()
       },
     })
+  }
+
+  /**
+   * Stops the generation started by the client's send `requestId`. Stop can be
+   * pressed before the send reaches the registry (while the server is still
+   * saving the question or loading the model); the generation is then stopped
+   * the moment it starts. Resolves with it once it is stopping.
+   */
+  stopRequest(requestId: string): Promise<ActiveChatStream> {
+    for (const entry of this.entries.values()) {
+      if (entry.requestId === requestId) {
+        entry.abort.abort()
+        return Promise.resolve(entry)
+      }
+    }
+    this.pruneStopMarks()
+    return new Promise((claim) => {
+      this.stopMarks.set(requestId, { at: Date.now(), claim })
+    })
+  }
+
+  private takeStopMark(requestId: string): StopMark | undefined {
+    this.pruneStopMarks()
+    const mark = this.stopMarks.get(requestId)
+    this.stopMarks.delete(requestId)
+    return mark
+  }
+
+  private pruneStopMarks() {
+    const cutoff = Date.now() - STOP_MARK_MS
+    for (const [id, mark] of this.stopMarks) if (mark.at < cutoff) this.stopMarks.delete(id)
   }
 
   /** Signals the generation to stop; it ends once the model and any running tool notice. */

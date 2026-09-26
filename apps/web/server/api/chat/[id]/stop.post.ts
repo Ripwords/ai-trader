@@ -1,6 +1,7 @@
 import { defineEventHandler, getRouterParam } from 'h3'
 import { getOwnerId, getThread } from '../../../db/repo'
 import { chatStreams } from '../../../lib/chat-streams'
+import { within } from '../../../lib/within'
 
 /**
  * POST /api/chat/:id/stop
@@ -17,6 +18,6 @@ export default defineEventHandler(async (event) => {
   if (!stopping) return { stopped: false }
   // Answer once the partial reply is saved, so a reload right after shows it.
   // A tool that ignores the abort can hold the generation open past this.
-  await Promise.race([stopping.done, new Promise(r => setTimeout(r, SETTLE_MS))])
+  await within<unknown>(stopping.done, SETTLE_MS, null)
   return { stopped: true }
 })

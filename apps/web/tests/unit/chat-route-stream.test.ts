@@ -16,9 +16,12 @@ const repo = vi.hoisted(() => ({
 let feeder: ReadableStreamDefaultController<LanguageModelV3StreamPart> | undefined
 const feed = { enqueue: (p: LanguageModelV3StreamPart) => feeder!.enqueue(p), close: () => feeder!.close() }
 let lastModel: MockLanguageModelV3 | undefined
+/** When set, the provider call itself fails, before any chunk. */
+let providerFailure: Error | null = null
 function makeModel() {
   return lastModel = new MockLanguageModelV3({
     doStream: async ({ abortSignal }) => {
+      if (providerFailure) throw providerFailure
       const stream = new ReadableStream<LanguageModelV3StreamPart>({
         start(c) {
           feeder = c
@@ -31,11 +34,11 @@ function makeModel() {
     },
   })
 }
-function finish() {
+function finish(unified: 'stop' | 'length' = 'stop') {
   feed.enqueue({ type: 'text-end', id: 'x' })
   feed.enqueue({
     type: 'finish',
-    finishReason: { unified: 'stop', raw: 'stop' },
+    finishReason: { unified, raw: unified },
     usage: {
       inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
       outputTokens: { total: 2, text: 2, reasoning: 0 },
@@ -82,6 +85,7 @@ const { chatStreams } = await import('../../server/lib/chat-streams')
 const post = (await import('../../server/api/chat.post')).default as (e: H3Event) => Promise<Response>
 const resume = (await import('../../server/api/chat/[id]/stream.get')).default as (e: H3Event) => Promise<Response | null>
 const stop = (await import('../../server/api/chat/[id]/stop.post')).default as (e: H3Event) => Promise<unknown>
+const stopSend = (await import('../../server/api/chat/stop.post')).default as (e: H3Event) => Promise<unknown>
 
 const event = (body: unknown, params: Record<string, string> = {}) =>
   ({ _body: body, _params: params, context: {}, node: { req: {}, res: {} } }) as unknown as H3Event
@@ -137,6 +141,42 @@ describe('POST /api/chat', () => {
     expect(saved?.metadata).toMatchObject({ error: 'The assistant stopped early: context window exceeded' })
   })
 
+  it('marks a reply that ended with no answer, live and when saved', async () => {
+    const res = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    finish()
+
+    expect(await res.text()).toContain('"messageMetadata":{"error":"The model returned no answer."}')
+    const [saved] = assistantSaves()
+    expect(saved?.metadata).toMatchObject({ error: 'The model returned no answer.' })
+  })
+
+  it('marks a reply cut off at the output limit', async () => {
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    feed.enqueue({ type: 'text-delta', id: 'x', delta: 'half an ans' })
+    finish('length')
+    await until(() => !chatStreams.isActive('th-1'))
+
+    const [saved] = assistantSaves()
+    expect(saved?.metadata).toMatchObject({ error: expect.stringMatching(/output limit/) })
+  })
+
+  it('saves a reply that failed before its first chunk, carrying the error', async () => {
+    providerFailure = new Error('401 invalid api key')
+    try {
+      const res = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+      expect(await res.text()).toContain('The assistant stopped early: 401 invalid api key')
+      await until(() => !chatStreams.isActive('th-1'))
+
+      const [saved] = assistantSaves()
+      expect(saved?.thread).toBe('th-1')
+      expect(saved?.metadata).toMatchObject({ error: 'The assistant stopped early: 401 invalid api key' })
+    } finally {
+      providerFailure = null
+    }
+  })
+
   it('keeps generating and saves the reply after the client disconnects', async () => {
     const res = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
     await until(() => chatStreams.isActive('th-1') && feeder !== undefined)
@@ -160,6 +200,27 @@ describe('POST /api/chat', () => {
 
     finish()
     await until(() => !chatStreams.isActive('th-1'))
+  })
+})
+
+describe('POST /api/chat concurrent sends', () => {
+  it('refuses the second of two near-simultaneous sends before saving its question', async () => {
+    let release!: () => void
+    repo.lastMessageId.mockImplementationOnce(() => new Promise(r => { release = () => r(null) }))
+    const first = post(event({ messages: [userMessage('one')], chatId: 'th-1' }))
+    const second = post(event({ messages: [{ ...userMessage('two'), id: 'u2' }], chatId: 'th-1' }))
+
+    await expect(second).rejects.toMatchObject({ statusCode: 409, data: { code: 'chat_busy' } })
+    await until(() => release !== undefined)
+    release()
+    await first
+    await until(() => feeder !== undefined)
+    finish()
+    await until(() => !chatStreams.isActive('th-1'))
+
+    const questions = (repo.appendMessages.mock.calls as unknown as Array<[string, Array<{ id: string; role: string }>]>)
+      .flatMap(([, msgs]) => msgs.filter(m => m.role === 'user').map(m => m.id))
+    expect(questions).toEqual(['u1'])
   })
 })
 
@@ -301,7 +362,62 @@ describe('POST /api/chat/:id/stop', () => {
     expect(prompt).not.toContain('tool-call')
   })
 
+  it('clears its settle timer once the stopped reply is saved', async () => {
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => chatStreams.isActive('th-1') && feeder !== undefined)
+    const set = vi.spyOn(globalThis, 'setTimeout')
+    const clear = vi.spyOn(globalThis, 'clearTimeout')
+    try {
+      expect(await stop(event(undefined, { id: 'th-1' }))).toEqual({ stopped: true })
+      const settle = set.mock.calls.findIndex(([, ms]) => ms === 5_000)
+      expect(settle).toBeGreaterThanOrEqual(0)
+      expect(clear).toHaveBeenCalledWith(set.mock.results[settle]!.value)
+    } finally {
+      set.mockRestore()
+      clear.mockRestore()
+    }
+  })
+
   it('reports nothing to stop when idle', async () => {
     expect(await stop(event(undefined, { id: 'th-1' }))).toEqual({ stopped: false })
+  })
+})
+
+describe('POST /api/chat/stop', () => {
+  it('stops a send that has not reached the model yet, and names its new thread', async () => {
+    const stopping = stopSend(event({ requestId: 'req-1' }))
+    await post(event({ messages: [userMessage('hi')], requestId: 'req-1' }))
+
+    expect(await stopping).toEqual({ stopped: true, threadId: 'th-new' })
+    expect(chatStreams.isActive('th-new')).toBe(false)
+    expect(feeder).toBeUndefined()
+    const [saved] = assistantSaves()
+    expect(saved).toMatchObject({ thread: 'th-new', metadata: { stopped: true } })
+    const questions = (repo.appendMessages.mock.calls as unknown as Array<[string, Array<{ role: string }>]>)
+      .flatMap(([, msgs]) => msgs.filter(m => m.role === 'user'))
+    expect(questions).toHaveLength(1)
+  })
+
+  it('stops a send that is already generating', async () => {
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1', requestId: 'req-2' }))
+    await until(() => chatStreams.isActive('th-1') && feeder !== undefined)
+
+    expect(await stopSend(event({ requestId: 'req-2' }))).toEqual({ stopped: true, threadId: 'th-1' })
+    expect(chatStreams.isActive('th-1')).toBe(false)
+  })
+
+  it('rejects a missing request id', async () => {
+    await expect(stopSend(event({}))).rejects.toMatchObject({ statusCode: 400 })
+  })
+
+  it('gives up on a send that never arrives', async () => {
+    vi.useFakeTimers()
+    try {
+      const stopping = stopSend(event({ requestId: 'req-lost' }))
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(await stopping).toEqual({ stopped: false })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
