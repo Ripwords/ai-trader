@@ -720,10 +720,19 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           },
           body: JSON.stringify(args),
         })
-        if (!res.ok) {
+        let runId: string
+        if (res.status === 409) {
+          // A run is already in flight for this symbol; report on that one.
+          const body = await res.json().catch(() => ({})) as { data?: { run_id?: string | null } }
+          if (!body.data?.run_id) return { events, error: 'a run is already in progress for this symbol' }
+          runId = body.data.run_id
+        }
+        else if (!res.ok) {
           return { events, error: `agents service failed: ${res.status}` }
         }
-        const { runId } = await res.json() as { runId: string }
+        else {
+          runId = (await res.json() as { runId: string }).runId
+        }
 
         const { tailRun } = await import('../lib/agents/run-events')
         let verdict: { rating?: string; confidence?: number | null; rationale?: string } = {}

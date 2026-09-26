@@ -9,12 +9,12 @@ from typing import Any
 LLM_TIMEOUT_S = 180.0
 LLM_MAX_RETRIES = 2
 
-# Keyed by TradingAgents provider name. The field names differ per client:
-# ChatLiteLLM has no ``timeout`` alias for ``request_timeout``.
+# Keyed by TradingAgents provider name (llm_config maps OpenRouter to
+# "openai"). The field names differ per client: ChatLiteLLM has no
+# ``timeout`` alias for ``request_timeout``.
 _TIMEOUT_FIELD = {
     "anthropic": "timeout",
     "openai": "timeout",
-    "openrouter": "timeout",
     "google_genai": "timeout",
     "litellm": "request_timeout",
 }

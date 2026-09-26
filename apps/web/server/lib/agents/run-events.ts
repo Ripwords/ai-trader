@@ -2,6 +2,7 @@ import { and, asc, eq, gt } from 'drizzle-orm'
 import { getDb } from '../../../db/client'
 import { agentMessages, agentRuns } from '../../../db/schema'
 import type { AgentEvent, RunStatus } from '../../../types/agents'
+import { runVersion, waitForRun } from './run-signal'
 
 export type TerminalStatus = Exclude<RunStatus, 'running'>
 
@@ -11,31 +12,23 @@ export type RunFrame =
 
 const BATCH = 500
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms)
-    signal?.addEventListener('abort', () => {
-      clearTimeout(timer)
-      resolve()
-    }, { once: true })
-  })
-}
-
 /**
  * Replay a run's persisted events after `afterSeq`, then follow new ones
  * until the run is terminal. The drain writes events to agent_messages, so
  * any number of readers (SSE clients, the chat tool) can follow one run
- * without holding the api connection.
+ * without holding the api connection. A same-process drain wakes the tail
+ * through run-signal; `pollMs` is the backstop for everything else.
  */
 export async function* tailRun(
   runId: string,
   opts: { afterSeq?: number; pollMs?: number; signal?: AbortSignal } = {},
 ): AsyncGenerator<RunFrame> {
-  const { pollMs = 1000, signal } = opts
+  const { pollMs = 5000, signal } = opts
   let after = opts.afterSeq ?? -1
   const db = getDb()
 
   while (!signal?.aborted) {
+    const seen = runVersion(runId)
     // Status before rows: the tee writes an event row before the status it
     // implies, so a terminal status here means the rows read next are final.
     const [run] = await db
@@ -66,6 +59,6 @@ export async function* tailRun(
       yield { kind: 'end', status: run.status as TerminalStatus, error: run.error }
       return
     }
-    await sleep(pollMs, signal)
+    await waitForRun(runId, seen, pollMs, signal)
   }
 }

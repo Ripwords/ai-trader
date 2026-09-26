@@ -146,6 +146,52 @@ describe('useAgentsRun.follow', () => {
     expect(run.status.value).toBe('complete')
   })
 
+  it('drops and reconnects a socket that goes silent past the heartbeat window', async () => {
+    const urls: string[] = []
+    mockFetch((url) => {
+      urls.push(url)
+      if (urls.length === 1) return sseResponse(sse(runMeta('2026-05-10T12:00:00Z'), msg(0, runStart)), { hang: true })
+      return sseResponse(sse(msg(1, decision), end('complete')))
+    })
+    const run = useAgentsRun({ backoffMs: () => 0, idleMs: 20 })
+    await run.follow('r-7')
+
+    expect(urls).toHaveLength(2)
+    expect(urls[1]).toBe('/api/research/agent-events?run_id=r-7&after=0')
+    expect(run.status.value).toBe('complete')
+  })
+
+  it('keeps backing off when connections open but deliver nothing', async () => {
+    const attempts: number[] = []
+    let calls = 0
+    mockFetch(() => {
+      calls++
+      if (calls > 10) return sseResponse(sse(end('complete')))
+      return sseResponse(runMeta('2026-05-10T12:00:00Z'))
+    })
+    const run = useAgentsRun({ backoffMs: (n) => { attempts.push(n); return 0 } })
+    await run.follow('r-7')
+
+    expect(attempts).toEqual([1, 2, 3, 4, 5, 6])
+    expect(run.connection.value).toBe('lost')
+  })
+
+  it('resets the backoff once a connection delivers progress', async () => {
+    const attempts: number[] = []
+    let calls = 0
+    mockFetch(() => {
+      calls++
+      if (calls === 3) return sseResponse(sse(msg(0, runStart)))
+      if (calls > 4) return sseResponse(sse(end('complete')))
+      return sseResponse('')
+    })
+    const run = useAgentsRun({ backoffMs: (n) => { attempts.push(n); return 0 } })
+    await run.follow('r-7')
+
+    expect(attempts).toEqual([1, 2, 1, 2])
+    expect(run.status.value).toBe('complete')
+  })
+
   it('reports a lost connection after repeated failures, and reconnect() picks up from there', async () => {
     let up = false
     mockFetch(() => {
@@ -190,5 +236,24 @@ describe('useAgentsRun.resume', () => {
     expect(run.status.value).toBe('complete')
     expect(run.error.value).toBeNull()
     expect(run.events.value).toHaveLength(4)
+  })
+
+  it('sends one resume request however often it is clicked while pending', async () => {
+    let release: (r: Response) => void = () => {}
+    const fetchSpy = mockFetch((url) => {
+      if (url === '/api/research/agents-resume') return new Promise<Response>((r) => { release = r })
+      return sseResponse(sse(msg(2, decision), end('complete')))
+    })
+    const run = useAgentsRun()
+
+    const first = run.resume('r-7')
+    expect(run.resuming.value).toBe(true)
+    const second = run.resume('r-7')
+    release(Response.json({ runId: 'r-7' }))
+    await Promise.all([first, second])
+
+    expect(fetchSpy.mock.calls.filter(c => c[0] === '/api/research/agents-resume')).toHaveLength(1)
+    expect(run.resuming.value).toBe(false)
+    expect(run.status.value).toBe('complete')
   })
 })

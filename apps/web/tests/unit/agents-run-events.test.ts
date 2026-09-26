@@ -5,6 +5,7 @@ let fake = createFakeDb()
 vi.mock('../../db/client', () => ({ getDb: () => fake.db }))
 
 const { tailRun } = await import('../../server/lib/agents/run-events')
+const { notifyRun } = await import('../../server/lib/agents/run-signal')
 
 interface Script {
   statuses: Array<{ status: string; error?: string | null }>
@@ -70,6 +71,22 @@ describe('tailRun', () => {
     const frames = await collect(tailRun('missing', { pollMs: 1 }))
 
     expect(frames).toEqual([{ kind: 'end', status: 'failed', error: 'run not found' }])
+  })
+
+  it('wakes on a run notification instead of waiting out the poll', async () => {
+    scripted({
+      statuses: [{ status: 'running' }, { status: 'complete' }],
+      batches: [[], [{ seq: 0, payload: { type: 'node-start', node: 'market' } }]],
+    })
+    const started = Date.now()
+    const done = collect(tailRun('run-wake', { pollMs: 10_000 }))
+    setTimeout(() => notifyRun('run-wake'), 20)
+
+    expect(await done).toEqual([
+      { kind: 'event', seq: 0, event: { type: 'node-start', node: 'market' } },
+      { kind: 'end', status: 'complete', error: null },
+    ])
+    expect(Date.now() - started).toBeLessThan(2_000)
   })
 
   it('stops when the signal aborts', async () => {

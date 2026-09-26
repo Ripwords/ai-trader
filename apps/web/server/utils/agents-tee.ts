@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { agentRuns, agentMessages, agentDecisions } from '../../db/schema'
 import type { AgentEvent } from '../../types/agents'
+import { notifyRun } from '../lib/agents/run-signal'
 
 const QUEUE_CAP = 100
 
@@ -15,6 +16,8 @@ export class AgentRunTee {
   private seq: number
   private drained: Promise<void> = Promise.resolve()
   private draining = false
+  private errorMessage: string | null = null
+  private ended = false
 
   /** `startSeq` continues a resumed run's timeline after its existing rows. */
   constructor(public runId: string, public userId: string, startSeq = 0) {
@@ -31,15 +34,43 @@ export class AgentRunTee {
     if (!this.draining) this.drained = this.drain()
   }
 
-  /** The api follows an error with run-end, and a cancel precedes both, so
-   *  only the first terminal transition may land. */
-  private stillRunning() {
-    return and(eq(agentRuns.id, this.runId), eq(agentRuns.status, 'running'))
-  }
-
   /** Resolves once every pushed event has been written. */
   flush(): Promise<void> {
     return this.drained
+  }
+
+  /**
+   * Readers treat a terminal status as "every row is written", so the status
+   * lands only after the api's last row (run-end) or, when the stream ends
+   * without one, here. `reason` becomes the error event of a stream that
+   * ended with neither.
+   */
+  async end(reason: string): Promise<void> {
+    await this.flush()
+    if (this.ended) return
+    if (this.errorMessage === null) {
+      this.push({ type: 'error', message: reason })
+      await this.flush()
+    }
+    await this.writeTerminal().catch((e: unknown) => {
+      console.error('[agents-tee] status write failed', (e as Error)?.message)
+    })
+  }
+
+  private async writeTerminal() {
+    this.ended = true
+    const msg = this.errorMessage
+    // The api reports a cancelled task as this exact error.
+    const status = msg === null ? 'complete' : msg === 'cancelled' ? 'cancelled' : 'failed'
+    try {
+      await getDb()
+        .update(agentRuns)
+        .set({ status, finishedAt: new Date(), error: msg })
+        .where(and(eq(agentRuns.id, this.runId), eq(agentRuns.status, 'running')))
+    }
+    finally {
+      notifyRun(this.runId, { final: true })
+    }
   }
 
   private async drain() {
@@ -62,6 +93,7 @@ export class AgentRunTee {
         } catch (e: unknown) {
           console.error('[agents-tee] message write failed', (e as Error)?.message)
         }
+        notifyRun(this.runId)
         try {
           if (ev.type === 'decision') {
             const rows = await db
@@ -84,23 +116,13 @@ export class AgentRunTee {
               })
             }
           }
+          if (ev.type === 'error') this.errorMessage ??= ev.message
           if (ev.type === 'run-end') {
             await db
               .update(agentRuns)
               .set({ tokensIn: ev.tokens_in, tokensOut: ev.tokens_out, costUsd: ev.cost_usd.toString() })
               .where(eq(agentRuns.id, this.runId))
-            await db
-              .update(agentRuns)
-              .set({ status: 'complete', finishedAt: new Date() })
-              .where(this.stillRunning())
-          }
-          if (ev.type === 'error') {
-            // The api reports a cancelled task as this exact error.
-            const status = ev.message === 'cancelled' ? 'cancelled' : 'failed'
-            await db
-              .update(agentRuns)
-              .set({ status, finishedAt: new Date(), error: ev.message })
-              .where(this.stillRunning())
+            await this.writeTerminal()
           }
           if (ev.type === 'final-state') {
             // Persist the captured terminal AgentState (analyst reports,

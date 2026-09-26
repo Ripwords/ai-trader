@@ -1,7 +1,7 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, lt } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDb } from '../../../db/client'
-import { agentRuns } from '../../../db/schema'
+import { agentRuns, RUNNING_PER_SYMBOL_UQ } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
 import { resolveSymbol } from '../../lib/yahoo'
 import { AgentRunTee } from '../../utils/agents-tee'
@@ -46,22 +46,8 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
   const tradeDate = body.trade_date ?? new Date().toISOString().slice(0, 10)
   const db = getDb()
 
-  const inflight = await db
-    .select({ id: agentRuns.id })
-    .from(agentRuns)
-    .where(and(
-      eq(agentRuns.userId, userId),
-      eq(agentRuns.symbol, symbol),
-      eq(agentRuns.status, 'running'),
-    ))
-    .limit(1)
-  if (inflight[0]) {
-    throw createError({
-      statusCode: 409,
-      statusMessage: 'a run is already in progress for this symbol',
-      data: { run_id: inflight[0].id },
-    })
-  }
+  const inflight = await runningRunId(userId, symbol)
+  if (inflight) throw alreadyRunning(inflight)
   const inserted = await db
     .insert(agentRuns)
     .values({
@@ -80,6 +66,11 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
       },
     })
     .returning()
+    .catch(async (e: unknown) => {
+      // The pre-check races a concurrent start; the partial unique index decides.
+      if (!isRunningPerSymbolViolation(e)) throw e
+      throw alreadyRunning(await runningRunId(userId, symbol))
+    })
   const run = inserted[0]!
 
   const apiBase = process.env.NUXT_API_BASE_URL ?? 'http://api:8000'
@@ -103,18 +94,52 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
       selected_analysts: body.selected_analysts ?? ['market', 'social', 'news', 'fundamentals'],
       run_id: run.id,
     }),
-  })
+  }).catch(() => null)
 
-  if (!upstream.ok || !upstream.body) {
+  if (!upstream?.ok || !upstream.body) {
     // finishedAt is what the active-runs poller keys "recently finished" on;
     // without it a failed start vanished from the UI instead of showing.
     await db.update(agentRuns)
-      .set({ status: 'failed', error: `upstream ${upstream.status}`, finishedAt: new Date() })
+      .set({
+        status: 'failed',
+        error: upstream ? `upstream ${upstream.status}` : 'agents service unreachable',
+        finishedAt: new Date(),
+      })
       .where(eq(agentRuns.id, run.id))
     throw createError({ statusCode: 502, statusMessage: 'upstream agents service failed' })
   }
 
   return { run, userId, upstream }
+}
+
+async function runningRunId(userId: string, symbol: string): Promise<string | null> {
+  const rows = await getDb()
+    .select({ id: agentRuns.id })
+    .from(agentRuns)
+    .where(and(
+      eq(agentRuns.userId, userId),
+      eq(agentRuns.symbol, symbol),
+      eq(agentRuns.status, 'running'),
+    ))
+    .limit(1)
+  return rows[0]?.id ?? null
+}
+
+function alreadyRunning(runId: string | null) {
+  return createError({
+    statusCode: 409,
+    statusMessage: 'a run is already in progress for this symbol',
+    data: { run_id: runId },
+  })
+}
+
+/** Drizzle wraps the pg error, so check the error and its cause. */
+export function isRunningPerSymbolViolation(e: unknown): boolean {
+  for (let err: unknown = e; err instanceof Error; err = err.cause) {
+    const pg = err as Error & { code?: string; constraint?: string }
+    if (pg.code === '23505' && pg.constraint === RUNNING_PER_SYMBOL_UQ) return true
+  }
+  return false
 }
 
 // The api heartbeats every 15 s, so this much silence means it is gone.
@@ -137,8 +162,8 @@ async function readWithin<T>(reader: ReadableStreamDefaultReader<T>, ms: number)
  * Consume the upstream NDJSON stream entirely into a fresh AgentRunTee. Callers
  * start it with ``void`` so it outlives the HTTP request; the app is a
  * long-lived Node process, and this reader keeps the api from seeing a client
- * disconnect. Every exit writes a terminal state: the tee handles run-end and
- * error events, and any other ending records an error event itself.
+ * disconnect. Every exit writes a terminal state: the tee writes it on
+ * run-end, and any other ending records an error event first.
  */
 export async function drainIntoTee(
   upstream: Response,
@@ -151,36 +176,40 @@ export async function drainIntoTee(
   const reader = upstream.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''
-  let finalizeReason: string | null = 'stream ended without terminal event'
+  let endReason = 'stream ended without terminal event'
+  activeDrains.add(runId)
   try {
     while (true) {
       const { value, done } = await readWithin(reader, idleTimeoutMs)
       if (done) break
       const { events, rest } = splitNdjson(buf, decoder.decode(value, { stream: true }))
       buf = rest
-      for (const ev of events) {
-        if (ev.type === 'run-end' || ev.type === 'error') finalizeReason = null
-        tee.push(ev)
-      }
+      for (const ev of events) tee.push(ev)
     }
-    const tail = splitNdjson(buf, '\n')
-    for (const ev of tail.events) {
-      if (ev.type === 'run-end' || ev.type === 'error') finalizeReason = null
-      tee.push(ev)
-    }
+    for (const ev of splitNdjson(buf, '\n').events) tee.push(ev)
   } catch (e: unknown) {
     console.error('[agents-async] drain failed', (e as Error)?.message)
-    finalizeReason = e instanceof Error ? e.message : String(e)
+    endReason = e instanceof Error ? e.message : String(e)
     void reader.cancel().catch(() => {})
   } finally {
-    if (finalizeReason !== null) tee.push({ type: 'error', message: finalizeReason })
-    await tee.flush()
+    await tee.end(endReason)
+    activeDrains.delete(runId)
   }
 }
 
-/** A drain lives in the web process, so a restart orphans every running run. */
-export async function failInterruptedRuns(): Promise<void> {
+const activeDrains = new Set<string>()
+
+/** Whether this process is still writing the run's events. */
+export function isDraining(runId: string): boolean {
+  return activeDrains.has(runId)
+}
+
+/**
+ * A drain lives in the web process, so a restart orphans every run that was
+ * running before it. Runs started since boot have live drains in this process.
+ */
+export async function failInterruptedRuns(bootedAt: Date): Promise<void> {
   await getDb().update(agentRuns)
     .set({ status: 'failed', finishedAt: new Date(), error: 'interrupted by a web server restart' })
-    .where(eq(agentRuns.status, 'running'))
+    .where(and(eq(agentRuns.status, 'running'), lt(agentRuns.startedAt, bootedAt)))
 }
