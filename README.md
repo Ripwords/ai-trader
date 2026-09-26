@@ -28,7 +28,7 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 cp .env.example .env
 # Edit .env:
 #   APP_PASSWORD       — what you type to log in (anything)
-#   SESSION_SECRET     — at least 32 random bytes
+#   SESSION_SECRET     — at least 32 random bytes; changing it signs everyone out
 #   INTERNAL_BEARER    — random string, used between Nuxt and FastAPI
 #   ENCRYPTION_KEY     — encrypts stored provider keys; generate with `openssl rand -base64 32`
 #   TAVILY_API_KEY     — tvly-… key for news/web search (optional)
@@ -41,6 +41,8 @@ open http://localhost:3000
 Sign in with `APP_PASSWORD`, open **Settings**, add a model provider, and pick a chat model and a quick model (see [Model providers](#model-providers)). Then type `Show me NVDA daily` in the chat box. The empty chat also offers four opening prompts drawn from your watchlist, holdings, and recently triggered alerts; they redraw on every new chat and fall back to a static set when nothing is configured yet.
 
 If the chat says "No model provider is configured", nothing has been saved in Settings yet. The link under the chat box goes there.
+
+A sign-in lasts 30 days, then the app asks for the password again. After 10 wrong passwords from one address in 15 minutes, login answers 429 until the window passes. The count lives in memory and resets when the web container restarts. Behind a reverse proxy every visitor shares the proxy's address, so the limit applies to everyone at once. The session cookie is marked `Secure` when the request arrived over https (directly or with `X-Forwarded-Proto: https`); set `SESSION_COOKIE_SECURE=true` or `false` in `.env` to force it.
 
 ## Model providers
 
