@@ -6,12 +6,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+# A WEB_PORT set in the shell wins over .env, as it does for docker compose.
+port_override="${WEB_PORT:-}"
 set -a
 # shellcheck disable=SC1091
 . ./.env
 set +a
 
-BASE="http://localhost:${WEB_PORT:-3000}"
+WEB_PORT="${port_override:-${WEB_PORT:-3000}}"
+BASE="http://localhost:$WEB_PORT"
 JAR="$(mktemp)"
 trap 'rm -f "$JAR"' EXIT
 

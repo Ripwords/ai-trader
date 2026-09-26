@@ -5,7 +5,7 @@ import { fail, log, loggedInPage, pass } from './browser.mjs'
 
 const { browser, page } = await loggedInPage()
 await page.goto('/research/AAPL')
-await page.click('button:has-text("Run agents")')
+await page.click('button:has-text("transmit run")')
 await page.locator('[data-testid=agent-step-card]').first().waitFor({ timeout: 30_000 })
 log('run is live; reloading /research/AAPL without ?run=')
 

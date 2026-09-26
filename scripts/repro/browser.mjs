@@ -15,7 +15,7 @@ export const env = Object.fromEntries(
     .map(([, k, v]) => [k, v.replace(/^["']|["']$/g, '')]),
 )
 
-export const BASE = `http://localhost:${env.WEB_PORT || 3000}`
+export const BASE = `http://localhost:${process.env.WEB_PORT || env.WEB_PORT || 3000}`
 
 const { chromium } = createRequire(resolve(ROOT, 'apps/web/package.json'))('playwright')
 

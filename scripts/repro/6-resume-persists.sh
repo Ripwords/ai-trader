@@ -20,7 +20,7 @@ wait_status "$run" complete 60
 
 seqs="$(psql_q "select string_agg(seq::text, ',' order by seq) from agent_messages where run_id = '$run'")"
 after="$(psql_q "select count(*) from agent_messages where run_id = '$run'")"
-expected="$(seq -s, 0 $((after - 1)))"
+expected="$(seq 0 $((after - 1)) | paste -sd, -)"
 [ "$seqs" = "$expected" ] || fail "seqs are $seqs, expected $expected"
 [ "$after" -gt "$before" ] || fail "no resumed events were persisted"
 psql_q "select 1 from agent_messages where run_id = '$run' and kind = 'decision'" | grep -q 1 \
