@@ -1,5 +1,5 @@
 export interface Section {
-  key: 'chat' | 'research' | 'portfolio' | 'algo' | 'usage'
+  key: 'chat' | 'research' | 'portfolio' | 'algo' | 'usage' | 'settings'
   to: string
   label: string
   // One-line blurb shown in the mobile drawer; never on desktop.
@@ -12,6 +12,7 @@ export const SECTIONS: readonly Section[] = [
   { key: 'portfolio', to: '/portfolio', label: 'portfolio', blurb: 'cross-broker net worth' },
   { key: 'algo',      to: '/algo',      label: 'algo',      blurb: 'strategies, backtests, scheduler' },
   { key: 'usage',     to: '/usage',     label: 'usage',     blurb: 'LLM tokens & cost' },
+  { key: 'settings',  to: '/settings',  label: 'settings',  blurb: 'model providers & keys' },
 ] as const
 
 /** Resolve which section the current path belongs to. Longest-prefix wins

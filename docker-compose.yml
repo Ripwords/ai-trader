@@ -105,8 +105,6 @@ services:
       # Encrypts stored LLM provider keys (llm_providers.api_key).
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       NUXT_API_BASE_URL: http://api:8000
-      # Echoed in the chat footer ("model · …"). Mirrors LLM_MODEL.
-      NUXT_PUBLIC_LLM_MODEL: ${LLM_MODEL}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     ports:
       - "${WEB_PORT:-3000}:3000"

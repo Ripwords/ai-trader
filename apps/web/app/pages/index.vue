@@ -258,6 +258,7 @@ const chat = new Chat({
   }),
   onError(err) { console.error('chat error', err) },
 })
+const llmNotConfigured = computed(() => chat.error?.message.includes('llm_not_configured') ?? false)
 
 async function loadConversation(id: string | null) {
   if (!id) {
@@ -737,6 +738,9 @@ function agentsVerdict(output: unknown) {
               <span class="slash-desc">{{ s.description }}</span>
             </button>
           </div>
+          <p v-if="llmNotConfigured" class="mb-2 font-mono text-xs text-[var(--tape-down)]">
+            No model provider is configured. <NuxtLink to="/settings" class="underline">Add one in Settings</NuxtLink>.
+          </p>
           <!-- BorderBeam gates its render on onMounted, so it must be
                client-only to avoid a hydration mismatch. It wraps the input
                and traces an animated beam around its border. -->
