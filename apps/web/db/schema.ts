@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm'
-import { bigserial, boolean, date, index, integer, jsonb, numeric, pgTable, primaryKey, serial, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core'
+import { bigserial, boolean, date, index, integer, jsonb, numeric, pgEnum, pgTable, primaryKey, serial, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core'
+import { PROVIDER_KINDS } from '../types/llm'
+import { encryptedText } from './encrypted-text'
 
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -10,6 +12,25 @@ export const users = pgTable('users', {
 export const appSettings = pgTable('app_settings', {
   key: varchar('key', { length: 64 }).primaryKey(),
   value: jsonb('value').notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+})
+
+export const llmProviderKind = pgEnum('llm_provider_kind', PROVIDER_KINDS)
+
+// A configured LLM endpoint. The model selection lives in app_settings under
+// key 'llm'. `apiKeyHint` (last four characters) lets the settings list render
+// without decrypting, so a rotated ENCRYPTION_KEY still leaves the page usable.
+export const llmProviders = pgTable('llm_providers', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  ownerId: uuid('owner_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  kind: llmProviderKind('kind').notNull(),
+  label: varchar('label', { length: 64 }).notNull(),
+  baseUrl: text('base_url'),
+  apiKey: encryptedText('api_key'),
+  apiKeyHint: varchar('api_key_hint', { length: 8 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 })
 
@@ -97,18 +118,19 @@ export const algoSignals = pgTable('algo_signals', {
 
 // Per-call LLM token usage + estimated USD cost. One row per chat turn or
 // agents pipeline LLM call. `source` distinguishes 'chat' from agents-side
-// labels. `modelSpec` is the LLM_MODEL spec string at call time.
+// labels. `modelSpec` is `<provider kind>/<model id>` at call time; the cost is
+// null when the model has no pricing entry.
 export const llmUsage = pgTable('llm_usage', {
   id: serial('id').primaryKey(),
   userId: uuid('user_id')
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
   source: varchar('source', { length: 64 }).notNull(),
-  modelSpec: varchar('model_spec', { length: 64 }).notNull(),
+  modelSpec: varchar('model_spec', { length: 128 }).notNull(),
   inputTokens: integer('input_tokens').notNull(),
   outputTokens: integer('output_tokens').notNull(),
   totalTokens: integer('total_tokens').notNull(),
-  estimatedCostUsd: numeric('estimated_cost_usd', { precision: 12, scale: 6 }).notNull().default('0'),
+  estimatedCostUsd: numeric('estimated_cost_usd', { precision: 12, scale: 6 }).default('0'),
   ts: timestamp('ts').defaultNow().notNull(),
 })
 

@@ -83,3 +83,4 @@ async def test_build_graph_locked_passes_kwargs_through(
     assert seen["max_debate_rounds"] == 3
     assert seen["deep_thinking"] is False
     assert seen["checkpointer"] is sentinel_saver
+    assert seen["models"].chat.model_id == "claude-sonnet-4-6"

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.agents.model_config import (
+from app.services.agents.llm_timeouts import (
     LLM_MAX_RETRIES,
     LLM_TIMEOUT_S,
     install_llm_timeout_patch,

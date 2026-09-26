@@ -75,7 +75,8 @@ from tradingagents.config import TradingAgentsConfig
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 from .deepseek_compat import install_litellm_thinking_patch
-from .model_config import build_tradingagents_config, install_llm_timeout_patch
+from . import llm_config
+from .llm_config import LlmRuntimeConfig
 from .toolkit import AgentToolkit, OpenDClient, build_toolkit
 from app.services.valuation.compose import apply_veto, value
 from app.services.valuation.fetch import fetch_valuation_input
@@ -138,6 +139,7 @@ def _install_toolkit(toolkit: AgentToolkit) -> None:
 def build_graph(
     opend_client: OpenDClient | None,
     *,
+    models: LlmRuntimeConfig,
     max_debate_rounds: int = 1,
     max_risk_discuss_rounds: int = 1,
     deep_thinking: bool = True,
@@ -165,16 +167,15 @@ def build_graph(
     ``checkpointer`` (optional) — recompile the underlying StateGraph with a
     checkpoint saver attached. See :func:`attach_checkpointer`. Pass ``None``
     to keep TradingAgents' default (no checkpointing).
+
+    ``models`` supplies the deep agents (chat role) and the fast ones (quick
+    role), each with its own provider and key.
     """
     effort = "minimal" if not deep_thinking else reasoning_effort
-    raw = build_tradingagents_config(
-        reasoning_effort=effort,
-        response_language=response_language,
-    )
     cfg = TradingAgentsConfig(
-        llm_provider=raw["llm_provider"],
-        deep_think_llm=raw["deep_think_llm"],
-        quick_think_llm=raw["quick_think_llm"],
+        llm_provider=llm_config.ta_provider(models.chat.kind),
+        deep_think_llm=models.chat.model_id,
+        quick_think_llm=models.quick.model_id,
         reasoning_effort=effort,
         response_language=response_language,
         max_debate_rounds=max_debate_rounds,
@@ -187,7 +188,6 @@ def build_graph(
     # second turn of every tool loop. Idempotent, and a no-op for providers
     # that aren't litellm-routed.
     install_litellm_thinking_patch()
-    install_llm_timeout_patch()
     toolkit = build_toolkit(opend_client, company_name=company_name)
     _install_toolkit(toolkit)
     # ``selected_analysts`` is forwarded to ``GraphSetup`` via the kwarg of
@@ -196,6 +196,10 @@ def build_graph(
     if selected_analysts is not None:
         ta_kwargs["selected_analysts"] = selected_analysts
     ta = TradingAgentsGraph(**ta_kwargs)
+    # TradingAgents builds both models from one provider and the environment.
+    # Seeding its cached properties gives each role its own provider and key.
+    ta.__dict__["deep_thinking_llm"] = llm_config.build_role_model(models.chat, reasoning_effort=effort)
+    ta.__dict__["quick_thinking_llm"] = llm_config.build_role_model(models.quick, reasoning_effort=effort)
     # Touch ``ta.graph`` (a cached_property) inside the build path so the
     # compile step — which reads the toolkit globals we just installed — runs
     # before another concurrent caller can monkey-patch them with a different
@@ -228,17 +232,20 @@ async def build_graph_locked(
     underlying :func:`build_graph` is sync, so we run it on a worker thread
     via :func:`asyncio.to_thread` to keep the event loop responsive while
     LangGraph's compile step runs (it can be O(100 ms) on a cold path).
+    The models are read from web's Settings first, outside the lock.
     """
     # We resolve ``build_graph`` lazily off the module so tests can patch it
     # via ``monkeypatch.setattr(graph_mod, "build_graph", ...)`` without
     # losing the lock semantics they're trying to verify.
     import sys
 
+    models = await llm_config.fetch_llm_config()
     async with _build_lock:
         target = getattr(sys.modules[__name__], "build_graph")
         return await asyncio.to_thread(
             target,
             opend_client,
+            models=models,
             max_debate_rounds=max_debate_rounds,
             max_risk_discuss_rounds=max_risk_discuss_rounds,
             deep_thinking=deep_thinking,

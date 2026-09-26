@@ -255,7 +255,8 @@ const chat = new Chat({
     prepareReconnectToStreamRequest: () => ({ api: `/api/chat/${chatId.value}/stream` }),
     fetch: async (url, init) => {
       const res = await fetch(url, init)
-      if (res.status === 409) refusedBusy = true
+      // 409 also means no model provider is configured; only chat_busy is a running reply.
+      if (res.status === 409) refusedBusy = await isChatBusy(res.clone())
       const headerId = res.headers.get('X-Chat-Id')
       if (headerId && headerId !== chatId.value) {
         chatId.value = headerId
@@ -270,6 +271,14 @@ const chat = new Chat({
     if (isError && !settling.value) void recoverFromError()
   },
 })
+const llmNotConfigured = computed(() => chat.error?.message.includes('llm_not_configured') ?? false)
+
+async function isChatBusy(res: Response): Promise<boolean> {
+  const body: unknown = await res.json().catch(() => null)
+  if (typeof body !== 'object' || body === null || !('data' in body)) return false
+  const data: unknown = body.data
+  return typeof data === 'object' && data !== null && 'code' in data && data.code === 'chat_busy'
+}
 
 function whenOnline(): Promise<void> {
   if (navigator.onLine) return Promise.resolve()
@@ -839,6 +848,9 @@ function agentsVerdict(output: unknown) {
               <span class="slash-desc">{{ s.description }}</span>
             </button>
           </div>
+          <p v-if="llmNotConfigured" class="mb-2 font-mono text-xs text-[var(--tape-down)]">
+            No model provider is configured. <NuxtLink to="/settings" class="underline">Add one in Settings</NuxtLink>.
+          </p>
           <!-- BorderBeam gates its render on onMounted, so it must be
                client-only to avoid a hydration mismatch. It wraps the input
                and traces an animated beam around its border. -->

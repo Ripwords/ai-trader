@@ -11,7 +11,7 @@ import { generateObject } from 'ai'
 import { z } from 'zod'
 import { recordUsageSafely } from '../lib/llm-cost'
 import type { EarningsInfo, FinancialMetrics, NewsItem } from '../lib/yahoo'
-import { buildModel } from './model'
+import { resolveModel } from './model'
 import type { ChartMarker, PriceBar, RiskCardTone, RiskRating } from '../../types/research'
 
 const RiskCardToneSchema = z.enum(['beat', 'miss', 'caution'])
@@ -131,18 +131,18 @@ export async function generateRiskReport(input: RiskReportLLMInput): Promise<{
     JSON.stringify(input.chart_summary, null, 2),
   ].join('\n')
 
+  const resolved = await resolveModel('chat')
   const { object, usage } = await generateObject({
-    model: buildModel(),
+    model: resolved.model,
     schema: RiskReportLLMSchema,
     system: SYSTEM_PROMPT,
     prompt,
   })
 
   if (usage) {
-    const modelSpec = process.env.LLM_MODEL || 'anthropic/claude-sonnet-4-6'
     await recordUsageSafely({
       source: 'risk-report',
-      modelSpec,
+      modelSpec: resolved.spec,
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
     })

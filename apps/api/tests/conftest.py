@@ -1,21 +1,44 @@
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import asyncpg
+import httpx
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
 # Set agent-related env defaults BEFORE importing app modules so anything that
-# reads them at import time (settings, model_config) gets sane test values.
+# reads them at import time (settings) gets sane test values.
 os.environ.setdefault("INTERNAL_BEARER", "test-bearer")
-os.environ.setdefault("LLM_MODEL", "anthropic/claude-sonnet-4-6")
 
 from app.deps import get_opend  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.settings import get_settings  # noqa: E402
+from app.services.agents import llm_config  # noqa: E402
 from tests.test_quote import FakeAdapter  # noqa: E402
+
+
+def llm_config_wire(
+    chat: dict[str, Any] | None = None, quick: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """The body web's ``/api/internal/llm-config`` returns."""
+    return {
+        "chat": chat or {"kind": "anthropic", "model_id": "claude-sonnet-4-6", "api_key": "sk-ant-test", "base_url": None},
+        "quick": quick or {"kind": "anthropic", "model_id": "claude-haiku-4-5", "api_key": "sk-ant-test", "base_url": None},
+    }
+
+
+@pytest.fixture(autouse=True)
+def _web_llm_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test sees web's Settings configured with Anthropic models."""
+    monkeypatch.setattr(
+        llm_config,
+        "_transport",
+        httpx.MockTransport(lambda _request: httpx.Response(200, json=llm_config_wire())),
+    )
+    monkeypatch.setattr(llm_config, "_last_chat", None)
 
 
 @pytest.fixture

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, Protocol
 
-from .model_config import build_tradingagents_config
+from . import llm_config
 
 
 Outcome = Literal["correct", "wrong", "neutral"]
@@ -233,62 +233,11 @@ async def compute_realized_return(
     )
 
 
-def _build_chat_for_quick_model() -> Any:
-    """Provider-aware chat factory for the reflection text-write step.
-
-    Mirrors the provider routing in ``model_config``. We use the *quick*
-    (cheaper, smaller) model for reflections — they're short and the cost
-    per reflection should be negligible.
-    """
-    cfg = build_tradingagents_config()
-    provider = cfg["llm_provider"]
-    model_id = cfg["quick_think_llm"]
-    if provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-
-        return ChatAnthropic(model=model_id, temperature=0.2, max_tokens=400)
-    if provider == "openai":
-        from langchain_openai import ChatOpenAI
-
-        return ChatOpenAI(model=model_id, temperature=0.2, max_tokens=400)
-    if provider == "google":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        return ChatGoogleGenerativeAI(
-            model=model_id, temperature=0.2, max_output_tokens=400
-        )
-    if provider == "deepseek":
-        # DeepSeek exposes an OpenAI-compatible API; route via langchain-openai
-        # with the base_url override.
-        from langchain_openai import ChatOpenAI
-
-        return ChatOpenAI(
-            model=model_id,
-            base_url="https://api.deepseek.com",
-            temperature=0.2,
-            max_tokens=400,
-        )
-    raise ValueError(f"Unsupported provider {provider!r}")
-
-
-async def write_reflection_text(
-    decision_summary: str, realized: RealizedReturn
-) -> str:
-    """Ask the quick LLM for a 2-3 sentence lesson. Real network call."""
-    chat = _build_chat_for_quick_model()
-    prompt = (
-        f"You're reflecting on a past trading decision.\n\n"
-        f"Decision: {decision_summary}\n"
-        f"Realized return: {realized.realized_return:+.2f}%\n"
-        f"Benchmark (SPY): {realized.benchmark_return:+.2f}%\n"
-        f"Alpha: {realized.alpha:+.2f}%\n"
-        f"Outcome: {realized.outcome}\n\n"
-        f"In 2-3 sentences, write a concrete lesson for next time. "
-        f"Be specific about what the agents got right or wrong."
-    )
-    msg = await chat.ainvoke(prompt)
-    content = msg.content if isinstance(msg.content, str) else str(msg.content)
-    return content.strip()
+async def _quick_chat() -> Any:
+    """The quick role's model. Reflections are short, so the cheaper model
+    keeps each one's cost negligible."""
+    config = await llm_config.fetch_llm_config()
+    return llm_config.build_role_model(config.quick, temperature=0.2, max_tokens=400)
 
 
 # Pending = decisions for which not every role has a reflection yet AND the
@@ -465,8 +414,7 @@ async def _write_role_reflection(
 ) -> str:
     """Ask the quick LLM for a role-specific 2-3 sentence lesson.
 
-    Mirrors :func:`write_reflection_text` but with role context baked in so
-    the lesson reads as advice to *that* role specifically. Lessons land
+    Role context is baked in so the lesson reads as advice to *that* role specifically. Lessons land
     keyed by role in agent_reflections; at next run, each role's
     FinancialSituationMemory gets seeded from its own slice.
     """
@@ -476,7 +424,7 @@ async def _write_role_reflection(
         # decision counts as fully reflected.
         return f"[{role_prefix} did not run for this decision; no input to reflect on]"
 
-    chat = _build_chat_for_quick_model()
+    chat = await _quick_chat()
     prompt = _role_reflection_prompt(role_prefix, role_input, realized, valuation_note)
     msg = await chat.ainvoke(prompt)
     content = msg.content if isinstance(msg.content, str) else str(msg.content)

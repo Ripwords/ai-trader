@@ -492,7 +492,6 @@ async def test_reflect_endpoint_returns_count(
 ) -> None:
     """POST /agents/reflect proxies to ``reflect_pending`` and returns ``{reflected: N}``."""
     monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
-    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
 
     from httpx import ASGITransport, AsyncClient
 
@@ -578,3 +577,37 @@ async def test_reflect_endpoint_503_without_pool(
     async with AsyncClient(transport=transport, base_url="http://t") as c:
         r = await c.post("/agents/reflect", headers=headers)
         assert r.status_code == 503
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["anthropic", "openai", "google", "deepseek", "openrouter"])
+async def test_reflections_build_the_quick_role_for_every_provider(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Google and DeepSeek used to fall through: reflection compared against
+    ``google``/``deepseek`` while the config held ``google_genai``/``litellm``."""
+    import httpx
+
+    from app.services.agents import llm_config
+    from app.services.agents import reflection as reflection_mod
+    from tests.conftest import llm_config_wire
+
+    wire = llm_config_wire(quick={"kind": kind, "model_id": "quick-1", "api_key": "sk-quick", "base_url": None})
+    monkeypatch.setattr(
+        llm_config, "_transport", httpx.MockTransport(lambda _r: httpx.Response(200, json=wire))
+    )
+    built: list[tuple[llm_config.RoleModel, dict]] = []
+    real = llm_config.build_role_model
+
+    def spy(role: llm_config.RoleModel, **kwargs):
+        built.append((role, kwargs))
+        return real(role, **kwargs)
+
+    monkeypatch.setattr(llm_config, "build_role_model", spy)
+
+    await reflection_mod._quick_chat()
+
+    role, kwargs = built[0]
+    assert (role.kind, role.model_id, role.api_key) == (kind, "quick-1", "sk-quick")
+    assert kwargs == {"temperature": 0.2, "max_tokens": 400}

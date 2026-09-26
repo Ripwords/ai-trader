@@ -9,8 +9,9 @@
  */
 import { convertToModelMessages, stepCountIs, streamText, tool, type UIMessage } from 'ai'
 import { z } from 'zod'
-import { buildModel } from '../../llm/model'
+import { resolveModel } from '../../llm/model'
 import { DEFAULT_CHAT_MAX_STEPS } from '../../llm/chat-steps'
+import { recordUsageSafely } from '../../lib/llm-cost'
 
 const STRATEGY_PROMPT = [
   'You are a trading-strategy authoring assistant for the user\'s sandboxed Python environment.',
@@ -172,12 +173,19 @@ export default defineEventHandler(async (event) => {
     execute: async (input) => ({ proposed: input }),
   })
 
+  const resolved = await resolveModel('chat')
   const result = streamText({
-    model: buildModel(),
+    model: resolved.model,
     system: STRATEGY_PROMPT + ctx,
     messages: modelMessages,
     tools: { propose_config: proposeConfig },
     stopWhen: stepCountIs(DEFAULT_CHAT_MAX_STEPS),
+    onFinish: ({ totalUsage }) => recordUsageSafely({
+      source: 'algo-codegen',
+      modelSpec: resolved.spec,
+      inputTokens: totalUsage.inputTokens ?? 0,
+      outputTokens: totalUsage.outputTokens ?? 0,
+    }),
   })
 
   return result.toUIMessageStreamResponse()

@@ -66,8 +66,7 @@ vi.mock('../../server/llm/tools', () => ({ makeTools: () => deps.makeTools() }))
 vi.mock('../../server/llm/recall', () => ({ buildRecallContext: async () => '' }))
 vi.mock('../../server/lib/llm-cost', () => ({ recordUsageSafely: vi.fn(async () => {}) }))
 vi.mock('../../server/llm/model', () => ({
-  buildModel: () => makeModel(),
-  DEFAULT_MODEL_SPEC: 'mock:model',
+  resolveModel: async () => ({ model: makeModel(), spec: 'mock/model', providerKind: 'openai', modelId: 'model' }),
   supportsForcedToolChoice: () => false,
 }))
 vi.mock('h3', async (orig) => {
@@ -156,7 +155,7 @@ describe('POST /api/chat', () => {
     await post(event({ messages: [userMessage('one')], chatId: 'th-1' }))
     await until(() => chatStreams.isActive('th-1') && feeder !== undefined)
 
-    await expect(post(event({ messages: [userMessage('two')], chatId: 'th-1' }))).rejects.toMatchObject({ statusCode: 409 })
+    await expect(post(event({ messages: [userMessage('two')], chatId: 'th-1' }))).rejects.toMatchObject({ statusCode: 409, data: { code: 'chat_busy' } })
     expect(repo.appendMessages).toHaveBeenCalledTimes(1)
 
     finish()

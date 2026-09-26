@@ -42,7 +42,6 @@ from app.services.agents import toolkit as toolkit_mod
 from app.services.agents.cost_cap import DailyCapExceeded, assert_under_daily_cap
 from app.services.agents.heartbeat import HEARTBEAT, with_heartbeats
 from app.services.agents.memory import PostgresMemoryProvider
-from app.services.agents.model_config import build_tradingagents_config
 from app.services.agents.streaming import translate_chunks
 from app.services.agents.usage import UsageAccumulator
 from app.settings import get_settings
@@ -69,22 +68,18 @@ def _heartbeat_line() -> bytes:
 
 
 def _compute_run_cost(tokens_in: int, tokens_out: int) -> float:
-    """Price a (tokens_in, tokens_out) pair using the configured deep model.
+    """Price a (tokens_in, tokens_out) pair at the run's chat model rates.
 
-    Pricing keys use our env-convention provider names (``deepseek``,
-    ``google``) — NOT the TradingAgents-mapped names (``litellm``,
-    ``google_genai``) returned by ``build_tradingagents_config``. We parse
-    ``LLM_MODEL`` directly to get the env-convention pair.
+    Pricing keys are Settings provider kinds (``deepseek``, ``google``), not
+    TradingAgents' registry names (``litellm``, ``google_genai``).
 
-    An unknown model (no pricing entry, or an unparseable ``LLM_MODEL``)
-    is charged at conservative fallback rates from settings
-    (``AGENTS_FALLBACK_INPUT_USD_PER_1M`` / ``AGENTS_FALLBACK_OUTPUT_USD_PER_1M``)
-    with a warning — never ``0.0``, so an unknown model can't free-ride under
-    the daily cap. Token totals land in the DB regardless.
+    An unknown model (no pricing entry, a kind with no pricing table such as
+    a local server, or no run having fetched its models) is charged at
+    conservative fallback rates from settings (``AGENTS_FALLBACK_INPUT_USD_PER_1M``
+    / ``AGENTS_FALLBACK_OUTPUT_USD_PER_1M``) with a warning — never ``0.0``,
+    so an unknown model can't free-ride under the daily cap. Token totals land in the DB regardless.
     """
-    import os as _os
-
-    from app.services.agents.model_config import parse_model_spec
+    from app.services.agents.llm_config import last_chat_model
 
     def _fallback(reason: str) -> float:
         settings = get_settings()
@@ -102,13 +97,12 @@ def _compute_run_cost(tokens_in: int, tokens_out: int) -> float:
         )
         return float(cost)
 
-    try:
-        spec = parse_model_spec(_os.environ["LLM_MODEL"])
-    except Exception as e:  # noqa: BLE001
-        return _fallback(f"could not resolve provider/model for pricing: {e}")
-    cost = pricing_mod.price_run(spec.provider, spec.model_id, tokens_in, tokens_out)
+    chat = last_chat_model()
+    if chat is None:
+        return _fallback("no run has fetched its models yet")
+    cost = pricing_mod.price_run(chat.kind, chat.model_id, tokens_in, tokens_out)
     if cost is None:
-        return _fallback(f"no pricing entry for {spec.provider}/{spec.model_id}")
+        return _fallback(f"no pricing entry for {chat.kind}/{chat.model_id}")
     return float(cost)
 
 

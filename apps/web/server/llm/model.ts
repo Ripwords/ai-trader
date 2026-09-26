@@ -2,12 +2,22 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createDeepSeek } from '@ai-sdk/deepseek'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
+import type { LanguageModel } from 'ai'
+import { createError } from 'h3'
+import { PROVIDER_KIND_META, type ModelRole, type ProviderKind } from '../../types/llm'
+import { getModelConfig, type ModelConfig } from '../lib/llm-settings'
 
-export const DEFAULT_MODEL_SPEC = 'anthropic/claude-sonnet-4-6'
+export interface ResolvedModel {
+  model: LanguageModel
+  /** `<provider kind>/<model id>`: the key for pricing, context windows and usage rows. */
+  spec: string
+  providerKind: ProviderKind
+  modelId: string
+}
 
 export interface ModelInfo {
   spec: string
-  provider: string
+  provider: ProviderKind
   modelId: string
   contextWindow: number
   outputReserve: number
@@ -38,61 +48,65 @@ function parsePositiveInt(value: string | undefined): number | null {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null
 }
 
-export function splitModelSpec(spec: string): { provider: string; modelId: string } {
-  const slash = spec.indexOf('/')
-  if (slash < 0) {
-    throw new Error(
-      `LLM_MODEL must be "<provider>/<model-id>" (got "${spec}"). ` +
-        `Examples: anthropic/claude-sonnet-4-6, openai/gpt-4o, ` +
-        `google/gemini-2.5-pro, deepseek/deepseek-v4-flash.`,
-    )
-  }
-  return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) }
-}
-
-export function getModelInfo(spec: string = process.env.LLM_MODEL || DEFAULT_MODEL_SPEC): ModelInfo {
-  const { provider, modelId } = splitModelSpec(spec)
+export function getModelInfo(model: Pick<ResolvedModel, 'spec' | 'providerKind' | 'modelId'>): ModelInfo {
   const envWindow = parsePositiveInt(process.env.LLM_CONTEXT_WINDOW)
-  const knownWindow = KNOWN_CONTEXT_WINDOWS[spec]
+  const knownWindow = KNOWN_CONTEXT_WINDOWS[model.spec]
   const outputReserve = parsePositiveInt(process.env.LLM_OUTPUT_RESERVE) ?? DEFAULT_OUTPUT_RESERVE
 
   return {
-    spec,
-    provider,
-    modelId,
+    spec: model.spec,
+    provider: model.providerKind,
+    modelId: model.modelId,
     contextWindow: envWindow ?? knownWindow ?? FALLBACK_CONTEXT_WINDOW,
     outputReserve,
     contextWindowSource: envWindow ? 'env' : knownWindow ? 'known' : 'fallback',
   }
 }
 
-/**
- * Build a Vercel AI SDK LanguageModel from the LLM_MODEL env var,
- * which is a magic string `<provider>/<model-id>` — e.g.
- *   anthropic/claude-sonnet-4-6
- *   openai/gpt-4o
- *   google/gemini-2.5-pro
- *   deepseek/deepseek-v4-flash
- *
- * Each provider reads its API key from process.env (ANTHROPIC_API_KEY,
- * OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, DEEPSEEK_API_KEY).
- */
-export function buildModel(spec: string = process.env.LLM_MODEL || DEFAULT_MODEL_SPEC) {
-  const { provider, modelId } = splitModelSpec(spec)
+export function modelSpec(kind: ProviderKind, modelId: string): string {
+  return `${kind}/${modelId}`
+}
 
-  switch (provider) {
+export function buildLanguageModel(config: ModelConfig): LanguageModel {
+  // An explicit '' stops each SDK from falling back to its *_API_KEY env var.
+  const apiKey = config.apiKey ?? ''
+  const baseURL = config.baseUrl ?? undefined
+  switch (config.kind) {
     case 'anthropic':
-      return createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' })(modelId)
+      return createAnthropic({ apiKey, baseURL })(config.modelId)
     case 'openai':
-      return createOpenAI({ apiKey: process.env.OPENAI_API_KEY ?? '' })(modelId)
+      return createOpenAI({ apiKey, baseURL })(config.modelId)
     case 'google':
-      return createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? '' })(modelId)
+      return createGoogleGenerativeAI({ apiKey, baseURL })(config.modelId)
     case 'deepseek':
-      return createDeepSeek({ apiKey: process.env.DEEPSEEK_API_KEY ?? '' })(modelId)
-    default:
-      throw new Error(
-        `Unknown LLM provider "${provider}" (LLM_MODEL=${spec}). Supported: anthropic, openai, google, deepseek.`,
-      )
+      return createDeepSeek({ apiKey, baseURL })(config.modelId)
+    // Gateways and local servers speak chat completions, not OpenAI's Responses API.
+    case 'openrouter':
+      return createOpenAI({ apiKey, baseURL: baseURL ?? PROVIDER_KIND_META.openrouter.defaultBaseUrl ?? undefined }).chat(config.modelId)
+    case 'openai_compatible':
+      return createOpenAI({ apiKey, baseURL }).chat(config.modelId)
+    default: {
+      const unhandled: never = config.kind
+      throw new Error(`Unhandled provider kind ${String(unhandled)}`)
+    }
+  }
+}
+
+export async function resolveModel(role: ModelRole): Promise<ResolvedModel> {
+  const config = await getModelConfig(role)
+  if (!config) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'llm_not_configured',
+      message: 'No model provider is configured. Add one in Settings.',
+      data: { code: 'llm_not_configured' },
+    })
+  }
+  return {
+    model: buildLanguageModel(config),
+    spec: modelSpec(config.kind, config.modelId),
+    providerKind: config.kind,
+    modelId: config.modelId,
   }
 }
 
@@ -104,20 +118,13 @@ export function buildModel(spec: string = process.env.LLM_MODEL || DEFAULT_MODEL
  *
  * Verified against the live API 2026-09-05: `GET /models` lists only
  * deepseek-v4-pro, deepseek-v4-flash and deepseek-v4-flash-vision-exp, and all
- * of them reject a forced tool_choice. The non-thinking deepseek-chat alias
- * accepted it but is deprecated and no longer in the catalog, so there is no
- * DeepSeek model left to allowlist — the answer for this provider is always no.
+ * of them reject a forced tool_choice. The same models behind a gateway
+ * (OpenRouter, a local proxy) behave the same, so the model id is checked too.
  *
  * The caller's fallback is `tool_choice: "auto"` plus the dispatch directive
  * naming the tool and its arguments, which these models do honour: the
  * dispatch survives, only its determinism is lost.
- *
- * LLM_FORCE_TOOL_CHOICE=true forces anyway, for when DeepSeek ships a
- * non-thinking model again.
  */
-export function supportsForcedToolChoice(
-  spec: string = process.env.LLM_MODEL || DEFAULT_MODEL_SPEC,
-): boolean {
-  if (process.env.LLM_FORCE_TOOL_CHOICE === 'true') return true
-  return splitModelSpec(spec).provider !== 'deepseek'
+export function supportsForcedToolChoice(model: Pick<ResolvedModel, 'providerKind' | 'modelId'>): boolean {
+  return model.providerKind !== 'deepseek' && !model.modelId.toLowerCase().includes('deepseek')
 }

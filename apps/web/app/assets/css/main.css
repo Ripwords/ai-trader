@@ -7,7 +7,10 @@
 @import "tailwindcss";
 @import "@nuxt/ui";
 
-@theme {
+/* `static`: Tailwind prunes theme variables no utility class references, and
+   Nuxt UI only reaches the brand shades through var(), so without it every
+   primary button rendered transparent. */
+@theme static {
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 

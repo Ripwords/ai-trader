@@ -44,13 +44,8 @@ export default defineNuxtConfig({
     sessionSecret: '',
     internalBearer: '',
     apiBaseUrl: 'http://api:8000',
-    public: {
-      // Echoed to the chat footer. Mirrors process.env.LLM_MODEL via NUXT_PUBLIC_LLM_MODEL.
-      llmModel: '',
-    },
-    // LLM provider keys, model id, and Tavily key are read directly from
-    // process.env in the chat/LLM layer. Keeping them out of runtimeConfig
-    // keeps provider SDKs out of the Nitro client chunk graph.
+    // Search keys are read directly from process.env in the chat layer;
+    // model providers and their keys live in the database (Settings).
   },
   nitro: { experimental: { websocket: true } },
 })

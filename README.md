@@ -19,7 +19,7 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 
 - Docker Desktop (or compose v2)
 - moomoo OpenD installed on the host machine and **logged in**, listening on `127.0.0.1:11111`
-- An LLM provider API key for your selected `LLM_MODEL` (`anthropic/...`, `openai/...`, `google/...`, or `deepseek/...`)
+- An API key for at least one model provider (Anthropic, OpenAI, Google, DeepSeek, or OpenRouter), or a local OpenAI-compatible server such as Ollama or LM Studio. You add it in the app under Settings, not in `.env`.
 - (Optional but recommended) Tavily API key for news/web search — without it, search tools surface a clean error message and the rest still works
 
 ## First run
@@ -30,8 +30,7 @@ cp .env.example .env
 #   APP_PASSWORD       — what you type to log in (anything)
 #   SESSION_SECRET     — at least 32 random bytes
 #   INTERNAL_BEARER    — random string, used between Nuxt and FastAPI
-#   LLM_MODEL          — provider/model, e.g. anthropic/claude-sonnet-4-6
-#   ANTHROPIC_API_KEY  — real sk-ant-… key if using an Anthropic model
+#   ENCRYPTION_KEY     — encrypts stored provider keys; generate with `openssl rand -base64 32`
 #   TAVILY_API_KEY     — tvly-… key for news/web search (optional)
 #   POSTGRES_PORT      — host port for postgres (default 5432; override if 5432 is taken)
 
@@ -39,9 +38,23 @@ docker compose up -d --build
 open http://localhost:3000
 ```
 
-Sign in with `APP_PASSWORD`, then type `Show me NVDA daily` in the chat box. The empty chat also offers four opening prompts drawn from your watchlist, holdings, and recently triggered alerts; they redraw on every new chat and fall back to a static set when nothing is configured yet.
+Sign in with `APP_PASSWORD`, open **Settings**, add a model provider, and pick a chat model and a quick model (see [Model providers](#model-providers)). Then type `Show me NVDA daily` in the chat box. The empty chat also offers four opening prompts drawn from your watchlist, holdings, and recently triggered alerts; they redraw on every new chat and fall back to a static set when nothing is configured yet.
 
-If the chat returns an error like `Could not find API key process.env.ANTHROPIC_API_KEY`, your `ANTHROPIC_API_KEY` is the placeholder. Edit `.env` and `docker compose up -d --build web` again.
+If the chat says "No model provider is configured", nothing has been saved in Settings yet. The link under the chat box goes there.
+
+## Model providers
+
+Settings (`/settings`, also reachable from the `model · …` badge in the header) holds the LLM configuration. Nothing about models lives in `.env` except `ENCRYPTION_KEY`.
+
+- **Providers.** Add as many as you like: Anthropic, OpenAI, Google, DeepSeek, OpenRouter, or any OpenAI-compatible server (Ollama, LM Studio, vLLM). The OpenAI-compatible kind needs a base URL, such as `http://host.docker.internal:11434/v1` for Ollama on the host. The hosted kinds use their public endpoint unless you switch on **Override base URL**.
+- **Keys.** A key is encrypted with AES-256-GCM under `ENCRYPTION_KEY` before it is stored. The page shows only its last four characters. Editing a provider with the key field blank keeps the stored key. Changing or losing `ENCRYPTION_KEY` makes stored keys unreadable, so re-enter them if you rotate it.
+- **Test connection.** Lists the provider's models. When the provider is selected for a role, it also sends a short request to the selected model, so a wrong model id shows up here rather than in chat.
+- **Models.** Two roles. The **chat model** runs chat, risk reports, strategy authoring, and the research debate's deep-thinking agents. The **quick model** runs news angles and the debate's fast analyst passes. Each role picks a provider and a model id. The model field suggests the provider's model list and accepts any id you type.
+- **Removing a provider.** Blocked while either role uses it. Point the role at another provider and save first.
+- **Upgrading from `LLM_MODEL` env vars.** On first start with an empty provider table, the web service imports `LLM_MODEL`, `LLM_MODEL_QUICK`, and the matching `*_API_KEY` from its environment into Settings and logs `[llm] imported …`. It runs once. After that the env vars are ignored and can be deleted.
+- **Cost.** `/usage` prices calls for models in the built-in price table. Other models, including local ones, show as unpriced.
+
+Behind a reverse proxy, long chat and research streams can sit quiet between tokens. nginx drops a proxied response after 60 s of silence by default. Raising `proxy_read_timeout` (for example to `600s`) on the location that serves the web app is optional but avoids cut-off replies.
 
 ## Stop / clean up
 
@@ -262,11 +275,11 @@ cd apps/api && uv run pytest
 # web: vitest unit + typecheck
 cd apps/web && pnpm exec vitest run && pnpm exec nuxi typecheck
 
-# web: playwright e2e (requires the docker stack running + a real ANTHROPIC_API_KEY)
+# web: playwright e2e (requires the docker stack running + a chat model chosen in Settings)
 cd apps/web && pnpm exec playwright test
 ```
 
-The e2e test passes if either a chart canvas OR an inline error message appears — so it works with both real and placeholder API keys.
+The e2e test passes if either a chart canvas OR an inline error message appears — so it works with or without a working model key.
 
 `scripts/repro/` holds runtime checks for the streaming behaviour above (dropped chat connections, long silent debate steps, api restarts mid-run, resume). They run against the compose stack; see `scripts/repro/README.md`. The debate checks restart the api with `AGENTS_STUB_RUN_SECONDS` set, which swaps the TradingAgents graph for a stub that sleeps that long and decides `hold` without calling a model. Never set it in `.env`.
 

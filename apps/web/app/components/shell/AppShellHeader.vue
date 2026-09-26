@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { activeSectionKey } from '~/lib/sections'
+import type { LlmSettings } from '../../../types/llm'
 
 interface Props {
   drawerOpen?: boolean
@@ -9,7 +10,8 @@ const props = withDefaults(defineProps<Props>(), { drawerOpen: false })
 const emit = defineEmits<{ 'toggle-drawer': []; 'sign-out': [] }>()
 
 const route = useRoute()
-const llmModel = useRuntimeConfig().public.llmModel || 'unset'
+const { data: llmSelection } = useFetch<{ selection: LlmSettings | null }>('/api/settings/llm/selection', { key: 'llm-selection' })
+const llmModel = computed(() => llmSelection.value?.selection?.chat.modelId ?? 'not set')
 // Live clock: ``new Date()`` at SSR time always lags the browser's clock
 // by hundreds of ms by the time hydration runs, which produces a Vue
 // hydration mismatch on every page load. The mismatch warning isn't just
@@ -109,11 +111,11 @@ async function logout(): Promise<void> {
       </button>
     </div>
 
-    <div class="model-tag" data-mono>
+    <NuxtLink to="/settings" class="model-tag" data-mono title="Change model in Settings">
       <span class="model-tag-label">model</span>
       <span class="model-tag-sep">·</span>
       <span class="model-tag-value">{{ llmModel }}</span>
-    </div>
+    </NuxtLink>
   </header>
 </template>
 

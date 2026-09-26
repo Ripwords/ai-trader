@@ -1,6 +1,6 @@
 import { generateObject } from 'ai'
 import { z } from 'zod'
-import { buildModel } from '../llm/model'
+import { resolveModel } from '../llm/model'
 import { recordUsageSafely } from './llm-cost'
 
 export interface DeriveAnglesArgs {
@@ -32,8 +32,9 @@ export async function deriveAngles(args: DeriveAnglesArgs): Promise<DeriveAngles
     .filter(Boolean)
     .join(' ')
   try {
+    const resolved = await resolveModel('quick')
     const { object, usage } = await generateObject({
-      model: buildModel(),
+      model: resolved.model,
       schema: AnglesSchema,
       system: SYSTEM_PROMPT,
       prompt: `Company: ${who}\nReturn macro/sector/peer search queries.`,
@@ -41,7 +42,7 @@ export async function deriveAngles(args: DeriveAnglesArgs): Promise<DeriveAngles
     if (usage) {
       await recordUsageSafely({
         source: 'contextual-news-angles',
-        modelSpec: process.env.LLM_MODEL || 'anthropic/claude-sonnet-4-6',
+        modelSpec: resolved.spec,
         inputTokens: usage.inputTokens ?? 0,
         outputTokens: usage.outputTokens ?? 0,
       })

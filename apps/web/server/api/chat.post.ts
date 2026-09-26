@@ -11,7 +11,7 @@ import {
 import { getApiClient } from '../llm/http'
 import { getGhostfolioStatus, getGhostfolioTools, type GhostfolioStatus } from '../llm/mcp'
 import { buildSystemPrompt } from '../llm/chat-context'
-import { buildModel, DEFAULT_MODEL_SPEC, supportsForcedToolChoice } from '../llm/model'
+import { resolveModel, supportsForcedToolChoice } from '../llm/model'
 import { makeTools } from '../llm/tools'
 import { settleStoppedParts, stopOnAbort } from '../llm/chat-stop'
 import { resolveMaxSteps } from '../llm/chat-steps'
@@ -35,6 +35,7 @@ export default defineEventHandler(async (event) => {
   if (!Array.isArray(body?.messages) || body.messages.length === 0) {
     throw createError({ statusCode: 400, statusMessage: 'messages must be a non-empty array' })
   }
+  const resolved = await resolveModel('chat')
 
   const ownerId = await getOwnerId()
   const newestUser = [...body.messages].reverse().find(m => m.role === 'user')
@@ -60,12 +61,11 @@ export default defineEventHandler(async (event) => {
     await appendMessages(thread, [newestUser])
   }
 
-  const modelSpec = process.env.LLM_MODEL || DEFAULT_MODEL_SPEC
   const recordUsage = async (usage: { inputTokens?: number; outputTokens?: number }) => {
     const { recordUsageSafely } = await import('../lib/llm-cost')
     await recordUsageSafely({
       source: 'chat',
-      modelSpec,
+      modelSpec: resolved.spec,
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
     })
@@ -105,7 +105,7 @@ export default defineEventHandler(async (event) => {
 
         const maxSteps = resolveMaxSteps(body.maxSteps)
         const result = streamText({
-          model: buildModel(),
+          model: resolved.model,
           system: systemPrompt,
           messages: modelMessages,
           tools,
@@ -115,7 +115,7 @@ export default defineEventHandler(async (event) => {
           // thinking-mode models reject it with a 400 that aborts the entire stream,
           // so every slash command would fail; there the dispatch directive in the
           // system prompt carries the dispatch on its own.
-          ...(dispatch && supportsForcedToolChoice()
+          ...(dispatch && supportsForcedToolChoice(resolved)
             ? {
                 prepareStep: ({ stepNumber }: { stepNumber: number }) => {
                   const tc = stepToolChoice(dispatch.toolName, stepNumber)
@@ -182,7 +182,7 @@ async function buildRecall(client: ReturnType<typeof getApiClient>, userId: stri
 }
 
 function busy() {
-  return createError({ statusCode: 409, statusMessage: 'a reply is still in progress on this chat' })
+  return createError({ statusCode: 409, statusMessage: 'a reply is still in progress on this chat', data: { code: 'chat_busy' } })
 }
 
 // Forward the failure into the stream as a visible message. Without this,
