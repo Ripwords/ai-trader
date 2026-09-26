@@ -169,7 +169,7 @@ router = APIRouter(
 
 
 @router.get("/accounts", response_model=list[Account])
-async def accounts(opend: OpendAdapter = Depends(get_opend)) -> list[Account]:
+def accounts(opend: OpendAdapter = Depends(get_opend)) -> list[Account]:
     try:
         return opend.list_accounts()
     except OpendError as exc:
@@ -177,7 +177,7 @@ async def accounts(opend: OpendAdapter = Depends(get_opend)) -> list[Account]:
 
 
 @router.get("/portfolio", response_model=Portfolio)
-async def portfolio(
+def portfolio(
     acc_id: str = Query(...),
     trd_env: TrdEnv = Query("REAL"),
     opend: OpendAdapter = Depends(get_opend),
@@ -189,7 +189,7 @@ async def portfolio(
 
 
 @router.get("/orders", response_model=list[Order])
-async def orders(
+def orders(
     acc_id: str = Query(...),
     trd_env: TrdEnv = Query("REAL"),
     opend: OpendAdapter = Depends(get_opend),
@@ -201,7 +201,7 @@ async def orders(
 
 
 @router.get("/fills", response_model=list[Fill])
-async def fills(
+def fills(
     acc_id: str = Query(...),
     trd_env: TrdEnv = Query("REAL"),
     opend: OpendAdapter = Depends(get_opend),
@@ -220,7 +220,7 @@ def _default_history_range(start: str | None, end: str | None) -> tuple[str, str
 
 
 @router.get("/orders/history", response_model=list[Order])
-async def orders_history(
+def orders_history(
     acc_id: str = Query(...),
     trd_env: TrdEnv = Query("REAL"),
     start: str | None = Query(None, description="YYYY-MM-DD (default: 30 days before end)"),
@@ -238,7 +238,7 @@ async def orders_history(
 
 
 @router.get("/fills/history", response_model=list[Fill])
-async def fills_history(
+def fills_history(
     acc_id: str = Query(...),
     trd_env: TrdEnv = Query("REAL"),
     start: str | None = Query(None, description="YYYY-MM-DD (default: 30 days before end)"),
@@ -256,7 +256,7 @@ async def fills_history(
 
 
 @router.post("/order/place", response_model=PlaceOrderResult)
-async def place_order(
+def place_order(
     body: PlaceOrderRequest,
     opend: OpendAdapter = Depends(get_opend),
 ) -> PlaceOrderResult:
@@ -292,7 +292,7 @@ async def place_order(
 
 
 @router.post("/order/modify")
-async def modify_order(
+def modify_order(
     body: ModifyOrderRequest,
     opend: OpendAdapter = Depends(get_opend),
 ) -> dict[str, str]:
@@ -318,7 +318,7 @@ async def modify_order(
 
 
 @router.post("/order/cancel")
-async def cancel_order(
+def cancel_order(
     body: CancelOrderRequest,
     opend: OpendAdapter = Depends(get_opend),
 ) -> dict[str, str]:

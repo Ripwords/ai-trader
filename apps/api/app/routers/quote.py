@@ -12,7 +12,7 @@ router = APIRouter(
 
 
 @router.get("/snapshot", response_model=Snapshot)
-async def snapshot(
+def snapshot(
     code: str = Query(..., examples=["US.NVDA"]),
     opend: OpendAdapter = Depends(get_opend),
 ) -> Snapshot:
@@ -23,7 +23,7 @@ async def snapshot(
 
 
 @router.get("/order-book", response_model=OrderBook)
-async def order_book(
+def order_book(
     code: str = Query(..., examples=["US.NVDA"]),
     num: int = Query(10, ge=1, le=50),
     opend: OpendAdapter = Depends(get_opend),
@@ -35,7 +35,7 @@ async def order_book(
 
 
 @router.get("/kline", response_model=KLineResponse)
-async def kline(
+def kline(
     code: str = Query(..., examples=["US.NVDA"]),
     ktype: KLineType = Query(..., examples=["1d"]),
     num: int = Query(60, ge=1, le=1000),
@@ -48,7 +48,7 @@ async def kline(
 
 
 @router.get("/state")
-async def state(opend: OpendAdapter = Depends(get_opend)) -> dict[str, bool | str | int]:
+def state(opend: OpendAdapter = Depends(get_opend)) -> dict[str, bool | str | int]:
     """OpenD reachability + login state. Never raises — returns reachable=False
     when OpenD is down so the UI can render a clear status indicator."""
     return opend.get_global_state()

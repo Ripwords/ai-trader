@@ -143,7 +143,9 @@ async def backtest(
     # Backtest uses daily bars regardless of the live cadence — short
     # cadences would need way more bars to show meaningful equity curve.
     try:
-        kline = opend.get_kline(code=strategy.symbol, ktype="1d", num=body.bars)
+        kline = await asyncio.to_thread(
+            opend.get_kline, code=strategy.symbol, ktype="1d", num=body.bars
+        )
     except OpendError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

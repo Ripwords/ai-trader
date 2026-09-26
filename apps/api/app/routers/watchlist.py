@@ -12,7 +12,7 @@ router = APIRouter(
 
 
 @router.get("/list", response_model=list[WatchlistItem])
-async def list_(
+def list_(
     group: str = Query("All"),
     opend: OpendAdapter = Depends(get_opend),
 ) -> list[WatchlistItem]:
@@ -23,7 +23,7 @@ async def list_(
 
 
 @router.post("/add")
-async def add(
+def add(
     code: str = Body(..., embed=True),
     group: str = Body("All", embed=True),
     opend: OpendAdapter = Depends(get_opend),
@@ -36,7 +36,7 @@ async def add(
 
 
 @router.post("/remove")
-async def remove(
+def remove(
     code: str = Body(..., embed=True),
     group: str = Body("All", embed=True),
     opend: OpendAdapter = Depends(get_opend),
