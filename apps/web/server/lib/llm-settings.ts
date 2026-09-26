@@ -1,4 +1,5 @@
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
+import { createError } from 'h3'
 import { getDb } from '../../db/client'
 import { appSettings, llmProviders } from '../../db/schema'
 import { llmSettingsSchema, type LlmSettings, type ModelRole, type ProviderKind } from '../../types/llm'
@@ -25,6 +26,18 @@ export async function getLlmSettings(): Promise<LlmSettings | null> {
     .limit(1)
   const parsed = llmSettingsSchema.safeParse(rows[0]?.value)
   return parsed.success ? parsed.data : null
+}
+
+export async function saveLlmSettings(selection: LlmSettings): Promise<void> {
+  const ids = [...new Set([selection.chat.providerId, selection.quick.providerId])]
+  const found = await getDb().select({ id: llmProviders.id }).from(llmProviders).where(inArray(llmProviders.id, ids))
+  if (found.length !== ids.length) {
+    throw createError({ statusCode: 400, statusMessage: 'The selected provider no longer exists.' })
+  }
+  await getDb()
+    .insert(appSettings)
+    .values({ key: LLM_SETTINGS_KEY, value: selection })
+    .onConflictDoUpdate({ target: appSettings.key, set: { value: selection, updatedAt: new Date() } })
 }
 
 export async function getModelConfig(role: ModelRole): Promise<ModelConfig | null> {

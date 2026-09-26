@@ -42,3 +42,50 @@ export interface LlmProviderView {
   /** `…abcd` when a key is stored, null when none is. */
   apiKeyHint: string | null
 }
+
+export interface ProviderIssue {
+  path: 'baseUrl' | 'apiKey'
+  message: string
+}
+
+/** Whether a provider, as it would be stored, can be called at all. */
+export function providerIssue(kind: ProviderKind, baseUrl: string | null, hasKey: boolean): ProviderIssue | null {
+  if (!baseUrl && PROVIDER_KIND_META[kind].defaultBaseUrl === null) {
+    return { path: 'baseUrl', message: 'A base URL is required for this provider.' }
+  }
+  if (!hasKey && PROVIDER_KIND_META[kind].requiresKey) {
+    return { path: 'apiKey', message: 'An API key is required for this provider.' }
+  }
+  return null
+}
+
+const labelSchema = z.string().trim().min(1).max(64)
+const baseUrlSchema = z.string().trim().url().max(500)
+const apiKeySchema = z.string().trim().min(1).max(500)
+
+export const providerCreateSchema = z.object({
+  kind: z.enum(PROVIDER_KINDS),
+  label: labelSchema,
+  baseUrl: baseUrlSchema.nullable().default(null),
+  apiKey: apiKeySchema.nullable().default(null),
+}).superRefine((input, ctx) => {
+  const issue = providerIssue(input.kind, input.baseUrl, input.apiKey !== null)
+  if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [issue.path], message: issue.message })
+})
+export type ProviderCreate = z.infer<typeof providerCreateSchema>
+
+/** Omitted fields stay as stored; `apiKey: null` removes the stored key. */
+export const providerUpdateSchema = z.object({
+  label: labelSchema.optional(),
+  baseUrl: baseUrlSchema.nullable().optional(),
+  apiKey: apiKeySchema.nullable().optional(),
+})
+export type ProviderUpdate = z.infer<typeof providerUpdateSchema>
+
+export const providerTestSchema = z.object({
+  modelId: z.string().trim().min(1).max(200).optional(),
+})
+
+export type ProviderTestResult =
+  | { ok: true; models: string[] }
+  | { ok: false; error: string }
