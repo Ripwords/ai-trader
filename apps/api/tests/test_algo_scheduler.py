@@ -256,6 +256,7 @@ async def test_klines_failure_records_signal_and_does_not_crash(db_pool: Any) ->
     sigs = await repo.list_signals(strategy_id=sid)
     assert len(sigs) == 1
     assert "opend down" in (sigs[0].error or "")
+    assert sigs[0].side == "ERROR"
 
 
 # --- risk guards ----------------------------------------------------------
@@ -289,6 +290,7 @@ async def test_get_position_failure_skips_tick_with_error_signal(db_pool: Any) -
     sigs = await repo.list_signals(strategy_id=sid)
     assert len(sigs) == 1
     assert "get_position" in (sigs[0].error or "")
+    assert sigs[0].side == "ERROR"
     assert sigs[0].order_id is None
 
 
@@ -351,6 +353,107 @@ async def test_pyramiding_counter_resets_when_flat(db_pool: Any) -> None:
         sch._last_fire.clear()
 
     assert placed == ["BUY", "BUY"]  # tick 2 was blocked, tick 3 allowed
+
+
+async def test_compile_failure_records_an_error_row_not_a_buy(db_pool: Any) -> None:
+    sid = await _make_strategy("def on_bar(c)\n")
+
+    async def fake_klines(sym: str, num: int) -> list[Any]:
+        return list(_TWO_BARS_UP)
+
+    async def fake_pos(sym: str) -> int:
+        return 0
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        raise AssertionError("must not place when compile fails")
+
+    sch = Scheduler(
+        get_klines=fake_klines, get_position=fake_pos, place_paper_order=fake_place
+    )
+    await sch._tick()
+
+    sigs = await repo.list_signals(strategy_id=sid)
+    assert [(s.side, s.qty) for s in sigs] == [("ERROR", 0)]
+
+
+async def test_pyramiding_count_survives_a_restart(db_pool: Any) -> None:
+    """A fresh Scheduler (api restart) while holding must rebuild the adds
+    count from algo_signals instead of starting again at zero."""
+    sid = await _make_strategy("def on_bar(c): c.buy(c.qty)\n")  # pyramiding_max=1
+    await repo.append_signal(
+        sid, datetime(2026, 1, 2), "BUY", 1, 110.0, "ORD-OLD", None,
+    )
+
+    placed: list[str] = []
+
+    async def fake_klines(sym: str, num: int) -> list[Any]:
+        return list(_TWO_BARS_UP)
+
+    async def fake_pos(sym: str) -> int:
+        return 1
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        placed.append(side)
+        return "ORD-NEW"
+
+    sch = Scheduler(
+        get_klines=fake_klines, get_position=fake_pos, place_paper_order=fake_place
+    )
+    await sch._tick()
+
+    assert placed == []
+    newest = (await repo.list_signals(strategy_id=sid))[0]
+    assert "pyramiding" in (newest.error or "")
+
+
+async def test_pyramiding_rebuild_stops_at_the_last_flat_point(db_pool: Any) -> None:
+    from app.schemas.algo import StrategyUpdate
+
+    sid = await _make_strategy("def on_bar(c): c.buy(c.qty)\n")
+    await repo.update_strategy(sid, StrategyUpdate(pyramiding_max=2))
+    history = [
+        ("BUY", 1, "ORD-1"),
+        ("BUY", 1, "ORD-2"),
+        ("SELL", 2, "ORD-3"),
+        ("BUY", 1, None),  # blocked/errored rows never became orders
+        ("BUY", 1, "ORD-4"),
+    ]
+    for i, (side, qty, order_id) in enumerate(history):
+        await repo.append_signal(
+            sid, datetime(2026, 1, 1) + timedelta(minutes=i), side, qty, 100.0,
+            order_id, None if order_id else "blocked: kill switch active",
+        )
+
+    placed: list[str] = []
+
+    async def fake_klines(sym: str, num: int) -> list[Any]:
+        return list(_TWO_BARS_UP)
+
+    async def fake_pos(sym: str) -> int:
+        return 1
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        placed.append(side)
+        return "ORD-5"
+
+    sch = Scheduler(
+        get_klines=fake_klines, get_position=fake_pos, place_paper_order=fake_place
+    )
+    await sch._tick()
+
+    assert placed == ["BUY"]  # one add since flat, cap is two
+
+
+async def test_adds_since_flat_walks_back_from_the_live_position() -> None:
+    from app.services.algo.scheduler import adds_since_flat
+
+    # newest first
+    assert adds_since_flat(2, [("BUY", 1), ("BUY", 1), ("SELL", 3), ("BUY", 3)]) == 2
+    assert adds_since_flat(0, [("BUY", 1)]) == 0
+    # position larger than the recorded history (manual buys): count them all
+    assert adds_since_flat(10, [("BUY", 1), ("BUY", 1)]) == 2
+    # a partial sell does not reset the count
+    assert adds_since_flat(1, [("SELL", 1), ("BUY", 1), ("BUY", 1)]) == 2
 
 
 async def test_daily_order_cap_blocks_after_limit(

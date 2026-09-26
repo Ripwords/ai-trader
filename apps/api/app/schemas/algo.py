@@ -11,6 +11,9 @@ from app.schemas.quote import Bar
 
 Cadence = Literal["1m", "5m", "15m", "1h", "1d"]
 Side = Literal["BUY", "SELL"]
+# Signal rows also record ticks that failed before any intent existed
+# (klines, compile, position query, on_bar). The column is varchar(8).
+SignalSide = Literal["BUY", "SELL", "ERROR"]
 RunKind = Literal["backtest", "live_signal"]
 RunStatus = Literal["pending", "running", "ok", "error"]
 SizingMode = Literal["fixed_qty", "pct_equity", "fixed_cash"]
@@ -107,7 +110,7 @@ class SignalRecord(BaseModel):
     id: int
     strategy_id: str
     ts: datetime
-    side: Side
+    side: SignalSide
     qty: int
     price: float | None = None
     order_id: str | None = None

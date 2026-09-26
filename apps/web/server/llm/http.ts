@@ -362,7 +362,8 @@ export interface AlgoSignal {
   id: number
   strategy_id: string
   ts: string
-  side: 'BUY' | 'SELL'
+  // ERROR: the tick failed before the strategy produced an intent.
+  side: 'BUY' | 'SELL' | 'ERROR'
   qty: number
   price: number | null
   order_id: string | null

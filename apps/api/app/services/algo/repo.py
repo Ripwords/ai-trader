@@ -280,6 +280,24 @@ async def append_signal(
     )
 
 
+async def list_executed_signals(
+    strategy_id: str, limit: int = 500
+) -> list[tuple[str, int]]:
+    """(side, qty) of signals that became orders, newest first."""
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT side, qty FROM algo_signals
+            WHERE strategy_id = $1 AND order_id IS NOT NULL
+            ORDER BY ts DESC, id DESC
+            LIMIT $2
+            """,
+            strategy_id,
+            limit,
+        )
+    return [(r["side"], int(r["qty"])) for r in rows]
+
+
 async def count_orders_today(strategy_id: str) -> int:
     """Number of signals that actually became orders (order_id set) since
     UTC midnight. Feeds the scheduler's max-orders-per-day guard; blocked
