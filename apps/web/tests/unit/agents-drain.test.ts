@@ -51,4 +51,26 @@ describe('drainIntoTee', () => {
     expect(fake.updates.some(u => u.set.status === 'failed')).toBe(false)
     expect(fake.updates.some(u => u.set.status === 'complete')).toBe(true)
   })
+  it('records an error event and fails the run when the upstream ends without a terminal event', async () => {
+    await drainIntoTee(upstream([runStart]), 'run-1', 'user-1')
+
+    const kinds = fake.inserts.filter(i => i.table === 'agent_messages').map(i => i.values.kind)
+    expect(kinds).toEqual(['run-start', 'error'])
+    const failed = fake.updates.find(u => u.table === 'agent_runs' && u.set.status === 'failed')
+    expect(failed?.set.error).toBe('stream ended without terminal event')
+    expect(failed?.params).toContain('running')
+  })
+
+  it('records an error event when the upstream read throws', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode(runStart + '\n'))
+        controller.error(new TypeError('terminated'))
+      },
+    })
+    await drainIntoTee(new Response(body), 'run-1', 'user-1')
+
+    const errors = fake.inserts.filter(i => i.table === 'agent_messages' && i.values.kind === 'error')
+    expect(errors.map(e => (e.values.payload as { message: string }).message)).toEqual(['terminated'])
+  })
 })

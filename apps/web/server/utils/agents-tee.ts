@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { agentRuns, agentMessages, agentDecisions } from '../../db/schema'
 import type { AgentEvent } from '../../types/agents'
@@ -26,6 +26,12 @@ export class AgentRunTee {
     }
     this.queue.push(ev)
     if (!this.draining) this.drained = this.drain()
+  }
+
+  /** The api follows an error with run-end, and a cancel precedes both, so
+   *  only the first terminal transition may land. */
+  private stillRunning() {
+    return and(eq(agentRuns.id, this.runId), eq(agentRuns.status, 'running'))
   }
 
   /** Resolves once every pushed event has been written. */
@@ -78,24 +84,18 @@ export class AgentRunTee {
           if (ev.type === 'run-end') {
             await db
               .update(agentRuns)
-              .set({
-                status: 'complete',
-                finishedAt: new Date(),
-                tokensIn: ev.tokens_in,
-                tokensOut: ev.tokens_out,
-                costUsd: ev.cost_usd.toString(),
-              })
+              .set({ tokensIn: ev.tokens_in, tokensOut: ev.tokens_out, costUsd: ev.cost_usd.toString() })
               .where(eq(agentRuns.id, this.runId))
+            await db
+              .update(agentRuns)
+              .set({ status: 'complete', finishedAt: new Date() })
+              .where(this.stillRunning())
           }
           if (ev.type === 'error') {
             await db
               .update(agentRuns)
-              .set({
-                status: 'failed',
-                finishedAt: new Date(),
-                error: ev.message,
-              })
-              .where(eq(agentRuns.id, this.runId))
+              .set({ status: 'failed', finishedAt: new Date(), error: ev.message })
+              .where(this.stillRunning())
           }
           if (ev.type === 'final-state') {
             // Persist the captured terminal AgentState so the per-role

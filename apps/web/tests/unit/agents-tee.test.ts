@@ -22,4 +22,22 @@ describe('AgentRunTee', () => {
     expect(rows.map(r => r.values.kind)).toEqual(['node-start', 'node-end'])
     expect(rows.map(r => r.values.seq)).toEqual([0, 1])
   })
+  it('only moves a running run to a terminal status', async () => {
+    const tee = new AgentRunTee('run-1', 'user-1')
+    tee.push({ type: 'error', message: 'boom' })
+    tee.push({ type: 'run-end', run_id: 'run-1', tokens_in: 3, tokens_out: 4, cost_usd: 0.5 })
+    await tee.flush()
+
+    const failed = fake.updates.find(u => u.set.status === 'failed')!
+    expect(failed.where).toMatch(/"status" = \$\d/)
+    expect(failed.params).toContain('running')
+
+    const complete = fake.updates.find(u => u.set.status === 'complete')!
+    expect(complete.where).toMatch(/"status" = \$\d/)
+    expect(complete.params).toContain('running')
+
+    const usage = fake.updates.find(u => u.set.tokensIn === 3)!
+    expect(usage.set).toMatchObject({ tokensOut: 4, costUsd: '0.5' })
+    expect(usage.set.status).toBeUndefined()
+  })
 })

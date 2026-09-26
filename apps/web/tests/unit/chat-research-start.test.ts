@@ -27,14 +27,14 @@ describe('research_start tool', () => {
     expect(typeof tools.research_start.description).toBe('string')
   })
 
-  it('posts to agents-run-async and returns the run id + a notify hint', async () => {
+  it('posts to agents-run and returns the run id + a notify hint', async () => {
     const fetchSpy = vi.fn(async () => jsonResponse(200, { runId: 'run-9', status: 'running', symbol: 'NVDA' }))
     ;(globalThis as unknown as { fetch: typeof fetch }).fetch = fetchSpy as unknown as typeof fetch
     const tools = makeTools({} as unknown as ApiClient, fakeEventWithCookie('session=abc'))
     const out = await tools.research_start.execute({ symbol: 'NVDA' }, {} as unknown) as Record<string, unknown>
 
     const url = String(fetchSpy.mock.calls[0]?.[0])
-    expect(url).toContain('/api/research/agents-run-async')
+    expect(url).toMatch(/\/api\/research\/agents-run$/)
     const init = (fetchSpy.mock.calls[0]?.[1] ?? {}) as RequestInit
     expect((init.headers as Record<string, string>).cookie).toBe('session=abc')
     expect(out).toMatchObject({ runId: 'run-9', status: 'running', symbol: 'NVDA' })

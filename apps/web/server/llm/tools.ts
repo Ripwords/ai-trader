@@ -576,7 +576,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       execute: async (args) => {
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
-        const res = await fetch(`${baseUrl}/api/research/agents-run-async`, {
+        const res = await fetch(`${baseUrl}/api/research/agents-run`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -701,27 +701,16 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         max_debate_rounds: z.number().int().min(1).max(3).default(1),
         deep_thinking: z.boolean().default(true),
       }),
-      // Async generator: each yield is sent as a `tool-output-available`
-      // (preliminary) frame on the chat stream. This serves two purposes:
-      //   1. Keeps the outer /api/chat connection alive during the 30-60s
-      //      pipeline run — without periodic bytes the socket goes idle and
-      //      the browser's useChat hook stays stuck in 'streaming' even
-      //      after the server completes.
-      //   2. Surfaces the per-step node timeline (market → social → news →
-      //      fundamentals → bull/bear → trader → risk gate) to the chat UI,
-      //      which AgentsDebateCard renders.
-      // The return value is the FINAL output the LLM consumes.
-      execute: async function* (args) {
-        // Yield immediately so the chat stream gets a frame before we even
-        // start the upstream fetch — no dead air between the LLM's tool
-        // call and the first agent event.
+      // Async generator: each yield is sent as a preliminary
+      // `tool-output-available` frame, which keeps the chat stream moving
+      // during the run and drives AgentsDebateCard's node timeline. The
+      // return value is the final output the LLM consumes.
+      execute: async function* (args, { abortSignal }) {
         const events: Array<{ type: 'node-start'; node: string }> = []
         yield { events: [...events] }
 
         const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
-        // Forward the caller's session cookie. Without it, the self-fetch
-        // hits server/middleware/auth.ts and gets a 401 — surfacing in chat
-        // as "agents service failed: 401".
+        // Without the session cookie the self-fetch is 401'd by auth middleware.
         const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
         const res = await fetch(`${baseUrl}/api/research/agents-run`, {
           method: 'POST',
@@ -731,53 +720,32 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           },
           body: JSON.stringify(args),
         })
-        if (!res.ok || !res.body) {
+        if (!res.ok) {
           return { events, error: `agents service failed: ${res.status}` }
         }
+        const { runId } = await res.json() as { runId: string }
 
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buf = ''
-        let verdict: { rating?: string; confidence?: number; rationale?: string } = {}
-
-        while (true) {
-          const { value, done } = await reader.read()
-          if (done) break
-          buf += decoder.decode(value, { stream: true })
-          const lines = buf.split('\n')
-          buf = lines.pop() ?? ''
-          for (const line of lines) {
-            const trimmed = line.trim()
-            if (!trimmed) continue
-            try {
-              const ev = JSON.parse(trimmed) as {
-                type?: string
-                node?: string
-                rating?: string
-                confidence?: number
-                rationale?: string
-              }
-              // Only forward the structural events the UI card renders —
-              // skip massive payloads (final-state) and chatty deltas
-              // (node-message) so we don't bloat the message persisted to
-              // agent_messages-equivalent storage on the chat side.
-              if (ev.type === 'node-start' && ev.node) {
-                events.push({ type: 'node-start', node: ev.node })
-              }
-              if (ev.type === 'decision') {
-                verdict = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
-              }
-              yield { events: [...events], ...verdict }
-            } catch {
-              /* skip malformed */
+        const { tailRun } = await import('../lib/agents/run-events')
+        let verdict: { rating?: string; confidence?: number | null; rationale?: string } = {}
+        for await (const frame of tailRun(runId, { signal: abortSignal })) {
+          if (frame.kind === 'end') {
+            if (frame.status !== 'complete') {
+              return { runId, events, ...verdict, error: `run ${frame.status}: ${frame.error ?? 'no reason recorded'}` }
             }
+            break
           }
+          const ev = frame.event
+          if (ev.type === 'node-start') events.push({ type: 'node-start', node: ev.node })
+          if (ev.type === 'decision') {
+            verdict = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
+          }
+          yield { runId, events: [...events], ...verdict }
         }
 
         if (!verdict.rating) {
-          return { events, error: 'no decision emitted' }
+          return { runId, events, error: 'no decision emitted' }
         }
-        return { events, ...verdict }
+        return { runId, events, ...verdict }
       },
     }),
 
