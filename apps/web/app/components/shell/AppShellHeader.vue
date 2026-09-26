@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { activeSectionKey } from '~/lib/sections'
+import { useOpendStatus } from '~/composables/useOpendStatus'
 import type { LlmSettings } from '../../../types/llm'
 
 interface Props {
@@ -26,17 +27,8 @@ const clock = ref<Date | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 
 // The status strip reflects the real OpenD state instead of a static
-// green dot: down, quote-only, or live. Polled once a minute.
-interface OpendStatus { reachable: boolean; qot_logined: boolean; trd_logined: boolean }
-const opend = ref<OpendStatus | null>(null)
-let opendTimer: ReturnType<typeof setInterval> | null = null
-async function refreshOpend(): Promise<void> {
-  try {
-    opend.value = await $fetch<OpendStatus>('/api/opend-status')
-  } catch {
-    opend.value = { reachable: false, qot_logined: false, trd_logined: false }
-  }
-}
+// green dot: down, quote-only, or live.
+const { status: opend } = useOpendStatus()
 const opendLabel = computed(() => {
   if (opend.value === null) return 'opend · checking'
   if (!opend.value.reachable) return 'opend · down'
@@ -52,12 +44,9 @@ const opendTone = computed(() => {
 onMounted(() => {
   clock.value = new Date()
   timer = setInterval(() => { clock.value = new Date() }, 1000)
-  void refreshOpend()
-  opendTimer = setInterval(() => { void refreshOpend() }, 60_000)
 })
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer)
-  if (opendTimer) clearInterval(opendTimer)
 })
 const clockText = computed(() => {
   if (clock.value === null) return '--:--:--'
