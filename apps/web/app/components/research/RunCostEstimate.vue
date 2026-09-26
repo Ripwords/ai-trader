@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import TechnicalDetails from '../shared/TechnicalDetails.vue'
 
 interface RunHistoryRow {
   costUsd: number | null
@@ -235,9 +236,6 @@ function onStart() {
       <span class="cost__live-beacon" aria-hidden="true" />
       <span class="cost__live-text" data-mono>
         a run is already in flight
-        <span v-if="inFlightRunId" class="cost__live-runid">
-          · {{ inFlightRunId.slice(0, 8) }}
-        </span>
       </span>
       <NuxtLink
         v-if="inFlightRunId"
@@ -256,6 +254,10 @@ function onStart() {
         <span data-mono>cancel</span>
       </button>
     </div>
+    <TechnicalDetails
+      v-if="inFlight"
+      :rows="inFlightRunId ? [{ label: 'in-flight run id', value: inFlightRunId }] : []"
+    />
 
     <button
       type="button"
@@ -526,10 +528,6 @@ function onStart() {
   font-size: 0.78rem;
   color: var(--paper-1);
   letter-spacing: 0.02em;
-}
-.cost__live-runid {
-  color: var(--paper-3);
-  font-variant-numeric: tabular-nums;
 }
 .cost__live-jump {
   font-size: 0.7rem;

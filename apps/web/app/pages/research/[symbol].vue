@@ -252,9 +252,8 @@ watch(
             v-if="queryRunId"
             class="crumb__pill crumb__pill--specific"
             data-mono
-            :title="`viewing run ${queryRunId}`"
           >
-            run · {{ queryRunId.slice(0, 8) }}
+            past run
           </span>
         </nav>
       </template>
@@ -293,9 +292,6 @@ watch(
                 <span class="resume-card__dot" />
                 run halted
               </span>
-              <span class="resume-card__id" data-mono>
-                run · {{ runId?.slice(0, 8) }}
-              </span>
             </header>
             <p class="resume-card__error" data-mono>
               {{ error ?? 'unknown error' }}
@@ -309,6 +305,7 @@ watch(
               <span data-mono>resume from checkpoint</span>
               <span class="resume-card__btn-glyph" data-mono>↻</span>
             </button>
+            <TechnicalDetails :rows="runId ? [{ label: 'run id', value: runId }] : []" />
           </section>
 
           <RunCostEstimate
@@ -586,12 +583,6 @@ watch(
   width: 6px; height: 6px;
   border-radius: 50%;
   background: var(--tape-down);
-}
-.resume-card__id {
-  font-size: 0.66rem;
-  letter-spacing: 0.18em;
-  color: var(--paper-3);
-  text-transform: uppercase;
 }
 .resume-card__error {
   margin: 0;
