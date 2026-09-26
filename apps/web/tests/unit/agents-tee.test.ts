@@ -5,12 +5,27 @@ let fake = createFakeDb()
 vi.mock('../../db/client', () => ({ getDb: () => fake.db }))
 
 const { AgentRunTee } = await import('../../server/utils/agents-tee')
+const { runVersion, waitForRun } = await import('../../server/lib/agents/run-signal')
 
 beforeEach(() => {
   fake = createFakeDb()
 })
 
 describe('AgentRunTee', () => {
+  it('signals tailers after each row and after the terminal status', async () => {
+    const tee = new AgentRunTee('run-sig', 'user-1')
+    const before = runVersion('run-sig')
+    tee.push({ type: 'node-start', node: 'market' })
+    tee.push({ type: 'node-end', node: 'market', summary: '' })
+    await tee.flush()
+    expect(runVersion('run-sig')).toBe(before + 2)
+
+    const woken = waitForRun('run-sig', runVersion('run-sig'), 10_000).then(() => true)
+    await tee.end('stream ended')
+    expect(await Promise.race([woken, new Promise(r => setTimeout(() => r(false), 200))])).toBe(true)
+    expect(runVersion('run-sig')).toBe(0)
+  })
+
   it('does not persist transport heartbeats', async () => {
     const tee = new AgentRunTee('run-1', 'user-1')
     tee.push({ type: 'node-start', node: 'market' })

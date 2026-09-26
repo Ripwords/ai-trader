@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { agentRuns, agentMessages, agentDecisions } from '../../db/schema'
 import type { AgentEvent } from '../../types/agents'
+import { notifyRun } from '../lib/agents/run-signal'
 
 const QUEUE_CAP = 100
 
@@ -61,10 +62,15 @@ export class AgentRunTee {
     const msg = this.errorMessage
     // The api reports a cancelled task as this exact error.
     const status = msg === null ? 'complete' : msg === 'cancelled' ? 'cancelled' : 'failed'
-    await getDb()
-      .update(agentRuns)
-      .set({ status, finishedAt: new Date(), error: msg })
-      .where(and(eq(agentRuns.id, this.runId), eq(agentRuns.status, 'running')))
+    try {
+      await getDb()
+        .update(agentRuns)
+        .set({ status, finishedAt: new Date(), error: msg })
+        .where(and(eq(agentRuns.id, this.runId), eq(agentRuns.status, 'running')))
+    }
+    finally {
+      notifyRun(this.runId, { final: true })
+    }
   }
 
   private async drain() {
@@ -87,6 +93,7 @@ export class AgentRunTee {
         } catch (e: unknown) {
           console.error('[agents-tee] message write failed', (e as Error)?.message)
         }
+        notifyRun(this.runId)
         try {
           if (ev.type === 'decision') {
             const rows = await db
