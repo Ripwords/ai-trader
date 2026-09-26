@@ -38,7 +38,6 @@ def _web_llm_config(monkeypatch: pytest.MonkeyPatch) -> None:
         "_transport",
         httpx.MockTransport(lambda _request: httpx.Response(200, json=llm_config_wire())),
     )
-    monkeypatch.setattr(llm_config, "_last_chat", None)
 
 
 @pytest.fixture

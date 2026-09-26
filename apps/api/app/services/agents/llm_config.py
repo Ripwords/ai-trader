@@ -9,6 +9,8 @@ hands every key to its model object directly. Nothing is written to
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import httpx
@@ -42,7 +44,28 @@ class LlmNotConfigured(RuntimeError):
 
 # Tests swap in an ``httpx.MockTransport``.
 _transport: httpx.AsyncBaseTransport | None = None
-_last_chat: RoleModel | None = None
+
+
+@dataclass
+class RunModels:
+    """The models one run fetched, so it is priced at its own rates even when
+    another run or a Settings change fetches different ones meanwhile."""
+
+    chat: RoleModel | None = None
+
+
+_run_models: ContextVar[RunModels | None] = ContextVar("llm_run_models", default=None)
+
+
+def track_run_models() -> RunModels:
+    """Start recording the models fetched by this task and the tasks it spawns.
+
+    The holder is mutable because the graph may be built in a child task,
+    whose own ``ContextVar.set`` would not reach the caller.
+    """
+    holder = RunModels()
+    _run_models.set(holder)
+    return holder
 
 
 def _conflict_message(res: httpx.Response) -> str:
@@ -61,7 +84,6 @@ def _conflict_message(res: httpx.Response) -> str:
 
 
 async def fetch_llm_config() -> LlmRuntimeConfig:
-    global _last_chat
     settings = get_settings()
     async with httpx.AsyncClient(transport=_transport, timeout=15) as client:
         res = await client.get(
@@ -72,17 +94,10 @@ async def fetch_llm_config() -> LlmRuntimeConfig:
         raise LlmNotConfigured(_conflict_message(res))
     res.raise_for_status()
     config = LlmRuntimeConfig.model_validate(res.json())
-    _last_chat = config.chat
+    run_models = _run_models.get()
+    if run_models is not None:
+        run_models.chat = config.chat
     return config
-
-
-def last_chat_model() -> RoleModel | None:
-    """The chat model the most recent run started with, used to price it.
-
-    A Settings change while a run is in flight prices that run at the new
-    model's rates.
-    """
-    return _last_chat
 
 
 # TradingAgents' ``init_chat_model`` registry key per kind. DeepSeek goes
