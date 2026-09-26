@@ -9,14 +9,15 @@ vi.mock('../../server/lib/yahoo', () => ({ resolveSymbol: vi.fn() }))
 const { failInterruptedRuns } = await import('../../server/lib/agents/start-run')
 
 describe('failInterruptedRuns', () => {
-  it('fails every running run, since their drains died with the previous process', async () => {
-    await failInterruptedRuns()
+  it('fails the runs left running by the previous process, not ones started since boot', async () => {
+    const bootedAt = new Date('2026-09-26T10:00:00Z')
+    await failInterruptedRuns(bootedAt)
 
     expect(fake.updates).toHaveLength(1)
     const [u] = fake.updates
     expect(u!.table).toBe('agent_runs')
     expect(u!.set).toMatchObject({ status: 'failed', error: 'interrupted by a web server restart' })
-    expect(u!.where).toBe('"agent_runs"."status" = $1')
-    expect(u!.params).toEqual(['running'])
+    expect(u!.where).toBe('("agent_runs"."status" = $1 and "agent_runs"."started_at" < $2)')
+    expect(u!.params).toEqual(['running', bootedAt.toISOString()])
   })
 })

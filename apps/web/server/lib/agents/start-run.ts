@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, lt } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDb } from '../../../db/client'
 import { agentRuns, RUNNING_PER_SYMBOL_UQ } from '../../../db/schema'
@@ -204,9 +204,12 @@ export function isDraining(runId: string): boolean {
   return activeDrains.has(runId)
 }
 
-/** A drain lives in the web process, so a restart orphans every running run. */
-export async function failInterruptedRuns(): Promise<void> {
+/**
+ * A drain lives in the web process, so a restart orphans every run that was
+ * running before it. Runs started since boot have live drains in this process.
+ */
+export async function failInterruptedRuns(bootedAt: Date): Promise<void> {
   await getDb().update(agentRuns)
     .set({ status: 'failed', finishedAt: new Date(), error: 'interrupted by a web server restart' })
-    .where(eq(agentRuns.status, 'running'))
+    .where(and(eq(agentRuns.status, 'running'), lt(agentRuns.startedAt, bootedAt)))
 }
