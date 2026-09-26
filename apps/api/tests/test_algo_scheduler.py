@@ -8,7 +8,6 @@ asyncpg pool that the rest of the algo code uses.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import datetime, timedelta
 from typing import Any
@@ -209,7 +208,7 @@ async def test_kill_switch_blocks_order_but_records_signal(db_pool: Any) -> None
 
 
 async def test_cadence_throttles_re_runs(db_pool: Any) -> None:
-    sid = await _make_strategy(
+    await _make_strategy(
         "def on_bar(c): c.buy(c.qty)\n",
         cadence="1d",  # 24h — second tick within the test must be skipped
     )

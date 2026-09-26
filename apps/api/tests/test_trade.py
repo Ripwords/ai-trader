@@ -1,7 +1,6 @@
 """Router-level tests for trade endpoints using FakeTradeAdapter."""
 from datetime import datetime
 
-from fastapi.testclient import TestClient
 
 from app.schemas.quote import Snapshot
 from app.schemas.trade import Account, Fill, Order, PlaceOrderResult, Portfolio, Position

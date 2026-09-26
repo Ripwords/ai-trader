@@ -139,7 +139,7 @@ async def update_strategy(strategy_id: str, body: StrategyUpdate) -> Strategy | 
     for i, (k, v) in enumerate(fields.items(), start=1):
         set_parts.append(f"{k} = ${i}")
         args.append(v)
-    set_parts.append(f"updated_at = now()")
+    set_parts.append("updated_at = now()")
     args.append(strategy_id)
     sql = (
         f"UPDATE algo_strategies SET {', '.join(set_parts)} "

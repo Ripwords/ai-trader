@@ -1,6 +1,6 @@
 from decimal import Decimal
 from app.services.valuation.models import (
-    Assumptions, HistoryPeriod, Metrics, ValuationInput, ValuationResult, Veto,
+    HistoryPeriod, Metrics, ValuationInput, ValuationResult, Veto,
 )
 
 

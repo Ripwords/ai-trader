@@ -28,6 +28,12 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, TypedDict
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
+from app.schemas.algo import Strategy
+from app.services.algo import repo
+from app.services.algo.sandbox import compile_strategy
+
 
 class AccountSummary(TypedDict):
     """Lightweight subset of moomoo's portfolio response — only the totals
@@ -52,11 +58,6 @@ def _now_naive_utc() -> datetime:
     """Naive UTC datetime, matching the timestamp (sans-tz) columns Drizzle owns."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-import pandas as pd
-
-from app.schemas.algo import Strategy
-from app.services.algo import repo
-from app.services.algo.sandbox import compile_strategy
 
 logger = logging.getLogger(__name__)
 

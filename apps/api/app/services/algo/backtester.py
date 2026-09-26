@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable
+from typing import Any
 
 import pandas as pd
 
