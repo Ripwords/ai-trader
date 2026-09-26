@@ -19,7 +19,6 @@ from app.services.agents.realized_return import (
 
 def _bars(start: date, closes: list[float]) -> list[dict]:
     """Build a list of date-keyed bar dicts for the date-slicing tests."""
-    from datetime import timedelta
 
     return [
         {
@@ -84,7 +83,6 @@ async def test_uses_trade_date_window_not_latest_bars() -> None:
     leading or trailing N bars. Earlier bars (before trade_date) and later
     bars (after trade_date + horizon) MUST NOT influence the result.
     """
-    from datetime import timedelta
 
     today = date(2026, 5, 10)
     trade_date = today - timedelta(days=30)  # 2026-04-10
