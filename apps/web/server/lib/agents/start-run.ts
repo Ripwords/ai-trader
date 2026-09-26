@@ -162,8 +162,8 @@ async function readWithin<T>(reader: ReadableStreamDefaultReader<T>, ms: number)
  * Consume the upstream NDJSON stream entirely into a fresh AgentRunTee. Callers
  * start it with ``void`` so it outlives the HTTP request; the app is a
  * long-lived Node process, and this reader keeps the api from seeing a client
- * disconnect. Every exit writes a terminal state: the tee handles run-end and
- * error events, and any other ending records an error event itself.
+ * disconnect. Every exit writes a terminal state: the tee writes it on
+ * run-end, and any other ending records an error event first.
  */
 export async function drainIntoTee(
   upstream: Response,
@@ -176,31 +176,32 @@ export async function drainIntoTee(
   const reader = upstream.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''
-  let finalizeReason: string | null = 'stream ended without terminal event'
+  let endReason = 'stream ended without terminal event'
+  activeDrains.add(runId)
   try {
     while (true) {
       const { value, done } = await readWithin(reader, idleTimeoutMs)
       if (done) break
       const { events, rest } = splitNdjson(buf, decoder.decode(value, { stream: true }))
       buf = rest
-      for (const ev of events) {
-        if (ev.type === 'run-end' || ev.type === 'error') finalizeReason = null
-        tee.push(ev)
-      }
+      for (const ev of events) tee.push(ev)
     }
-    const tail = splitNdjson(buf, '\n')
-    for (const ev of tail.events) {
-      if (ev.type === 'run-end' || ev.type === 'error') finalizeReason = null
-      tee.push(ev)
-    }
+    for (const ev of splitNdjson(buf, '\n').events) tee.push(ev)
   } catch (e: unknown) {
     console.error('[agents-async] drain failed', (e as Error)?.message)
-    finalizeReason = e instanceof Error ? e.message : String(e)
+    endReason = e instanceof Error ? e.message : String(e)
     void reader.cancel().catch(() => {})
   } finally {
-    if (finalizeReason !== null) tee.push({ type: 'error', message: finalizeReason })
-    await tee.flush()
+    await tee.end(endReason)
+    activeDrains.delete(runId)
   }
+}
+
+const activeDrains = new Set<string>()
+
+/** Whether this process is still writing the run's events. */
+export function isDraining(runId: string): boolean {
+  return activeDrains.has(runId)
 }
 
 /** A drain lives in the web process, so a restart orphans every running run. */
