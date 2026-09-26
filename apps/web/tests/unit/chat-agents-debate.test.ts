@@ -132,6 +132,21 @@ describe('agents_debate tool catalogue', () => {
     expect(final).toMatchObject({ runId: 'run-1', error: 'run failed: stream ended without terminal event' })
   })
 
+  it('follows the run already in flight for the symbol instead of failing on 409', async () => {
+    const tools = makeTools({} as unknown as ApiClient)
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
+      Response.json({ statusCode: 409, data: { run_id: 'run-live' } }, { status: 409 }),
+    ) as unknown as typeof fetch
+    tailFrames = [
+      ev(7, { type: 'decision', rating: 'hold', confidence: 55, rationale: 'mixed' }),
+      { kind: 'end', status: 'complete', error: null },
+    ]
+    const { final } = await drain(tools.agents_debate.execute(args, {} as unknown))
+
+    expect(tailRun).toHaveBeenCalledWith('run-live', expect.anything())
+    expect(final).toMatchObject({ runId: 'run-live', rating: 'hold' })
+  })
+
   it('returns an error when the run cannot start', async () => {
     const tools = makeTools({} as unknown as ApiClient)
     ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
