@@ -17,6 +17,7 @@ from app.routers import (
     valuation,
     watchlist,
 )
+from app.services.agents.stub import install_stub_if_enabled
 from app.services.algo import repo as algo_repo
 from app.services.algo.scheduler import (
     AccountSummary,
@@ -300,6 +301,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    install_stub_if_enabled()
     app = FastAPI(title="ai-trader-api", version="0.1.0", lifespan=lifespan)
     app.include_router(health.router)
     app.include_router(quote.router)

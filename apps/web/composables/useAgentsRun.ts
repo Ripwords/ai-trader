@@ -1,27 +1,65 @@
-import { getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue'
-import type { AgentEvent, Rating } from '../types/agents'
+import { computed, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue'
+import type { AgentEvent, Rating, RunStatus } from '../types/agents'
 import type { SymbolResolution } from '../types/symbol'
+import type { RunFrame } from '../server/lib/agents/run-events'
 
-export function parseNdjsonChunk(buffer: string, chunk: string, out: AgentEvent[]): string {
-  const combined = buffer + chunk
-  const lines = combined.split('\n')
-  const last = lines.pop() ?? ''
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    try {
-      out.push(JSON.parse(trimmed) as AgentEvent)
-    } catch {
-      /* ignore malformed */
+export interface SseMessage { id: string | null; event: string; data: string }
+
+/** Incremental text/event-stream parser; `rest` is the unterminated tail. */
+export function parseSse(buffer: string, chunk: string): { messages: SseMessage[]; rest: string } {
+  const blocks = (buffer + chunk).split('\n\n')
+  const rest = blocks.pop() ?? ''
+  const messages: SseMessage[] = []
+  for (const block of blocks) {
+    let id: string | null = null
+    let event = 'message'
+    const data: string[] = []
+    for (const line of block.split('\n')) {
+      const colon = line.indexOf(':')
+      if (colon === 0) continue
+      const field = colon < 0 ? line : line.slice(0, colon)
+      const value = colon < 0 ? '' : line.slice(colon + 1).replace(/^ /, '')
+      if (field === 'id') id = value
+      else if (field === 'event') event = value
+      else if (field === 'data') data.push(value)
     }
+    if (data.length > 0) messages.push({ id, event, data: data.join('\n') })
   }
-  return last
+  return { messages, rest }
 }
 
 interface VerdictState {
   rating: Rating
   confidence: number | null
   rationale: string
+}
+
+export interface RunView {
+  status: RunStatus | 'idle'
+  events: AgentEvent[]
+  lastSeq: number
+  currentNode: string | null
+  verdict: VerdictState | null
+  error: string | null
+}
+
+export const EMPTY_VIEW: RunView = {
+  status: 'idle', events: [], lastSeq: -1, currentNode: null, verdict: null, error: null,
+}
+
+/** The run's view is a fold over its frames. Replays after a reconnect
+ *  overlap what was already seen, so frames at or below lastSeq are dropped. */
+export function applyFrame(view: RunView, frame: RunFrame): RunView {
+  if (frame.kind === 'end') {
+    return { ...view, status: frame.status, error: frame.status === 'complete' ? null : (frame.error ?? view.error) }
+  }
+  if (frame.seq <= view.lastSeq) return view
+  const ev = frame.event
+  const next: RunView = { ...view, events: [...view.events, ev], lastSeq: frame.seq }
+  if (ev.type === 'node-start') next.currentNode = ev.node
+  else if (ev.type === 'decision') next.verdict = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
+  else if (ev.type === 'error') next.error = ev.message
+  return next
 }
 
 interface StartOpts {
@@ -33,330 +71,193 @@ interface StartOpts {
   selected_analysts?: string[]
 }
 
-export function useAgentsRun() {
-  const events = shallowRef<AgentEvent[]>([])
-  const status = ref<'idle' | 'running' | 'complete' | 'failed' | 'cancelled'>('idle')
-  const currentNode = ref<string | null>(null)
-  const verdict = ref<VerdictState | null>(null)
+/** Transport to the run's event stream, independent of the run's own status. */
+export type Connection = 'idle' | 'open' | 'reconnecting' | 'lost'
+
+type ReadOutcome = 'ended' | 'not-found' | 'dropped' | 'aborted'
+
+const MAX_RECONNECTS = 6
+const defaultBackoff = (attempt: number) => Math.min(1000 * 2 ** (attempt - 1), 15_000)
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    signal.addEventListener('abort', () => {
+      clearTimeout(timer)
+      resolve()
+    }, { once: true })
+  })
+}
+
+export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number } = {}) {
+  const backoffMs = opts.backoffMs ?? defaultBackoff
+  const view = shallowRef<RunView>(EMPTY_VIEW)
   const runId = ref<string | null>(null)
-  const error = ref<string | null>(null)
-  // Set when the proxy rejects an unresolved symbol (422). Carries the
-  // resolver verdict so the page can render a "pick the right instrument"
-  // picker instead of a cryptic failure. See
-  // docs/superpowers/specs/2026-05-18-canonical-ticker-resolution-design.md.
+  const connection = ref<Connection>('idle')
+  // Set when the symbol could not be uniquely resolved (422), so the page can
+  // offer a picker instead of a bare failure.
   const resolution = ref<SymbolResolution | null>(null)
-  // Real wall-clock start of the run, not the moment the local fetch began.
-  // Sourced from agent_runs.started_at when replaying from history so a
-  // refreshed page shows the cumulative elapsed time, not a re-zeroed counter.
+  // agent_runs.started_at, so a refreshed page shows cumulative elapsed time.
   const startedAt = ref<Date | null>(null)
   let controller: AbortController | null = null
 
-  /**
-   * Drain an NDJSON stream into the reactive state. Shared by ``start`` and
-   * ``resume``: the only difference between them is the request shape, so
-   * the streaming loop is factored out here to keep the two entry points
-   * thin and behaviorally identical (run-start handling, error/run-end
-   * status transitions, etc).
-   */
-  async function consumeStream(res: Response, abortCtrl: AbortController) {
-    if (!res.body) {
-      status.value = 'failed'
-      error.value = 'no body'
-      return
-    }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
+  function fail(message: string) {
+    view.value = { ...EMPTY_VIEW, status: 'failed', error: message }
+  }
+
+  async function readStream(id: string, signal: AbortSignal): Promise<ReadOutcome> {
     try {
+      const res = await fetch(
+        `/api/research/agent-events?run_id=${encodeURIComponent(id)}&after=${view.value.lastSeq}`,
+        { signal, headers: { accept: 'text/event-stream' } },
+      )
+      if (res.status === 404) return 'not-found'
+      if (!res.ok || !res.body) return 'dropped'
+      connection.value = 'open'
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
       while (true) {
         const { value, done } = await reader.read()
-        if (done) break
-        const next: AgentEvent[] = []
-        buf = parseNdjsonChunk(buf, decoder.decode(value, { stream: true }), next)
-        if (next.length) {
-          events.value = [...events.value, ...next]
-          for (const ev of next) {
-            if (ev.type === 'run-start') runId.value = ev.run_id
-            else if (ev.type === 'node-start') currentNode.value = ev.node
-            else if (ev.type === 'decision') {
-              verdict.value = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
-            }
-            else if (ev.type === 'error') {
-              error.value = ev.message
-              status.value = 'failed'
-            }
-            else if (ev.type === 'run-end' && status.value === 'running') status.value = 'complete'
+        if (done) return 'dropped'
+        const { messages, rest } = parseSse(buf, decoder.decode(value, { stream: true }))
+        buf = rest
+        let v = view.value
+        for (const m of messages) {
+          if (m.event === 'run') {
+            const { startedAt: at } = JSON.parse(m.data) as { startedAt: string | null }
+            startedAt.value = at ? new Date(at) : null
+          }
+          else if (m.event === 'message' && m.id !== null) {
+            v = applyFrame(v, { kind: 'event', seq: Number(m.id), event: JSON.parse(m.data) as AgentEvent })
+          }
+          else if (m.event === 'end') {
+            const end = JSON.parse(m.data) as { status: Exclude<RunStatus, 'running'>; error: string | null }
+            view.value = applyFrame(v, { kind: 'end', ...end })
+            return 'ended'
           }
         }
-      }
-    } catch (e: unknown) {
-      if (abortCtrl.signal.aborted) status.value = 'cancelled'
-      else {
-        status.value = 'failed'
-        error.value = (e as Error)?.message ?? 'stream error'
+        view.value = v
       }
     }
+    catch {
+      return signal.aborted ? 'aborted' : 'dropped'
+    }
+  }
+
+  async function subscribe(id: string, signal: AbortSignal) {
+    let failures = 0
+    while (!signal.aborted) {
+      const outcome = await readStream(id, signal)
+      if (outcome === 'not-found') {
+        reset()
+        return
+      }
+      if (outcome !== 'dropped') break
+      failures = connection.value === 'open' ? 1 : failures + 1
+      if (failures > MAX_RECONNECTS) {
+        connection.value = 'lost'
+        return
+      }
+      connection.value = 'reconnecting'
+      await sleep(backoffMs(failures), signal)
+    }
+    if (!signal.aborted) connection.value = 'idle'
+  }
+
+  /** Show a run: replay its persisted events, then follow it live. */
+  async function follow(id: string, opts: { keep?: boolean } = {}) {
+    controller?.abort()
+    const ac = new AbortController()
+    controller = ac
+    runId.value = id
+    if (!opts.keep) {
+      view.value = { ...EMPTY_VIEW, status: 'running' }
+      startedAt.value = null
+    }
+    await subscribe(id, ac.signal)
+  }
+
+  /** Pick a lost connection back up from the last seen event. */
+  function reconnect() {
+    if (!runId.value) return Promise.resolve()
+    return follow(runId.value, { keep: true })
   }
 
   async function start(symbol: string, opts: StartOpts = {}) {
-    if (status.value === 'running') return
-    events.value = []
-    status.value = 'running'
-    currentNode.value = null
-    verdict.value = null
-    error.value = null
+    if (view.value.status === 'running') return
+    controller?.abort()
+    runId.value = null
+    resolution.value = null
+    view.value = { ...EMPTY_VIEW, status: 'running' }
     startedAt.value = new Date()
-    controller = new AbortController()
 
     const res = await fetch('/api/research/agents-run', {
       method: 'POST',
-      signal: controller.signal,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ symbol, ...opts }),
-    })
+    }).catch(() => null)
+    if (!res) return fail('could not reach the server')
 
-    // 409 = a run is already in-flight for this (user, symbol). The route
-    // includes ``data: { run_id }`` so we surface the existing run id; UI
-    // can offer a "Jump to in-flight run" link instead of starting another.
     if (res.status === 409) {
-      let existingRunId: string | null = null
-      try {
-        const body = (await res.json()) as { data?: { run_id?: string } }
-        existingRunId = body?.data?.run_id ?? null
-      } catch {
-        /* fall through to plain failed state */
-      }
-      runId.value = existingRunId
-      status.value = 'failed'
-      error.value = existingRunId
-        ? `a run is already in progress (run_id ${existingRunId})`
-        : 'a run is already in progress'
-      return
+      const body = await res.json().catch(() => ({})) as { data?: { run_id?: string } }
+      const existing = body.data?.run_id
+      return existing ? follow(existing) : fail('a run is already in progress')
     }
-
-    // 422 = the symbol could not be uniquely resolved to a canonical Yahoo
-    // listing. The proxy refuses to start the run (the "US.MU" → "Munich Re"
-    // bug); surface the resolver verdict so the page can show a picker.
     if (res.status === 422) {
-      try {
-        const body = (await res.json()) as { data?: SymbolResolution }
-        resolution.value = body?.data ?? null
-      } catch {
-        resolution.value = null
-      }
-      status.value = 'failed'
-      error.value = 'pick the right instrument from search — this symbol is ambiguous or unknown'
-      return
+      const body = await res.json().catch(() => ({})) as { data?: SymbolResolution }
+      resolution.value = body.data ?? null
+      return fail('pick the right instrument from search — this symbol is ambiguous or unknown')
     }
+    if (!res.ok) return fail(`the run could not start (${res.status})`)
 
-    await consumeStream(res, controller)
+    const { runId: id } = await res.json() as { runId: string }
+    await follow(id, { keep: true })
   }
 
-  /**
-   * Resume a previously-failed run. Reuses the same ``run_id`` upstream so
-   * all replayed events tee back into the original ``agent_runs`` row. Note
-   * we don't reset ``runId`` here — Resume keeps the existing id; we just
-   * clear the visible event list so the timeline starts fresh from the
-   * checkpoint.
-   */
-  async function resume(originalRunId: string) {
-    if (status.value === 'running') return
-    events.value = []
-    status.value = 'running'
-    currentNode.value = null
-    verdict.value = null
-    error.value = null
-    runId.value = originalRunId
-    // ``startedAt`` from the original run is more meaningful than "now" here,
-    // but we don't have it on the resume path. The page-level elapsed counter
-    // will reflect the resume window only — fine for v1; full cumulative
-    // time would need fetching the agent_runs row first.
-    startedAt.value = new Date()
-    controller = new AbortController()
-
+  /** Continue a halted run from its last checkpoint, keeping its timeline. */
+  async function resume(id: string) {
+    if (view.value.status === 'running') return
     const res = await fetch('/api/research/agents-resume', {
       method: 'POST',
-      signal: controller.signal,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run_id: originalRunId }),
-    })
-    await consumeStream(res, controller)
+      body: JSON.stringify({ run_id: id }),
+    }).catch(() => null)
+    if (!res?.ok) {
+      view.value = { ...view.value, status: 'failed', error: `resume failed (${res?.status ?? 'network'})` }
+      return
+    }
+    view.value = { ...view.value, status: 'running', error: null }
+    await follow(id, { keep: true })
   }
 
-  /**
-   * Cancel an in-flight run.
-   *
-   * Two-step: aborting the local fetch closes the HTTP connection so the
-   * browser stops receiving events, but the *upstream task* on the api side
-   * keeps running until LangGraph notices the disconnect (which it may not,
-   * especially during a long LLM call). Calling DELETE
-   * /api/research/agents-run?run_id=<id> proxies through to the api's
-   * ``_active_runs`` registry which calls ``task.cancel()`` on the asyncio
-   * task — that's the actual stop signal.
-   */
-  /**
-   * Drop all reactive state back to the idle baseline without touching
-   * the upstream run. Used by the page when the user clicks the symbol
-   * breadcrumb to exit a ?run=<id> deep-link — we want the page to
-   * render the RunCostEstimate again as if no run had been loaded.
-   * ``cancel()`` is the wrong tool there because we don't want to fire
-   * a DELETE on a finished historical run.
-   */
+  /** Ask the api to stop the run; the stream's end frame reports the outcome. */
+  function cancel() {
+    if (!runId.value) return
+    void fetch(`/api/research/agents-run?run_id=${encodeURIComponent(runId.value)}`, { method: 'DELETE' })
+      .catch(() => null)
+  }
+
+  /** Back to the idle page without touching the run itself. */
   function reset() {
-    if (controller) {
-      controller.abort()
-      controller = null
-    }
-    stopPoll()
-    events.value = []
-    status.value = 'idle'
-    currentNode.value = null
-    verdict.value = null
+    controller?.abort()
+    controller = null
+    view.value = EMPTY_VIEW
     runId.value = null
-    error.value = null
+    connection.value = 'idle'
+    resolution.value = null
     startedAt.value = null
   }
 
-  function cancel() {
-    const idToCancel = runId.value
-    controller?.abort()
-    stopPoll()
-    if (idToCancel) {
-      void fetch(`/api/research/agents-run?run_id=${encodeURIComponent(idToCancel)}`, {
-        method: 'DELETE',
-      }).catch(() => null)
-    }
-    if (status.value === 'running') status.value = 'cancelled'
-  }
-
-  /**
-   * Apply a batch of replayed events to reactive state. Identical semantics
-   * to the live ``consumeStream`` event handler so a run rehydrated from
-   * ``agent_messages`` after a refresh ends up in the same final state as
-   * one watched live.
-   */
-  function applyEvents(batch: AgentEvent[]) {
-    if (batch.length === 0) return
-    events.value = [...events.value, ...batch]
-    for (const ev of batch) {
-      if (ev.type === 'run-start') runId.value = ev.run_id
-      else if (ev.type === 'node-start') currentNode.value = ev.node
-      else if (ev.type === 'decision') {
-        verdict.value = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
-      }
-      else if (ev.type === 'error') {
-        error.value = ev.message
-      }
-    }
-  }
-
-  // ────── Refresh-survival: replay from ``agent_messages`` ──────
-  // The tee on the proxy route writes every event into ``agent_messages``
-  // keyed by (run_id, seq). Here we read those rows back so a page reload
-  // (or opening ``?run=<id>`` in a new tab) reconstructs the same timeline
-  // the live stream produced. If the server-side run is still ``running``,
-  // we additionally start a 2s poll loop that pulls new events keyed by
-  // last-seen seq — a pragmatic stand-in for reconnecting the original
-  // SSE/NDJSON stream from a different browser context, which HTTP doesn't
-  // allow.
-  let pollTimer: ReturnType<typeof setInterval> | null = null
-  let lastSeq = -1
-
-  function stopPoll() {
-    if (pollTimer !== null) {
-      clearInterval(pollTimer)
-      pollTimer = null
-    }
-  }
-  // Leaving /research/AAPL for /research/TSLA used to keep the old 2s poll
-  // alive forever next to the new one.
-  if (getCurrentScope()) onScopeDispose(stopPoll)
-
-  interface MessagesResponse {
-    runId: string
-    status: 'running' | 'complete' | 'failed' | 'cancelled'
-    startedAt: string | null
-    finishedAt: string | null
-    lastSeq: number
-    events: AgentEvent[]
-  }
-
-  async function fetchMessages(targetRunId: string, since: number): Promise<MessagesResponse | 'not-found' | null> {
-    try {
-      const res = await fetch(`/api/research/agent-messages?run_id=${encodeURIComponent(targetRunId)}&since=${since}`, {
-        method: 'GET',
-        headers: { 'content-type': 'application/json' },
-      })
-      if (res.status === 404) return 'not-found'
-      if (!res.ok) return null
-      return (await res.json()) as MessagesResponse
-    }
-    catch {
-      return null
-    }
-  }
-
-  /**
-   * Hydrate the composable from a run's persisted event log. Replaces any
-   * existing local state — callers should ensure they're not overwriting
-   * an in-flight live stream.
-   *
-   * If the server-side run is still ``running``, automatically starts a
-   * background poll for incremental updates; the poll stops when the run's
-   * status transitions out of ``running``.
-   */
-  async function loadFromHistory(targetRunId: string) {
-    stopPoll()
-    if (controller) controller.abort()
-    events.value = []
-    status.value = 'running'
-    currentNode.value = null
-    verdict.value = null
-    error.value = null
-    runId.value = targetRunId
-    lastSeq = -1
-
-    const initial = await fetchMessages(targetRunId, -1)
-    if (initial === 'not-found') {
-      // Stale URL pointing at a deleted/never-persisted run. Reset to idle so
-      // the page renders the Run button instead of a confusing error banner.
-      status.value = 'idle'
-      runId.value = null
-      startedAt.value = null
-      return
-    }
-    if (initial === null) {
-      status.value = 'failed'
-      error.value = 'failed to load run history'
-      return
-    }
-    applyEvents(initial.events)
-    lastSeq = initial.lastSeq
-    status.value = initial.status
-    startedAt.value = initial.startedAt ? new Date(initial.startedAt) : null
-
-    if (initial.status === 'running') {
-      pollTimer = setInterval(() => {
-        void (async () => {
-          const next = await fetchMessages(targetRunId, lastSeq)
-          if (next === null || next === 'not-found') return
-          applyEvents(next.events)
-          lastSeq = next.lastSeq
-          // The server's truth wins — once it flips out of ``running`` we
-          // mirror that and stop polling. Note ``run-end`` may arrive in the
-          // event batch too, but ``status`` from the run row is authoritative.
-          if (next.status !== 'running') {
-            status.value = next.status
-            stopPoll()
-          }
-        })()
-      }, 2000)
-    }
-  }
+  if (getCurrentScope()) onScopeDispose(() => controller?.abort())
 
   return {
-    events, status, currentNode, verdict, runId, error, resolution,
-    startedAt,
-    start, resume, cancel, loadFromHistory, reset,
+    events: computed(() => view.value.events),
+    status: computed(() => view.value.status),
+    currentNode: computed(() => view.value.currentNode),
+    verdict: computed(() => view.value.verdict),
+    error: computed(() => view.value.error),
+    runId, resolution, startedAt, connection,
+    start, resume, cancel, follow, reconnect, reset,
   }
 }

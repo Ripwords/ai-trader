@@ -37,7 +37,7 @@ vi.mock('h3', async () => {
   }
 })
 
-type PostHandler = (event: H3Event) => Promise<ReadableStream<Uint8Array>>
+type PostHandler = (event: H3Event) => Promise<{ runId: string; status: string; symbol: string }>
 let handler: PostHandler
 
 beforeEach(async () => {
@@ -93,10 +93,10 @@ function makeEvent(body: unknown): H3Event {
 }
 
 describe('POST /api/research/agents-run', () => {
-  it('inserts an agent_runs row and returns a ReadableStream', async () => {
+  it('inserts an agent_runs row and returns the run id without holding the stream', async () => {
     const event = makeEvent({ symbol: 'NVDA', max_debate_rounds: 1 })
-    const stream = await handler(event)
-    expect(stream).toBeInstanceOf(ReadableStream)
+    const res = await handler(event)
+    expect(res).toEqual({ runId: 'run-1', status: 'running', symbol: 'NVDA' })
     expect(insertReturning).toHaveBeenCalledTimes(1)
   })
 

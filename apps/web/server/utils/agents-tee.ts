@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { agentRuns, agentMessages, agentDecisions } from '../../db/schema'
 import type { AgentEvent } from '../../types/agents'
@@ -12,22 +12,37 @@ const TERMINAL_EVENTS = new Set(['run-end', 'error', 'final-state', 'decision'])
 
 export class AgentRunTee {
   private queue: AgentEvent[] = []
-  private seq = 0
+  private seq: number
+  private drained: Promise<void> = Promise.resolve()
   private draining = false
 
-  constructor(public runId: string, public userId: string) {}
+  /** `startSeq` continues a resumed run's timeline after its existing rows. */
+  constructor(public runId: string, public userId: string, startSeq = 0) {
+    this.seq = startSeq
+  }
 
   push(ev: AgentEvent) {
+    if (ev.type === 'heartbeat') return
     if (this.queue.length >= QUEUE_CAP && !TERMINAL_EVENTS.has(ev.type)) {
       console.warn('[agents-tee] queue overflow, dropping', ev.type)
       return
     }
     this.queue.push(ev)
-    void this.drain()
+    if (!this.draining) this.drained = this.drain()
+  }
+
+  /** The api follows an error with run-end, and a cancel precedes both, so
+   *  only the first terminal transition may land. */
+  private stillRunning() {
+    return and(eq(agentRuns.id, this.runId), eq(agentRuns.status, 'running'))
+  }
+
+  /** Resolves once every pushed event has been written. */
+  flush(): Promise<void> {
+    return this.drained
   }
 
   private async drain() {
-    if (this.draining) return
     this.draining = true
     const db = getDb()
     try {
@@ -72,24 +87,20 @@ export class AgentRunTee {
           if (ev.type === 'run-end') {
             await db
               .update(agentRuns)
-              .set({
-                status: 'complete',
-                finishedAt: new Date(),
-                tokensIn: ev.tokens_in,
-                tokensOut: ev.tokens_out,
-                costUsd: ev.cost_usd.toString(),
-              })
+              .set({ tokensIn: ev.tokens_in, tokensOut: ev.tokens_out, costUsd: ev.cost_usd.toString() })
               .where(eq(agentRuns.id, this.runId))
-          }
-          if (ev.type === 'error') {
             await db
               .update(agentRuns)
-              .set({
-                status: 'failed',
-                finishedAt: new Date(),
-                error: ev.message,
-              })
-              .where(eq(agentRuns.id, this.runId))
+              .set({ status: 'complete', finishedAt: new Date() })
+              .where(this.stillRunning())
+          }
+          if (ev.type === 'error') {
+            // The api reports a cancelled task as this exact error.
+            const status = ev.message === 'cancelled' ? 'cancelled' : 'failed'
+            await db
+              .update(agentRuns)
+              .set({ status, finishedAt: new Date(), error: ev.message })
+              .where(this.stillRunning())
           }
           if (ev.type === 'final-state') {
             // Persist the captured terminal AgentState so the per-role

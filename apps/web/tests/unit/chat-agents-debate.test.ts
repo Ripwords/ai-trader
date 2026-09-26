@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ApiClient } from '../../server/llm/http'
 import type { H3Event } from 'h3'
+import type { AgentEvent } from '../../types/agents'
+import type { RunFrame } from '../../server/lib/agents/run-events'
 
 type ExecuteReturn = AsyncGenerator<unknown, unknown, unknown>
 type ToolMap = Record<
@@ -8,9 +10,19 @@ type ToolMap = Record<
   { description?: string; execute: (args: Record<string, unknown>, ctx: unknown) => ExecuteReturn }
 >
 
+let tailFrames: RunFrame[] = []
+const { tailRun } = vi.hoisted(() => ({
+  tailRun: vi.fn(async function* (): AsyncGenerator<RunFrame> {
+    for (const f of tailFrames) yield f
+  }),
+}))
+vi.mock('../../server/lib/agents/run-events', () => ({ tailRun }))
+
 let makeTools: (client: ApiClient, event?: H3Event) => ToolMap
 beforeEach(async () => {
   vi.resetModules()
+  tailRun.mockClear()
+  tailFrames = []
   makeTools = (await import('../../server/llm/tools')).makeTools as unknown as (
     client: ApiClient,
     event?: H3Event,
@@ -23,15 +35,16 @@ function fakeEventWithCookie(cookie: string): H3Event {
   } as unknown as H3Event
 }
 
-function ndjsonResponse(lines: string[]) {
-  const enc = new TextEncoder()
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const l of lines) controller.enqueue(enc.encode(l + '\n'))
-      controller.close()
-    },
-  })
-  return { ok: true, body } as unknown as Response
+const args = { symbol: 'NVDA', max_debate_rounds: 1, deep_thinking: true }
+
+function ev(seq: number, event: AgentEvent): RunFrame {
+  return { kind: 'event', seq, event }
+}
+
+function startResponse() {
+  const fetchSpy = vi.fn(async () => Response.json({ runId: 'run-1', status: 'running', symbol: 'NVDA' }))
+  ;(globalThis as unknown as { fetch: typeof fetch }).fetch = fetchSpy as unknown as typeof fetch
+  return fetchSpy
 }
 
 async function drain(gen: ExecuteReturn): Promise<{ yields: unknown[]; final: unknown }> {
@@ -62,104 +75,70 @@ describe('agents_debate tool catalogue', () => {
     expect(tools.analyze_ticker).toBeUndefined()
   })
 
-  it('streams progress yields and returns the final decision', async () => {
-    // Each yield becomes a `tool-output-available` (preliminary) frame on the
-    // chat stream — that's what keeps the connection alive during the long
-    // agent run AND drives the AgentsDebateCard timeline.
+  it('starts a detached run, streams progress yields, and returns the final decision', async () => {
     const tools = makeTools({} as unknown as ApiClient)
-    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
-      ndjsonResponse([
-        '{"type":"run-start","run_id":"r1","symbol":"NVDA","config":{}}',
-        '{"type":"node-start","node":"market"}',
-        '{"type":"node-start","node":"trader"}',
-        '{"type":"decision","rating":"buy","confidence":72,"rationale":"strong fundamentals"}',
-        '{"type":"run-end","run_id":"r1","tokens_in":1,"tokens_out":1,"cost_usd":0.01}',
-      ]),
-    ) as unknown as typeof fetch
-    const gen = tools.agents_debate.execute(
-      { symbol: 'NVDA', max_debate_rounds: 1, deep_thinking: true },
-      {} as unknown,
-    )
-    const { yields, final } = await drain(gen)
+    const fetchSpy = startResponse()
+    tailFrames = [
+      ev(0, { type: 'run-start', run_id: 'run-1', symbol: 'NVDA', config: {} }),
+      ev(1, { type: 'node-start', node: 'market' }),
+      ev(2, { type: 'node-start', node: 'trader' }),
+      ev(3, { type: 'decision', rating: 'buy', confidence: 72, rationale: 'strong fundamentals' }),
+      ev(4, { type: 'run-end', run_id: 'run-1', tokens_in: 1, tokens_out: 1, cost_usd: 0.01 }),
+      { kind: 'end', status: 'complete', error: null },
+    ]
+    const { yields, final } = await drain(tools.agents_debate.execute(args, {} as unknown))
 
-    // We expect at least one yield per upstream event (plus an initial
-    // pre-fetch yield), so >= 5.
-    expect(yields.length).toBeGreaterThanOrEqual(5)
-
-    // Final value carries the verdict the LLM consumes.
-    expect(final).toMatchObject({ rating: 'buy', confidence: 72, rationale: 'strong fundamentals' })
-
-    // Final value also carries the node timeline for the card.
-    const nodes = (final as { events: Array<{ type: string; node?: string }> }).events
-      .filter(e => e.type === 'node-start')
-      .map(e => e.node)
+    expect(fetchSpy.mock.calls[0]?.[0]).toContain('/api/research/agents-run')
+    expect(tailRun).toHaveBeenCalledWith('run-1', expect.anything())
+    // One yield before the run starts plus one per event keeps the chat
+    // stream moving and drives the AgentsDebateCard timeline.
+    expect(yields.length).toBeGreaterThanOrEqual(6)
+    expect(final).toMatchObject({ runId: 'run-1', rating: 'buy', confidence: 72, rationale: 'strong fundamentals' })
+    const nodes = (final as { events: Array<{ node?: string }> }).events.map(e => e.node)
     expect(nodes).toEqual(['market', 'trader'])
   })
 
   it('forwards the session cookie when given an event', async () => {
-    // Without cookie forwarding the self-fetch hits Nuxt's auth middleware
-    // (server/middleware/auth.ts) and gets 401 — surfacing as
-    // "agents service failed: 401" in chat.
     const tools = makeTools({} as unknown as ApiClient, fakeEventWithCookie('session=abc123'))
-    const fetchSpy = vi.fn(async () =>
-      ndjsonResponse(['{"type":"decision","rating":"hold","confidence":1,"rationale":""}']),
-    )
-    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = fetchSpy as unknown as typeof fetch
-    await drain(
-      tools.agents_debate.execute(
-        { symbol: 'NVDA', max_debate_rounds: 1, deep_thinking: true },
-        {} as unknown,
-      ),
-    )
-    const init = (fetchSpy.mock.calls[0]?.[1] ?? {}) as RequestInit
-    const headers = init.headers as Record<string, string>
+    const fetchSpy = startResponse()
+    tailFrames = [{ kind: 'end', status: 'complete', error: null }]
+    await drain(tools.agents_debate.execute(args, {} as unknown))
+    const headers = (fetchSpy.mock.calls[0]?.[1] as RequestInit).headers as Record<string, string>
     expect(headers.cookie).toBe('session=abc123')
   })
 
   it('omits the cookie header when no event is given', async () => {
     const tools = makeTools({} as unknown as ApiClient)
-    const fetchSpy = vi.fn(async () =>
-      ndjsonResponse(['{"type":"decision","rating":"hold","confidence":1,"rationale":""}']),
-    )
-    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = fetchSpy as unknown as typeof fetch
-    await drain(
-      tools.agents_debate.execute(
-        { symbol: 'NVDA', max_debate_rounds: 1, deep_thinking: true },
-        {} as unknown,
-      ),
-    )
-    const init = (fetchSpy.mock.calls[0]?.[1] ?? {}) as RequestInit
-    const headers = init.headers as Record<string, string>
+    const fetchSpy = startResponse()
+    tailFrames = [{ kind: 'end', status: 'complete', error: null }]
+    await drain(tools.agents_debate.execute(args, {} as unknown))
+    const headers = (fetchSpy.mock.calls[0]?.[1] as RequestInit).headers as Record<string, string>
     expect(headers.cookie).toBeUndefined()
   })
 
-  it('returns an error when no decision was emitted', async () => {
+  it('returns an error when the run completes without a decision', async () => {
     const tools = makeTools({} as unknown as ApiClient)
-    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
-      ndjsonResponse(['{"type":"node-start","node":"market"}']),
-    ) as unknown as typeof fetch
-    const { final } = await drain(
-      tools.agents_debate.execute(
-        { symbol: 'NVDA', max_debate_rounds: 1, deep_thinking: true },
-        {} as unknown,
-      ),
-    )
+    startResponse()
+    tailFrames = [ev(0, { type: 'node-start', node: 'market' }), { kind: 'end', status: 'complete', error: null }]
+    const { final } = await drain(tools.agents_debate.execute(args, {} as unknown))
     expect(final).toMatchObject({ error: 'no decision emitted' })
   })
 
-  it('returns an error when the upstream service fails', async () => {
+  it('returns the failure reason when the run fails', async () => {
     const tools = makeTools({} as unknown as ApiClient)
-    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () => ({
-      ok: false,
-      status: 502,
-      body: null,
-    })) as unknown as typeof fetch
-    const { final } = await drain(
-      tools.agents_debate.execute(
-        { symbol: 'NVDA', max_debate_rounds: 1, deep_thinking: true },
-        {} as unknown,
-      ),
-    )
+    startResponse()
+    tailFrames = [{ kind: 'end', status: 'failed', error: 'stream ended without terminal event' }]
+    const { final } = await drain(tools.agents_debate.execute(args, {} as unknown))
+    expect(final).toMatchObject({ runId: 'run-1', error: 'run failed: stream ended without terminal event' })
+  })
+
+  it('returns an error when the run cannot start', async () => {
+    const tools = makeTools({} as unknown as ApiClient)
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
+      new Response('{}', { status: 502 }),
+    ) as unknown as typeof fetch
+    const { final } = await drain(tools.agents_debate.execute(args, {} as unknown))
     expect(final).toMatchObject({ error: expect.stringContaining('502') })
+    expect(tailRun).not.toHaveBeenCalled()
   })
 })

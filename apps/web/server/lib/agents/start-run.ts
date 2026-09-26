@@ -1,4 +1,4 @@
-import { and, eq, gte, sql } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { createError } from 'h3'
 import { getDb } from '../../../db/client'
 import { agentRuns } from '../../../db/schema'
@@ -24,14 +24,10 @@ export interface StartedRun {
   upstream: Response
 }
 
-const STALE_RUN_CUTOFF_MIN = 15
-
 /**
  * Resolve + concurrency-gate + insert the agent_runs row + open the upstream
- * FastAPI NDJSON stream. Shared by the inline streaming endpoint
- * (agents-run.post.ts) and the fire-and-forget endpoint
- * (agents-run-async.post.ts). Throws createError on every failure path so both
- * callers get identical status codes (400/409/422/502).
+ * FastAPI NDJSON stream. Throws createError on every failure path
+ * (400/409/422/502).
  */
 export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
   const userId = await getOwnerId()
@@ -50,7 +46,6 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
   const tradeDate = body.trade_date ?? new Date().toISOString().slice(0, 10)
   const db = getDb()
 
-  const cutoff = new Date(Date.now() - STALE_RUN_CUTOFF_MIN * 60_000)
   const inflight = await db
     .select({ id: agentRuns.id })
     .from(agentRuns)
@@ -58,7 +53,6 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
       eq(agentRuns.userId, userId),
       eq(agentRuns.symbol, symbol),
       eq(agentRuns.status, 'running'),
-      gte(agentRuns.startedAt, cutoff),
     ))
     .limit(1)
   if (inflight[0]) {
@@ -68,16 +62,6 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
       data: { run_id: inflight[0].id },
     })
   }
-  await db
-    .update(agentRuns)
-    .set({ status: 'failed', error: 'stale (no run-end before cutoff)', finishedAt: new Date() })
-    .where(and(
-      eq(agentRuns.userId, userId),
-      eq(agentRuns.symbol, symbol),
-      eq(agentRuns.status, 'running'),
-      sql`${agentRuns.startedAt} < ${cutoff}`,
-    ))
-
   const inserted = await db
     .insert(agentRuns)
     .values({
@@ -133,23 +117,44 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
   return { run, userId, upstream }
 }
 
+// The api heartbeats every 15 s, so this much silence means it is gone.
+const UPSTREAM_IDLE_TIMEOUT_MS = 90_000
+
+async function readWithin<T>(reader: ReadableStreamDefaultReader<T>, ms: number): Promise<ReadableStreamReadResult<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const idle = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no data from the agents service for ${Math.round(ms / 1000)}s`)), ms)
+  })
+  try {
+    return await Promise.race([reader.read(), idle])
+  }
+  finally {
+    clearTimeout(timer)
+  }
+}
+
 /**
- * Consume the upstream NDJSON stream entirely into a fresh AgentRunTee. Used by
- * the fire-and-forget endpoint: it is started with ``void`` so it outlives the
- * HTTP response. Safe because the app runs under a long-lived Node process
- * (Docker, not serverless); the server-side reader keeps the stream alive so
- * the api's client-disconnect kill does not trigger. The tee finalizes the
- * agent_runs row (complete/failed) exactly as the inline path does.
+ * Consume the upstream NDJSON stream entirely into a fresh AgentRunTee. Callers
+ * start it with ``void`` so it outlives the HTTP request; the app is a
+ * long-lived Node process, and this reader keeps the api from seeing a client
+ * disconnect. Every exit writes a terminal state: the tee handles run-end and
+ * error events, and any other ending records an error event itself.
  */
-export async function drainIntoTee(upstream: Response, runId: string, userId: string): Promise<void> {
-  const tee = new AgentRunTee(runId, userId)
+export async function drainIntoTee(
+  upstream: Response,
+  runId: string,
+  userId: string,
+  opts: { idleTimeoutMs?: number; startSeq?: number } = {},
+): Promise<void> {
+  const idleTimeoutMs = opts.idleTimeoutMs ?? UPSTREAM_IDLE_TIMEOUT_MS
+  const tee = new AgentRunTee(runId, userId, opts.startSeq)
   const reader = upstream.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''
   let finalizeReason: string | null = 'stream ended without terminal event'
   try {
     while (true) {
-      const { value, done } = await reader.read()
+      const { value, done } = await readWithin(reader, idleTimeoutMs)
       if (done) break
       const { events, rest } = splitNdjson(buf, decoder.decode(value, { stream: true }))
       buf = rest
@@ -166,11 +171,16 @@ export async function drainIntoTee(upstream: Response, runId: string, userId: st
   } catch (e: unknown) {
     console.error('[agents-async] drain failed', (e as Error)?.message)
     finalizeReason = e instanceof Error ? e.message : String(e)
+    void reader.cancel().catch(() => {})
   } finally {
-    if (finalizeReason !== null) {
-      await getDb().update(agentRuns)
-        .set({ status: 'failed', finishedAt: new Date(), error: finalizeReason })
-        .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, 'running')))
-    }
+    if (finalizeReason !== null) tee.push({ type: 'error', message: finalizeReason })
+    await tee.flush()
   }
+}
+
+/** A drain lives in the web process, so a restart orphans every running run. */
+export async function failInterruptedRuns(): Promise<void> {
+  await getDb().update(agentRuns)
+    .set({ status: 'failed', finishedAt: new Date(), error: 'interrupted by a web server restart' })
+    .where(eq(agentRuns.status, 'running'))
 }

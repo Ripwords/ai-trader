@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAgentsRun } from '../../../composables/useAgentsRun'
+import { activeRuns } from '../../../composables/useActiveRuns'
 import { requestRunNotificationPermission } from '../../lib/notify'
 
 definePageMeta({ section: 'research' })
@@ -22,8 +23,7 @@ interface AgentRunRow {
 
 const route = useRoute()
 const symbol = computed(() => decodeURIComponent(String(route.params.symbol)).toUpperCase())
-// ``?run=<id>`` deep-links the page to a specific previous run so we can
-// surface a Resume button when that run failed mid-flight (Task 8).
+// ``?run=<id>`` is the run the page shows, live or finished.
 const queryRunId = computed(() => {
   const raw = route.query.run
   return typeof raw === 'string' && raw.length > 0 ? raw : null
@@ -32,8 +32,8 @@ const queryRunId = computed(() => {
 useHead({ title: () => `research · ${symbol.value}` })
 
 const {
-  events, status, verdict, runId, error, resolution, startedAt,
-  start, resume, cancel, loadFromHistory, reset,
+  events, status, verdict, runId, error, resolution, startedAt, connection,
+  start, resume, cancel, follow, reconnect, reset,
 } = useAgentsRun()
 
 // Candidates to offer when the symbol couldn't be uniquely resolved (422).
@@ -48,21 +48,7 @@ const { data: runHistory, refresh: refreshHistory } = await useFetch<{ rows: Age
   default: () => ({ rows: [] }),
 })
 
-// Separate fetch for the deep-linked run; ``useFetch`` keys cache by URL so
-// scoping with ``?run_id=`` keeps it independent of the symbol-level history.
-const { data: deepRun } = await useFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs', {
-  query: { run_id: queryRunId },
-  default: () => ({ rows: [] }),
-  // Don't fire when the query param is absent — the empty-string id would
-  // round-trip back as a no-op but adds a wasted request.
-  immediate: queryRunId.value !== null,
-})
-
-const targetedRun = computed(() => deepRun.value?.rows?.[0] ?? null)
-const canResume = computed(() => {
-  const r = targetedRun.value
-  return r !== null && r.status === 'failed' && status.value !== 'running'
-})
+const canResume = computed(() => status.value === 'failed' && runId.value !== null)
 
 const historyRows = computed(() =>
   (runHistory.value?.rows ?? []).map(r => ({
@@ -82,6 +68,12 @@ const liveRun = computed(() => {
   }
   return null
 })
+
+// Runs started from chat or another tab show up in the global active-runs
+// poll before this page's history refreshes.
+const liveRunId = computed(() =>
+  activeRuns.value.find(r => r.symbol === symbol.value)?.runId ?? liveRun.value?.id ?? null,
+)
 
 const costSamples = computed(() =>
   historyRows.value.map(r => ({ costUsd: r.costUsd })),
@@ -165,7 +157,7 @@ function onStart(opts: StartOpts) {
 }
 
 function onResume() {
-  const id = targetedRun.value?.id
+  const id = runId.value
   if (!id) return
   void resume(id).then(() => {
     void refreshHistory()
@@ -173,59 +165,50 @@ function onResume() {
 }
 
 // ────── Refresh-survival ──────
-// Two pieces work together so a page reload doesn't lose the run:
-//
-// 1. When a fresh run starts, the first ``run-start`` event populates
-//    ``runId``; we mirror that into the URL as ``?run=<id>`` (replace, not
-//    push, so back-button keeps working). Any subsequent reload lands on the
-//    same URL and triggers piece 2.
-//
-// 2. On mount with ``?run=<id>``, we replay the persisted event log from
-//    ``agent_messages``. If the server-side run is still ``running``, the
-//    composable starts a 2s poll for incremental events — a stand-in for
-//    reconnecting to the original NDJSON stream, which HTTP doesn't allow
-//    across page contexts.
+// The shown run lives in ``?run=<id>``: a started run is mirrored there, and a
+// reload or a history click follows it again, replaying persisted events and
+// then tailing live ones.
 watch(runId, (id) => {
   if (!id) return
   if (route.query.run === id) return
   void router.replace({ query: { ...route.query, run: id } })
 })
 
-// Trigger loadFromHistory on initial mount AND on every later
-// ?run=<id> query change. Same-page navigation (clicking a row in
-// RunHistoryTable when already on this page) only updates the query
-// param — the [symbol].vue component doesn't unmount, so onMounted
-// alone wouldn't refire and the composable's state would stay frozen
-// on whatever the previous run rendered.
+// With no run chosen, follow the symbol's live run when one exists or appears.
+// Leaving a run via the breadcrumb does not bounce back, because the live id
+// has not changed.
+function followLive(id: string | null) {
+  if (!id || queryRunId.value || status.value !== 'idle') return
+  void router.replace({ query: { ...route.query, run: id } })
+}
+onMounted(() => followLive(liveRunId.value))
+watch(liveRunId, (id, prev) => {
+  if (id !== prev) followLive(id)
+})
+
 watch(
   queryRunId,
   async (id, prev) => {
-    if (id === prev) return
+    if (import.meta.server || id === prev) return
 
-    // Transition to NO ?run= — user clicked the symbol breadcrumb (or
-    // the URL was otherwise cleared). Drop composable state back to
-    // idle so the page re-renders the RunCostEstimate / history surface
-    // instead of staying stuck on the previously-loaded run's events.
-    // Also re-fetch history so any runs that completed since the last
-    // visit are visible.
     if (!id) {
       reset()
       void refreshHistory()
       return
     }
 
-    // Already showing this run live — no replay needed.
-    if (id === runId.value && events.value.length > 0) return
+    // Started on this page; already following it.
+    if (id === runId.value) return
 
-    await loadFromHistory(id)
+    await follow(id)
 
-    // ``loadFromHistory`` resets to ``idle`` (composable-side) when the
-    // run doesn't exist anymore — typically a stale URL from a prior DB
-    // state. Strip the ``?run=`` so subsequent refreshes don't keep
-    // hitting the same dead lookup and surfacing 404s in the console.
+    // The run no longer exists (a stale URL): drop the dead ``?run=``.
     if (status.value === 'idle' && runId.value === null) {
       const { run: _drop, ...rest } = route.query
       void router.replace({ query: rest })
+    }
+    else {
+      void refreshHistory()
     }
   },
   { immediate: true },
@@ -310,11 +293,11 @@ watch(
                 run halted
               </span>
               <span class="resume-card__id" data-mono>
-                run · {{ targetedRun?.id?.slice(0, 8) }}
+                run · {{ runId?.slice(0, 8) }}
               </span>
             </header>
             <p class="resume-card__error" data-mono>
-              {{ targetedRun?.error ?? 'unknown error' }}
+              {{ error ?? 'unknown error' }}
             </p>
             <button
               type="button"
@@ -367,7 +350,28 @@ watch(
           />
 
           <section
-            v-if="error && status === 'failed'"
+            v-if="status === 'running' && connection === 'lost'"
+            class="resume-card"
+            role="alert"
+            data-testid="agent-connection-lost"
+          >
+            <header class="resume-card__head">
+              <span class="resume-card__eyebrow">
+                <span class="resume-card__dot" />
+                connection lost
+              </span>
+            </header>
+            <p class="resume-card__error" data-mono>
+              the run may still be going on the server
+            </p>
+            <button type="button" class="resume-card__btn" @click="reconnect">
+              <span data-mono>reconnect</span>
+              <span class="resume-card__btn-glyph" data-mono>↻</span>
+            </button>
+          </section>
+
+          <section
+            v-if="error && status === 'failed' && !canResume"
             class="error-card"
             role="alert"
           >
