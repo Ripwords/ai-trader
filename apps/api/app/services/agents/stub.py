@@ -49,10 +49,18 @@ async def _run_graph(
     }
 
 
+async def _resume_graph(
+    graph: Any, symbol: str, trade_date: date, *_a: Any, **_kw: Any
+) -> AsyncIterator[dict]:
+    async for chunk in _run_graph(graph, symbol, trade_date):
+        yield chunk
+
+
 def install_stub_if_enabled() -> bool:
     if not os.environ.get("AGENTS_STUB_RUN_SECONDS"):
         return False
     logger.warning("AGENTS_STUB_RUN_SECONDS is set: agents runs use the sleeping stub graph")
     graph_mod.build_graph = _build_graph
     graph_mod.run_graph = _run_graph
+    graph_mod.resume_graph = _resume_graph
     return True

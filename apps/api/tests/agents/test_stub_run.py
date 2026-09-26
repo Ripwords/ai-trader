@@ -4,6 +4,7 @@ streaming repro scripts can run without keys or spend."""
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -45,3 +46,17 @@ async def test_stubbed_run_streams_a_decision(monkeypatch: pytest.MonkeyPatch) -
     assert "node-start" in kinds
     assert "decision" in kinds
     assert kinds[-1] == "run-end"
+
+
+@pytest.mark.asyncio
+async def test_stub_also_replaces_resume(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTS_STUB_RUN_SECONDS", "0.01")
+    monkeypatch.setattr(graph_mod, "run_graph", graph_mod.run_graph)
+    monkeypatch.setattr(graph_mod, "build_graph", graph_mod.build_graph)
+    monkeypatch.setattr(graph_mod, "resume_graph", graph_mod.resume_graph)
+    assert stub_mod.install_stub_if_enabled() is True
+
+    graph = graph_mod.build_graph()
+    chunks = [c async for c in graph_mod.resume_graph(graph, "NVDA", date(2026, 9, 26), run_id="r1")]
+
+    assert chunks[-1]["values"]["decision"]["rating"] == "hold"
