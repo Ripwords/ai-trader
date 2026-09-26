@@ -71,7 +71,7 @@ export async function createThread(userId: string, title: string): Promise<strin
 
 export async function appendMessages(
   threadId: string,
-  messages: Array<{ id?: string; role: string; parts?: unknown[]; [k: string]: unknown }>,
+  messages: ReadonlyArray<{ id?: string; role: string; parts?: readonly unknown[]; metadata?: unknown }>,
 ): Promise<void> {
   if (messages.length === 0) return
   const db = getDb()
