@@ -80,7 +80,7 @@ describe.skipIf(!url)('llm settings API (TEST_DATABASE_URL)', () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = url
     process.env.ENCRYPTION_KEY = 'test-encryption-key-for-db-suite'
-    process.env.INTERNAL_BEARER = 'test-bearer'
+    process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
     db = (await import('../../db/client')).getDb()
     schema = await import('../../db/schema')
     providers = await import('../../server/lib/llm-providers')
@@ -141,7 +141,7 @@ describe.skipIf(!url)('llm settings API (TEST_DATABASE_URL)', () => {
     const gateway = await providers.createProvider({ kind: 'openrouter', label: 'Gateway', baseUrl: 'https://gateway.example.com/v1', apiKey: 'or-key-4321' })
 
     expect(await thrownStatus(Promise.resolve().then(() => handler(makeEvent())))).toBe(401)
-    const authed = makeEvent({ authorization: 'Bearer test-bearer' })
+    const authed = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' })
     expect(await thrownStatus(Promise.resolve().then(() => handler(authed)))).toBe(409)
 
     await settings.saveLlmSettings({

@@ -50,10 +50,17 @@ describe('encryptedText column', () => {
     expect(() => table.secret.mapToDriverValue('x')).toThrow(/ENCRYPTION_KEY/)
   })
 
+  it('refuses the example key and short keys', () => {
+    for (const key of ['change-me-run-openssl-rand-base64-32', 'too-short']) {
+      process.env.ENCRYPTION_KEY = key
+      expect(() => table.secret.mapToDriverValue('x'), key).toThrow(/ENCRYPTION_KEY/)
+    }
+  })
+
   it('names ENCRYPTION_KEY when a stored value no longer decrypts', () => {
     process.env.ENCRYPTION_KEY = SECRET
     const stored = table.secret.mapToDriverValue('sk-live-key')
-    process.env.ENCRYPTION_KEY = 'rotated-secret'
+    process.env.ENCRYPTION_KEY = 'rotated-secret-0123456789abcdef0123456789'
     expect(() => table.secret.mapFromDriverValue(stored)).toThrow(/ENCRYPTION_KEY/)
   })
 })

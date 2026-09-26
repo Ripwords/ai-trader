@@ -17,7 +17,7 @@ type Handler = (event: H3Event) => unknown
 let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
-  process.env.INTERNAL_BEARER = 'test-bearer'
+  process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/yahoo/insider-transactions.get')
   handler = mod.default as Handler
 })
@@ -28,7 +28,7 @@ function makeEvent(headers: Record<string, string>, query: Record<string, string
   return { node: { req: { headers } }, context: {}, path } as unknown as H3Event
 }
 
-const auth = { authorization: 'Bearer test-bearer' }
+const auth = { authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }
 
 interface InsiderResult {
   symbol: string

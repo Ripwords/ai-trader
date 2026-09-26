@@ -5,7 +5,7 @@ type PricingEntry = { input_per_1m: number; output_per_1m: number }
 type Handler = (event: H3Event) => { models: Record<string, PricingEntry> } | Promise<{ models: Record<string, PricingEntry> }>
 let handler: Handler
 beforeEach(async () => {
-  process.env.INTERNAL_BEARER = 'test-bearer'
+  process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/pricing.get')
   handler = mod.default as Handler
 })
@@ -20,7 +20,7 @@ describe('/internal/pricing', () => {
   })
 
   it('returns models map on bearer match', async () => {
-    const event = makeEvent({ authorization: 'Bearer test-bearer' })
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' })
     const result = await handler(event)
     expect(result.models).toBeDefined()
     const keys = Object.keys(result.models)

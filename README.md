@@ -29,8 +29,10 @@ cp .env.example .env
 # Edit .env:
 #   APP_PASSWORD       — what you type to log in (anything)
 #   SESSION_SECRET     — at least 32 random bytes
-#   INTERNAL_BEARER    — random string, used between Nuxt and FastAPI
+#   INTERNAL_BEARER    — used between Nuxt and FastAPI; generate with `openssl rand -base64 32`
 #   ENCRYPTION_KEY     — encrypts stored provider keys; generate with `openssl rand -base64 32`
+#   The web service refuses to start while INTERNAL_BEARER or ENCRYPTION_KEY is
+#   the `change-me…` example value or shorter than 32 characters.
 #   TAVILY_API_KEY     — tvly-… key for news/web search (optional)
 #   POSTGRES_PORT      — host port for postgres (default 5432; override if 5432 is taken)
 

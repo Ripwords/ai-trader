@@ -11,7 +11,7 @@ let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
   searchMock.mockReset()
-  process.env.INTERNAL_BEARER = 'test-bearer'
+  process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/news/global.get')
   handler = mod.default as Handler
 })
@@ -29,7 +29,7 @@ describe('/internal/news/global', () => {
 
   it('uses default macro query when none given', async () => {
     searchMock.mockResolvedValueOnce([])
-    const event = makeEvent({ authorization: 'Bearer test-bearer' }, {})
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, {})
     const result = (await handler(event)) as { query: string; results: unknown[] }
     expect(result.query).toBe('global macroeconomic news')
     expect(searchMock).toHaveBeenCalledWith('news', 'global macroeconomic news', 10)
@@ -37,7 +37,7 @@ describe('/internal/news/global', () => {
 
   it('returns empty results + error on failure', async () => {
     searchMock.mockRejectedValueOnce(new Error('boom'))
-    const event = makeEvent({ authorization: 'Bearer test-bearer' }, { query: 'oil' })
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { query: 'oil' })
     const result = (await handler(event)) as { query: string; results: unknown[]; error?: string }
     expect(result.query).toBe('oil')
     expect(result.results).toEqual([])

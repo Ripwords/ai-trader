@@ -12,7 +12,7 @@ let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
   resolveSymbol.mockReset()
-  process.env.INTERNAL_BEARER = 'test-bearer'
+  process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/symbol/resolve.get')
   handler = mod.default as Handler
 })
@@ -23,7 +23,7 @@ function makeEvent(headers: Record<string, string>, query: Record<string, string
   return { node: { req: { headers } }, context: {}, path } as unknown as H3Event
 }
 
-const bearer = { authorization: 'Bearer test-bearer' }
+const bearer = { authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }
 
 describe('/internal/symbol/resolve', () => {
   it('rejects without bearer', async () => {

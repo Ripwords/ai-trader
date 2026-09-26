@@ -16,7 +16,7 @@ type Handler = (event: H3Event) => unknown
 let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
-  process.env.INTERNAL_BEARER = 'test-bearer'
+  process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/yahoo/fundamentals.get')
   handler = mod.default as Handler
 })
@@ -33,7 +33,7 @@ describe('/internal/yahoo/fundamentals', () => {
   })
 
   it('returns full bundle on bearer match', async () => {
-    const event = makeEvent({ authorization: 'Bearer test-bearer' }, { symbol: 'NVDA' })
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'NVDA' })
     const result = (await handler(event)) as { symbol: string; metrics: { pe_ratio: number } }
     expect(result.symbol).toBe('NVDA')
     expect(result.metrics.pe_ratio).toBe(50)

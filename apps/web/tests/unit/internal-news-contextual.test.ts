@@ -12,7 +12,7 @@ let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
   getContextualNewsMock.mockReset()
-  process.env.INTERNAL_BEARER = 'test-bearer'
+  process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/news/contextual.get')
   handler = mod.default as Handler
 })
@@ -29,7 +29,7 @@ describe('/internal/news/contextual', () => {
 
   it('400 when symbol missing', async () => {
     await expect(
-      handler(makeEvent({ authorization: 'Bearer test-bearer' }, {})),
+      handler(makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, {})),
     ).rejects.toMatchObject({ statusCode: 400 })
   })
 
@@ -40,7 +40,7 @@ describe('/internal/news/contextual', () => {
       contextual: [],
     })
     const res = (await handler(
-      makeEvent({ authorization: 'Bearer test-bearer' }, { symbol: 'NVDA', company: 'NVIDIA Corp' }),
+      makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'NVDA', company: 'NVIDIA Corp' }),
     )) as { symbol: string; ticker: unknown[]; macro: unknown[]; contextual: unknown[] }
     expect(res.symbol).toBe('NVDA')
     expect(res.ticker).toHaveLength(1)
@@ -55,7 +55,7 @@ describe('/internal/news/contextual', () => {
   it('returns empty groups + error on failure', async () => {
     getContextualNewsMock.mockRejectedValue(new Error('boom'))
     const res = (await handler(
-      makeEvent({ authorization: 'Bearer test-bearer' }, { symbol: 'NVDA' }),
+      makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'NVDA' }),
     )) as { ticker: unknown[]; macro: unknown[]; contextual: unknown[]; error?: string }
     expect(res.ticker).toEqual([])
     expect(res.macro).toEqual([])
@@ -69,7 +69,7 @@ describe('/internal/news/contextual', () => {
       macro: [], contextual: [], error: 'macro news search failed',
     })
     const res = (await handler(
-      makeEvent({ authorization: 'Bearer test-bearer' }, { symbol: 'NVDA' }),
+      makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'NVDA' }),
     )) as { ticker: unknown[]; error?: string }
     expect(res.ticker).toHaveLength(1)
     expect(res.error).toBe('macro news search failed')

@@ -12,7 +12,7 @@ type Handler = (event: H3Event) => unknown
 let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
-  process.env.INTERNAL_BEARER = 'test-bearer'
+  process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/yahoo/balance-sheet.get')
   handler = mod.default as Handler
 })
@@ -33,7 +33,7 @@ describe('/internal/yahoo/balance-sheet', () => {
   })
 
   it('returns balance sheet on bearer match', async () => {
-    const event = makeEvent({ authorization: 'Bearer test-bearer' }, { symbol: 'NVDA' })
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'NVDA' })
     const result = (await handler(event)) as { symbol: string; balance_sheet: { total_assets: number } }
     expect(result.symbol).toBe('NVDA')
     expect(result.balance_sheet.total_assets).toBe(1)

@@ -1,11 +1,11 @@
 import { customType } from 'drizzle-orm/pg-core'
 import { decrypt, encrypt } from '../server/utils/encryption'
+import { secretProblem } from '../server/utils/secrets'
 
 function encryptionKey(): string {
   const key = process.env.ENCRYPTION_KEY
-  if (!key) {
-    throw new Error('ENCRYPTION_KEY is not set. Generate one with `openssl rand -base64 32` and add it to .env.')
-  }
+  const problem = secretProblem('ENCRYPTION_KEY', key)
+  if (problem || !key) throw new Error(problem ?? 'ENCRYPTION_KEY is not set.')
   return key
 }
 

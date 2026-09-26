@@ -14,7 +14,7 @@ type Handler = (event: H3Event) => unknown
 let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
-  process.env.INTERNAL_BEARER = 'test-bearer'
+  process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/yahoo/valuation-inputs.get')
   handler = mod.default as Handler
 })
@@ -31,12 +31,12 @@ describe('/internal/yahoo/valuation-inputs', () => {
   })
 
   it('returns 400 when symbol is missing', async () => {
-    const event = makeEvent({ authorization: 'Bearer test-bearer' }, {})
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, {})
     await expect(handler(event)).rejects.toMatchObject({ statusCode: 400 })
   })
 
   it('returns symbol, metrics, history, dailyBars on valid request', async () => {
-    const event = makeEvent({ authorization: 'Bearer test-bearer' }, { symbol: 'AAPL' })
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'AAPL' })
     const result = (await handler(event)) as {
       symbol: string
       metrics: { pe_ratio: number }
@@ -54,7 +54,7 @@ describe('/internal/yahoo/valuation-inputs', () => {
   it('converts the price series into the statements currency when they differ', async () => {
     getFinancialMetrics.mockResolvedValueOnce({ symbol: 'HK.00700', currency: 'HKD', financial_currency: 'CNY' })
     getFxRate.mockResolvedValueOnce(0.5)
-    const event = makeEvent({ authorization: 'Bearer test-bearer' }, { symbol: 'HK.00700' })
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'HK.00700' })
     const result = (await handler(event)) as {
       dailyBars: Array<{ close: number; open: number }>
       price_conversion: { from: string; to: string; rate: number } | null
@@ -68,7 +68,7 @@ describe('/internal/yahoo/valuation-inputs', () => {
   it('discloses when the quote and statements currencies differ but no rate exists', async () => {
     getFinancialMetrics.mockResolvedValueOnce({ symbol: 'HK.00700', currency: 'HKD', financial_currency: 'CNY' })
     getFxRate.mockResolvedValueOnce(null)
-    const event = makeEvent({ authorization: 'Bearer test-bearer' }, { symbol: 'HK.00700' })
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'HK.00700' })
     const result = (await handler(event)) as { price_conversion: unknown; price_conversion_error: string | null; dailyBars: Array<{ close: number }> }
     expect(result.price_conversion).toBeNull()
     expect(result.price_conversion_error).toContain('HKD')
