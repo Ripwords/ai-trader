@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planEnvImport } from '../../server/lib/llm-env-import'
+import { envImportMessage, planEnvImport } from '../../server/lib/llm-env-import'
 
 describe('planEnvImport', () => {
   it('imports real keys, skips .env.example placeholders, and selects LLM_MODEL with its quick default', () => {
@@ -43,5 +43,20 @@ describe('planEnvImport', () => {
 
   it('has nothing to import without any key', () => {
     expect(planEnvImport({ LLM_MODEL: 'anthropic/claude-sonnet-4-6' })).toBeNull()
+  })
+})
+
+describe('envImportMessage', () => {
+  it('says models still need picking when only keys were imported', () => {
+    expect(envImportMessage('imported')).toMatch(/imported LLM_MODEL/)
+    expect(envImportMessage('imported-providers-only')).toBe(
+      '[llm] imported *_API_KEY from the environment into Settings, but LLM_MODEL did not name one of those providers; pick the chat and quick models in Settings',
+    )
+  })
+
+  it('stays quiet when nothing was imported', () => {
+    expect(envImportMessage('already-imported')).toBeNull()
+    expect(envImportMessage('skipped')).toBeNull()
+    expect(envImportMessage('nothing-to-import')).toBeNull()
   })
 })

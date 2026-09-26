@@ -298,6 +298,7 @@ const chat = new Chat({
   },
 })
 const llmNotConfigured = computed(() => !!chat.error && requestErrorCode.value === 'llm_not_configured')
+const llmKeyUnreadable = computed(() => !!chat.error && requestErrorCode.value === 'llm_key_unreadable')
 
 function whenOnline(): Promise<void> {
   if (navigator.onLine) return Promise.resolve()
@@ -890,6 +891,10 @@ function agentsVerdict(output: unknown) {
           </div>
           <p v-if="llmNotConfigured" class="mb-2 font-mono text-xs text-[var(--tape-down)]">
             No model provider is configured. <NuxtLink to="/settings" class="underline">Add one in Settings</NuxtLink>.
+          </p>
+          <p v-else-if="llmKeyUnreadable" class="mb-2 font-mono text-xs text-[var(--tape-down)]">
+            The stored API key can't be decrypted because ENCRYPTION_KEY changed.
+            <NuxtLink to="/settings" class="underline">Re-enter it in Settings</NuxtLink>.
           </p>
           <!-- BorderBeam gates its render on onMounted, so it must be
                client-only to avoid a hydration mismatch. It wraps the input

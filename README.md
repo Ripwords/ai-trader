@@ -29,8 +29,10 @@ cp .env.example .env
 # Edit .env:
 #   APP_PASSWORD       — what you type to log in (anything)
 #   SESSION_SECRET     — at least 32 random bytes
-#   INTERNAL_BEARER    — random string, used between Nuxt and FastAPI
+#   INTERNAL_BEARER    — used between Nuxt and FastAPI; generate with `openssl rand -base64 32`
 #   ENCRYPTION_KEY     — encrypts stored provider keys; generate with `openssl rand -base64 32`
+#   The web service refuses to start while INTERNAL_BEARER or ENCRYPTION_KEY is
+#   the `change-me…` example value or shorter than 32 characters.
 #   TAVILY_API_KEY     — tvly-… key for news/web search (optional)
 #   POSTGRES_PORT      — host port for postgres (default 5432; override if 5432 is taken)
 
@@ -46,12 +48,12 @@ If the chat says "No model provider is configured", nothing has been saved in Se
 
 Settings (`/settings`, also reachable from the `model · …` badge in the header) holds the LLM configuration. Nothing about models lives in `.env` except `ENCRYPTION_KEY`.
 
-- **Providers.** Add as many as you like from the online providers: Anthropic, OpenAI, Google, DeepSeek, and OpenRouter. Local model servers such as Ollama are not supported. Every provider needs an API key. Each uses its public endpoint unless you switch on **Override base URL**, for example to route through a company proxy. For models none of these host directly, use OpenRouter.
-- **Keys.** A key is encrypted with AES-256-GCM under `ENCRYPTION_KEY` before it is stored. The page shows only its last four characters. Editing a provider with the key field blank keeps the stored key. Changing or losing `ENCRYPTION_KEY` makes stored keys unreadable, so re-enter them if you rotate it.
-- **Test connection.** Lists the provider's models. When the provider is selected for a role, it also sends a short request to the selected model, so a wrong model id shows up here rather than in chat.
+- **Providers.** Add as many as you like from the online providers: Anthropic, OpenAI, Google, DeepSeek, and OpenRouter. Local model servers such as Ollama are not supported. Every provider needs an API key. Each uses its public endpoint unless you switch on **Override base URL**, for example to route through a company proxy. An override must be an `https://` URL on a public host: `localhost`, private, loopback and link-local addresses, bare container names such as `api`, and `.local` or `.internal` hosts are rejected. For models none of these host directly, use OpenRouter.
+- **Keys.** A key is encrypted with AES-256-GCM under `ENCRYPTION_KEY` before it is stored. The page shows only its last four characters. Editing a provider with the key field blank keeps the stored key, unless you change the base URL or switch the override off: then the key field is required, so a stored key is never sent to a host it was not entered for. Changing or losing `ENCRYPTION_KEY` makes stored keys unreadable, so re-enter them if you rotate it. Until you do, chat, Test connection and research runs report that the stored key can't be decrypted and point you to Settings.
+- **Test connection.** Lists the provider's models. It also sends a short request to each model the Models section currently points at this provider, saved or not, so a wrong model id for either the chat or the quick role shows up here rather than in chat. Switching a role to another provider clears its model unless that provider lists the same id. Editing a provider clears its earlier test result and model list.
 - **Models.** Two roles. The **chat model** runs chat, risk reports, strategy authoring, and the research debate's deep-thinking agents. The **quick model** runs news angles and the debate's fast analyst passes. Each role picks a provider and a model id. The model field suggests the provider's model list and accepts any id you type.
 - **Removing a provider.** Blocked while either role uses it. Point the role at another provider and save first.
-- **Upgrading from `LLM_MODEL` env vars.** On first start with an empty provider table, the web service imports `LLM_MODEL`, `LLM_MODEL_QUICK`, and the matching `*_API_KEY` from its environment into Settings and logs `[llm] imported …`. It runs once. After that the env vars are ignored and can be deleted.
+- **Upgrading from `LLM_MODEL` env vars.** On first start with an empty provider table, the web service imports `LLM_MODEL`, `LLM_MODEL_QUICK`, and the matching `*_API_KEY` from its environment into Settings and logs `[llm] imported …`. If `LLM_MODEL` names a provider with no key in the environment, only the keys are imported and the log says to pick the chat and quick models in Settings. It runs once. After that the env vars are ignored and can be deleted.
 - **Cost.** `/usage` prices calls for models in the built-in price table. Other models show as unpriced.
 
 Behind a reverse proxy, long chat and research streams can sit quiet between tokens. nginx drops a proxied response after 60 s of silence by default. Raising `proxy_read_timeout` (for example to `600s`) on the location that serves the web app is optional but avoids cut-off replies.

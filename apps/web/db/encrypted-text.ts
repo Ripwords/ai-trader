@@ -1,11 +1,12 @@
 import { customType } from 'drizzle-orm/pg-core'
+import { createError } from 'h3'
 import { decrypt, encrypt } from '../server/utils/encryption'
+import { secretProblem } from '../server/utils/secrets'
 
 function encryptionKey(): string {
   const key = process.env.ENCRYPTION_KEY
-  if (!key) {
-    throw new Error('ENCRYPTION_KEY is not set. Generate one with `openssl rand -base64 32` and add it to .env.')
-  }
+  const problem = secretProblem('ENCRYPTION_KEY', key)
+  if (problem || !key) throw new Error(problem ?? 'ENCRYPTION_KEY is not set.')
   return key
 }
 
@@ -23,7 +24,14 @@ export const encryptedText = customType<{ data: string; driverData: string }>({
       return decrypt(value, key)
     }
     catch {
-      throw new Error('A stored secret could not be decrypted. ENCRYPTION_KEY changed since it was saved; re-enter the key in Settings.')
+      // An h3 error keeps its message in production and gives the chat page
+      // and the api a code to point the user at Settings.
+      throw createError({
+        statusCode: 409,
+        statusMessage: 'llm_key_unreadable',
+        message: 'A stored API key could not be decrypted: ENCRYPTION_KEY changed since it was saved. Open Settings, edit the provider and re-enter its key.',
+        data: { code: 'llm_key_unreadable' },
+      })
     }
   },
 })

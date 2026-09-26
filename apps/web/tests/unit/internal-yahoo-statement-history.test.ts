@@ -41,7 +41,7 @@ let handler: Handler
 let yahoo: typeof import('../../server/lib/yahoo')
 beforeEach(async () => {
   vi.resetModules()
-  process.env.INTERNAL_BEARER = 'test-bearer'
+  process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/yahoo/statement-history.get')
   handler = mod.default as Handler
   yahoo = await import('../../server/lib/yahoo')
@@ -53,7 +53,7 @@ function makeEvent(headers: Record<string, string>, query: Record<string, string
   return { node: { req: { headers } }, context: {}, path } as unknown as H3Event
 }
 
-const auth = { authorization: 'Bearer test-bearer' }
+const auth = { authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }
 
 describe('/internal/yahoo/statement-history', () => {
   it('rejects without bearer', async () => {

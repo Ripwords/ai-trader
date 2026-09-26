@@ -31,10 +31,12 @@ from fastapi.responses import StreamingResponse
 from app.schemas.agents import BacktestRequest, RunRequest
 from app.services.agents import backtest as backtest_mod
 from app.services.agents import graph as graph_mod
+from app.services.agents import llm_config
 from app.services.agents import pricing as pricing_mod
 from app.services.agents import toolkit as toolkit_mod
 from app.services.agents.cost_cap import DailyCapExceeded, assert_under_daily_cap
 from app.services.agents.heartbeat import HEARTBEAT, with_heartbeats
+from app.services.agents.llm_config import RoleModel
 from app.services.agents.streaming import translate_chunks
 from app.services.agents.usage import UsageAccumulator
 from app.settings import get_settings
@@ -60,20 +62,18 @@ def _heartbeat_line() -> bytes:
     return _line({"type": "heartbeat"})
 
 
-def _compute_run_cost(tokens_in: int, tokens_out: int) -> float:
+def _compute_run_cost(tokens_in: int, tokens_out: int, chat: RoleModel | None) -> float:
     """Price a (tokens_in, tokens_out) pair at the run's chat model rates.
 
     Pricing keys are Settings provider kinds (``deepseek``, ``google``), not
     TradingAgents' registry names (``litellm``, ``google_genai``).
 
     An unknown model (no pricing entry, a kind with no pricing table such as
-    OpenRouter, or no run having fetched its models) is charged at
+    OpenRouter, or a run that never fetched its models) is charged at
     conservative fallback rates from settings (``AGENTS_FALLBACK_INPUT_USD_PER_1M``
     / ``AGENTS_FALLBACK_OUTPUT_USD_PER_1M``) with a warning — never ``0.0``,
     so an unknown model can't free-ride under the daily cap. Token totals land in the DB regardless.
     """
-    from app.services.agents.llm_config import last_chat_model
-
     def _fallback(reason: str) -> float:
         settings = get_settings()
         cost = (
@@ -90,9 +90,8 @@ def _compute_run_cost(tokens_in: int, tokens_out: int) -> float:
         )
         return float(cost)
 
-    chat = last_chat_model()
     if chat is None:
-        return _fallback("no run has fetched its models yet")
+        return _fallback("the run never fetched its models")
     cost = pricing_mod.price_run(chat.kind, chat.model_id, tokens_in, tokens_out)
     if cost is None:
         return _fallback(f"no pricing entry for {chat.kind}/{chat.model_id}")
@@ -143,6 +142,7 @@ async def run_agents(
         task = asyncio.current_task()
         if task is not None:
             _active_runs[run_id] = task
+        run_models = llm_config.track_run_models()
 
         # Cost-cap check happens *before* graph construction so we don't pay
         # for compiling a doomed run. A missing ``x-user-id`` no longer skips
@@ -265,7 +265,7 @@ async def run_agents(
                 _active_runs.pop(run_id, None)
             tokens_in = accumulator.tokens_in
             tokens_out = accumulator.tokens_out
-            cost_usd = _compute_run_cost(tokens_in, tokens_out)
+            cost_usd = _compute_run_cost(tokens_in, tokens_out, run_models.chat)
             yield (
                 json.dumps(
                     {
@@ -427,6 +427,7 @@ async def resume_run(
         task = asyncio.current_task()
         if task is not None:
             _active_runs[run_id] = task
+        run_models = llm_config.track_run_models()
         # A resume spends like a fresh run, so it obeys the same daily cap.
         settings = get_settings()
         try:
@@ -501,7 +502,7 @@ async def resume_run(
                 _active_runs.pop(run_id, None)
             tokens_in = accumulator.tokens_in
             tokens_out = accumulator.tokens_out
-            cost_usd = _compute_run_cost(tokens_in, tokens_out)
+            cost_usd = _compute_run_cost(tokens_in, tokens_out, run_models.chat)
             yield (
                 json.dumps(
                     {

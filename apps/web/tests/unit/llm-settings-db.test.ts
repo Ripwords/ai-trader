@@ -44,6 +44,13 @@ describe.skipIf(!url)('llm settings persistence (TEST_DATABASE_URL)', () => {
     expect((await settings.getModelConfig('quick'))?.modelId).toBe('claude-haiku-4-5-20251001')
   })
 
+  it('imports keys without a selection when LLM_MODEL names a provider with no key', async () => {
+    expect(await envImport.importLlmEnvOnce({ LLM_MODEL: 'openai/gpt-4o', ANTHROPIC_API_KEY: 'sk-ant-live-1234' }))
+      .toBe('imported-providers-only')
+    expect(await db.select().from(schema.llmProviders)).toHaveLength(1)
+    expect(await settings.getModelConfig('chat')).toBeNull()
+  })
+
   it('does not resurrect providers the user deleted after the import', async () => {
     await envImport.importLlmEnvOnce(env)
     await db.delete(schema.llmProviders)
@@ -80,7 +87,7 @@ describe.skipIf(!url)('llm settings API (TEST_DATABASE_URL)', () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = url
     process.env.ENCRYPTION_KEY = 'test-encryption-key-for-db-suite'
-    process.env.INTERNAL_BEARER = 'test-bearer'
+    process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
     db = (await import('../../db/client')).getDb()
     schema = await import('../../db/schema')
     providers = await import('../../server/lib/llm-providers')
@@ -109,6 +116,17 @@ describe.skipIf(!url)('llm settings API (TEST_DATABASE_URL)', () => {
     expect((await providers.updateProvider(created.id, { label: 'Work' }))?.apiKeyHint).toBe('…9876')
     expect((await providers.updateProvider(created.id, { apiKey: 'sk-ant-new-1111' }))?.apiKeyHint).toBe('…1111')
     expect((await providers.getProviderConnection(created.id))?.apiKey).toBe('sk-ant-new-1111')
+  })
+
+  it('refuses to move the stored key to a new base URL without a new key', async () => {
+    const created = await providers.createProvider(anthropic)
+    const moved = { baseUrl: 'https://gateway.example.com/v1' }
+    expect(await thrownStatus(providers.updateProvider(created.id, moved))).toBe(400)
+    expect((await providers.getProviderConnection(created.id))?.baseUrl).toBeNull()
+
+    expect((await providers.updateProvider(created.id, { ...moved, apiKey: 'sk-ant-gw-2222' }))?.baseUrl).toBe(moved.baseUrl)
+    expect(await thrownStatus(providers.updateProvider(created.id, { baseUrl: null }))).toBe(400)
+    expect((await providers.updateProvider(created.id, { ...moved, label: 'Same URL' }))?.label).toBe('Same URL')
   })
 
   it('returns null for an unknown provider', async () => {
@@ -141,7 +159,7 @@ describe.skipIf(!url)('llm settings API (TEST_DATABASE_URL)', () => {
     const gateway = await providers.createProvider({ kind: 'openrouter', label: 'Gateway', baseUrl: 'https://gateway.example.com/v1', apiKey: 'or-key-4321' })
 
     expect(await thrownStatus(Promise.resolve().then(() => handler(makeEvent())))).toBe(401)
-    const authed = makeEvent({ authorization: 'Bearer test-bearer' })
+    const authed = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' })
     expect(await thrownStatus(Promise.resolve().then(() => handler(authed)))).toBe(409)
 
     await settings.saveLlmSettings({

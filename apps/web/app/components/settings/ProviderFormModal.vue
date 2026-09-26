@@ -1,25 +1,24 @@
 <script setup lang="ts">
 import type { FormError } from '@nuxt/ui'
+import { baseUrlChanged, providerFormRequest, type ProviderFormState } from '../../../composables/providerForm'
 import {
+  KEY_REQUIRED_FOR_BASE_URL,
   PROVIDER_KINDS,
   PROVIDER_KIND_META,
-  providerCreateSchema,
-  providerUpdateSchema,
   type LlmProviderView,
-  type ProviderKind,
 } from '../../../types/llm'
 
 const props = defineProps<{ provider?: LlmProviderView }>()
 const emit = defineEmits<{ close: [saved: LlmProviderView | null] }>()
 
 const editing = props.provider
-const state = reactive({
-  kind: (editing?.kind ?? 'anthropic') as ProviderKind,
+const state = reactive<ProviderFormState>({
+  kind: editing?.kind ?? 'anthropic',
   label: editing?.label ?? PROVIDER_KIND_META.anthropic.label,
   baseUrl: editing?.baseUrl ?? '',
   apiKey: '',
+  overrideBaseUrl: !!editing?.baseUrl,
 })
-const overrideBaseUrl = ref(!!editing?.baseUrl)
 const saving = ref(false)
 const serverError = ref<string | null>(null)
 
@@ -32,23 +31,22 @@ watch(() => state.kind, (kind, previous) => {
   }
 })
 
-const keyPlaceholder = editing ? `${editing.apiKeyHint} stored. Leave blank to keep it.` : 'Paste your API key'
-
-
-function payload() {
-  const baseUrl = overrideBaseUrl.value && state.baseUrl.trim() ? state.baseUrl.trim() : null
-  if (!editing) return providerCreateSchema.safeParse({ kind: state.kind, label: state.label, baseUrl, apiKey: state.apiKey })
-  return providerUpdateSchema.safeParse({ label: state.label, baseUrl, ...(state.apiKey.trim() && { apiKey: state.apiKey }) })
-}
+// The stored key never follows the provider to a different host.
+const keyRequired = computed(() => !editing || baseUrlChanged(editing, state))
+const keyPlaceholder = computed(() => {
+  if (!editing) return 'Paste your API key'
+  return keyRequired.value ? 'Paste the key for the new base URL' : `${editing.apiKeyHint} stored. Leave blank to keep it.`
+})
+const keyHelp = computed(() => (editing && keyRequired.value ? KEY_REQUIRED_FOR_BASE_URL : undefined))
 
 function validate(): FormError[] {
-  const parsed = payload()
+  const parsed = providerFormRequest(editing, state)
   if (parsed.success) return []
   return parsed.error.issues.map(issue => ({ name: String(issue.path[0] ?? 'label'), message: issue.message }))
 }
 
 async function onSubmit(): Promise<void> {
-  const parsed = payload()
+  const parsed = providerFormRequest(editing, state)
   if (!parsed.success) return
   saving.value = true
   serverError.value = null
@@ -82,15 +80,15 @@ async function onSubmit(): Promise<void> {
         <UFormField name="label" label="Name">
           <UInput v-model="state.label" class="w-full" />
         </UFormField>
-        <UFormField name="apiKey" label="API key">
+        <UFormField name="apiKey" label="API key" :required="keyRequired" :help="keyHelp">
           <UInput v-model="state.apiKey" type="password" autocomplete="off" :placeholder="keyPlaceholder" class="w-full" />
         </UFormField>
         <USwitch
-          v-model="overrideBaseUrl"
+          v-model="state.overrideBaseUrl"
           label="Override base URL"
           :description="`Default: ${meta.defaultBaseUrl}`"
         />
-        <UFormField v-if="overrideBaseUrl" name="baseUrl" label="Base URL">
+        <UFormField v-if="state.overrideBaseUrl" name="baseUrl" label="Base URL" help="Must be https:// on a public host.">
           <UInput v-model="state.baseUrl" :placeholder="meta.defaultBaseUrl" class="w-full" />
         </UFormField>
         <UAlert v-if="serverError" color="error" variant="subtle" :description="serverError" />

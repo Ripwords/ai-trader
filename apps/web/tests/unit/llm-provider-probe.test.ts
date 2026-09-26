@@ -57,6 +57,38 @@ describe('listProviderModels', () => {
     expect((err as Error).message).toContain('401')
     expect((err as Error).message).not.toContain('sk-secret')
   })
+
+  it('keeps only the provider\'s short error message, never the raw response body', async () => {
+    const internalPage = `<html><body>${'internal-dashboard-secret '.repeat(40)}</body></html>`
+    const html = await listProviderModels({ kind: 'openai', apiKey: 'k', baseUrl: null }, fakeFetch(500, internalPage).impl)
+      .catch((e: Error) => e.message)
+    expect(html).toBe('Listing models failed (500)')
+
+    const long = await listProviderModels(
+      { kind: 'openai', apiKey: 'k', baseUrl: null },
+      fakeFetch(400, { error: { message: `bad request ${'x'.repeat(500)}` } }).impl,
+    ).catch((e: Error) => e.message)
+    expect(long.startsWith('Listing models failed (400): bad request')).toBe(true)
+    expect(long.length).toBeLessThanOrEqual(160)
+  })
+
+  it('refuses a stored base URL that points at a private host', async () => {
+    const f = fakeFetch(200, { data: [] })
+    const err = await listProviderModels({ kind: 'openai', apiKey: 'k', baseUrl: 'http://api:8000/x?y=' }, f.impl).catch((e: Error) => e.message)
+    expect(err).toMatch(/base URL/)
+    expect(f.calls).toHaveLength(0)
+  })
+
+  it('does not follow redirects with the key attached', async () => {
+    const f = fakeFetch(200, { data: [] })
+    const inits: RequestInit[] = []
+    const impl = (async (url: string | URL, init?: RequestInit) => {
+      inits.push(init ?? {})
+      return f.impl(url, init)
+    }) as typeof fetch
+    await listProviderModels({ kind: 'openai', apiKey: 'k', baseUrl: null }, impl)
+    expect(inits[0]!.redirect).toBe('error')
+  })
 })
 
 describe('testProviderConnection', () => {
@@ -79,6 +111,12 @@ describe('testProviderConnection', () => {
     generateText.mockResolvedValue({ text: 'ok' })
     const f = fakeFetch(404, {})
     expect(await testProviderConnection(config, 'gpt-4o', f.impl)).toEqual({ ok: true, models: [] })
+  })
+
+  it('does not ping a model behind a private stored base URL', async () => {
+    const result = await testProviderConnection({ ...config, baseUrl: 'http://10.0.0.5/v1' }, 'gpt-4o', fakeFetch(200, { data: [] }).impl)
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/base URL/) })
+    expect(generateText).not.toHaveBeenCalled()
   })
 
   it('without a model, the listing is the test', async () => {

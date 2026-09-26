@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import ConfirmModal from '~/components/settings/ConfirmModal.vue'
 import ProviderFormModal from '~/components/settings/ProviderFormModal.vue'
+import { settingsErrorMessage } from '../../composables/providerForm'
+import { summarizeTests, useModelSelectionDraft } from '../../composables/useModelSelectionDraft'
 import {
   PROVIDER_KIND_META,
   type LlmProviderView,
@@ -27,23 +29,12 @@ const ROLES: Array<{ role: ModelRole; label: string; description: string }> = [
   { role: 'quick', label: 'Quick model', description: 'News angles and the debate\'s fast analyst passes. A smaller, cheaper model works well.' },
 ]
 
-const draft = reactive<Record<ModelRole, { providerId: string; modelId: string }>>({
-  chat: { providerId: '', modelId: '' },
-  quick: { providerId: '', modelId: '' },
-})
-
-watch([selectionData, providers], ([data, list]) => {
-  for (const { role } of ROLES) {
-    const saved = data?.selection?.[role]
-    if (saved && list.some(p => p.id === saved.providerId)) Object.assign(draft[role], saved)
-    else if (!list.some(p => p.id === draft[role].providerId)) draft[role].providerId = list[0]?.id ?? ''
-  }
-}, { immediate: true })
+const savedSelection = computed(() => selectionData.value?.selection ?? null)
+const { draft, modelLists, selectProvider, forgetProvider, testTargets } = useModelSelectionDraft(providers, savedSelection)
 
 const providerItems = computed(() => providers.value.map(p => ({ label: p.label, value: p.id })))
 const providerLabel = (id: string) => providers.value.find(p => p.id === id)?.label ?? ''
 
-const modelLists = reactive<Record<string, string[]>>({})
 const testOutcomes = reactive<Record<string, { ok: boolean; message: string }>>({})
 const testing = reactive<Record<string, boolean>>({})
 
@@ -56,17 +47,17 @@ async function runTest(provider: LlmProviderView, modelId?: string): Promise<Pro
   return result
 }
 
+/** Pings every model the unsaved draft points at this provider, or only lists models when none does. */
 async function testProvider(provider: LlmProviderView): Promise<void> {
-  const role = ROLES.find(r => draft[r.role].providerId === provider.id)?.role
+  const modelIds = testTargets(provider.id)
   testing[provider.id] = true
   try {
-    const result = await runTest(provider, role ? draft[role].modelId || undefined : undefined)
-    testOutcomes[provider.id] = result.ok
-      ? { ok: true, message: result.models.length ? `connected · ${result.models.length} models available` : 'connected' }
-      : { ok: false, message: result.error }
+    const targets = modelIds.length > 0 ? modelIds : [undefined]
+    const runs = await Promise.all(targets.map(async modelId => ({ modelId, result: await runTest(provider, modelId) })))
+    testOutcomes[provider.id] = summarizeTests(runs)
   }
   catch (err) {
-    testOutcomes[provider.id] = { ok: false, message: (err as { statusMessage?: string }).statusMessage ?? 'Test failed.' }
+    testOutcomes[provider.id] = { ok: false, message: settingsErrorMessage(err, 'Test failed.') }
   }
   finally {
     testing[provider.id] = false
@@ -88,7 +79,11 @@ async function openProviderForm(provider?: LlmProviderView): Promise<void> {
   const modal = overlay.create(ProviderFormModal, { destroyOnClose: true })
   const saved = await modal.open({ provider }).result
   if (!saved) return
+  // The key or base URL may have changed, so earlier results no longer apply.
+  forgetProvider(saved.id)
+  delete testOutcomes[saved.id]
   await refreshProviders()
+  if (ROLES.some(({ role }) => draft[role].providerId === saved.id)) void runTest(saved).catch(() => {})
   toast.add({ title: provider ? 'Provider saved' : 'Provider added', color: 'success' })
 }
 
@@ -102,6 +97,8 @@ async function removeProvider(provider: LlmProviderView): Promise<void> {
   if (!confirmed) return
   try {
     await $fetch(`/api/settings/llm/providers/${provider.id}`, { method: 'DELETE' })
+    forgetProvider(provider.id)
+    delete testOutcomes[provider.id]
     await refreshProviders()
   }
   catch (err) {
@@ -202,7 +199,13 @@ async function saveSelection(): Promise<void> {
               </div>
               <div class="grid gap-3 sm:grid-cols-2">
                 <UFormField label="Provider">
-                  <USelect v-if="providers.length > 1" v-model="draft[role].providerId" :items="providerItems" class="w-full" />
+                  <USelect
+                    v-if="providers.length > 1"
+                    :model-value="draft[role].providerId"
+                    :items="providerItems"
+                    class="w-full"
+                    @update:model-value="selectProvider(role, $event)"
+                  />
                   <div v-else class="text-sm text-[var(--paper-1)] py-1.5">{{ providerLabel(draft[role].providerId) }}</div>
                 </UFormField>
                 <UFormField label="Model" help="Pick from the list or type any model id.">

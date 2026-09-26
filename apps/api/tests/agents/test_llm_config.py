@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -40,13 +41,51 @@ async def test_fetch_reads_both_roles_with_the_bearer(monkeypatch: pytest.Monkey
     )
     _serve(monkeypatch, 200, wire, seen)
 
+    run_models = llm_config.track_run_models()
     config = await fetch_llm_config()
 
     assert config.chat == RoleModel(kind="openai", model_id="gpt-5", api_key="sk-chat", base_url=None)
     assert config.quick.model_id == "gpt-5-mini"
     assert seen[0].url == f"{get_settings().WEB_INTERNAL_BASE_URL}/api/internal/llm-config"
     assert seen[0].headers["authorization"] == f"Bearer {get_settings().INTERNAL_BEARER}"
-    assert llm_config.last_chat_model() == config.chat
+    assert run_models.chat == config.chat
+
+
+@pytest.mark.asyncio
+async def test_each_run_prices_the_model_it_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two runs overlap while Settings changes between their fetches: each
+    keeps its own chat model, as does a child task that builds the graph."""
+    served = iter(["claude-sonnet-4-6", "gpt-5"])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        model = next(served)
+        kind = "anthropic" if model.startswith("claude") else "openai"
+        chat = {"kind": kind, "model_id": model, "api_key": "k", "base_url": None}
+        return httpx.Response(200, json=llm_config_wire(chat=chat))
+
+    monkeypatch.setattr(llm_config, "_transport", httpx.MockTransport(handler))
+    first_fetched = asyncio.Event()
+    second_fetched = asyncio.Event()
+
+    async def run(fetched: asyncio.Event, wait_for: asyncio.Event | None) -> str | None:
+        run_models = llm_config.track_run_models()
+        if wait_for is not None:
+            await wait_for.wait()
+        await asyncio.create_task(fetch_llm_config())
+        fetched.set()
+        if wait_for is None:
+            await second_fetched.wait()
+        return run_models.chat.model_id if run_models.chat else None
+
+    first, second = await asyncio.gather(run(first_fetched, None), run(second_fetched, first_fetched))
+
+    assert (first, second) == ("claude-sonnet-4-6", "gpt-5")
+
+
+@pytest.mark.asyncio
+async def test_fetch_outside_a_run_still_returns_the_config() -> None:
+    config = await asyncio.create_task(fetch_llm_config())
+    assert config.chat.model_id == "claude-sonnet-4-6"
 
 
 @pytest.mark.asyncio
@@ -55,6 +94,21 @@ async def test_fetch_raises_a_readable_error_when_nothing_is_configured(
 ) -> None:
     _serve(monkeypatch, 409, {"statusMessage": "llm_not_configured"}, [])
     with pytest.raises(LlmNotConfigured, match="Add one in Settings"):
+        await fetch_llm_config()
+
+
+@pytest.mark.asyncio
+async def test_fetch_passes_on_web_s_explanation_for_an_unreadable_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = {
+        "statusCode": 409,
+        "statusMessage": "llm_key_unreadable",
+        "message": "A stored API key could not be decrypted. Open Settings and re-enter its key.",
+        "data": {"code": "llm_key_unreadable"},
+    }
+    _serve(monkeypatch, 409, body, [])
+    with pytest.raises(LlmNotConfigured, match="re-enter its key"):
         await fetch_llm_config()
 
 

@@ -1,6 +1,6 @@
 import { generateText } from 'ai'
 import { z } from 'zod'
-import { PROVIDER_KIND_META, type ProviderKind, type ProviderTestResult } from '../../types/llm'
+import { baseUrlProblem, PROVIDER_KIND_META, type ProviderKind, type ProviderTestResult } from '../../types/llm'
 import { buildLanguageModel } from '../llm/model'
 import type { ModelConfig } from './llm-settings'
 
@@ -36,9 +36,29 @@ const LISTINGS: Record<ProviderKind, ModelListing> = {
   openrouter: openAiListing,
 }
 
-function redact(message: string, apiKey: string): string {
+const MESSAGE_MAX = 160
+const SNIPPET_MAX = 100
+
+function redact(message: string, apiKey: string, max = MESSAGE_MAX): string {
   const clean = message.split(apiKey).join('[key]')
-  return clean.length > 300 ? `${clean.slice(0, 300)}…` : clean
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
+}
+
+const providerErrorBody = z.object({
+  error: z.union([z.string(), z.object({ message: z.string() })]).optional(),
+  message: z.string().optional(),
+})
+
+/**
+ * Only the `error.message` field of a JSON error, shortened. The base URL can
+ * point anywhere public, so a raw body could be some other service's page.
+ */
+async function errorSnippet(res: Response, apiKey: string): Promise<string | null> {
+  const parsed = providerErrorBody.safeParse(await res.json().catch(() => null))
+  if (!parsed.success) return null
+  const { error, message } = parsed.data
+  const text = typeof error === 'string' ? error : error?.message ?? message
+  return text ? redact(text.replace(/\s+/g, ' ').trim(), apiKey, SNIPPET_MAX) : null
 }
 
 function errorMessage(err: unknown): string {
@@ -46,15 +66,20 @@ function errorMessage(err: unknown): string {
 }
 
 export async function listProviderModels(conn: ProviderConnection, fetchImpl: typeof fetch = fetch): Promise<string[]> {
+  // Rows saved before base URLs were restricted skip the request schema.
+  const problem = conn.baseUrl ? baseUrlProblem(conn.baseUrl) : null
+  if (problem) throw new Error(`${problem} Edit the provider.`)
   const baseUrl = conn.baseUrl ?? PROVIDER_KIND_META[conn.kind].defaultBaseUrl
   const listing = LISTINGS[conn.kind]
   const res = await fetchImpl(`${baseUrl.replace(/\/+$/, '')}/models`, {
     headers: listing.headers(conn.apiKey),
+    // A redirect would carry the key's header to a host nobody entered.
+    redirect: 'error',
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
   if (!res.ok) {
-    const detail = await res.text().catch(() => '')
-    throw new Error(redact(`Listing models failed (${res.status}): ${detail}`, conn.apiKey))
+    const snippet = await errorSnippet(res, conn.apiKey)
+    throw new Error(`Listing models failed (${res.status})${snippet ? `: ${snippet}` : ''}`)
   }
   return listing.parse(await res.json())
 }
@@ -69,6 +94,8 @@ export async function testProviderConnection(
   modelId: string | undefined,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ProviderTestResult> {
+  const problem = conn.baseUrl ? baseUrlProblem(conn.baseUrl) : null
+  if (problem) return { ok: false, error: `${problem} Edit the provider.` }
   const listing = listProviderModels(conn, fetchImpl)
   if (!modelId) {
     return listing.then(
