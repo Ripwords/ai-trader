@@ -13,21 +13,27 @@ const TERMINAL_EVENTS = new Set(['run-end', 'error', 'final-state', 'decision'])
 export class AgentRunTee {
   private queue: AgentEvent[] = []
   private seq = 0
+  private drained: Promise<void> = Promise.resolve()
   private draining = false
 
   constructor(public runId: string, public userId: string) {}
 
   push(ev: AgentEvent) {
+    if (ev.type === 'heartbeat') return
     if (this.queue.length >= QUEUE_CAP && !TERMINAL_EVENTS.has(ev.type)) {
       console.warn('[agents-tee] queue overflow, dropping', ev.type)
       return
     }
     this.queue.push(ev)
-    void this.drain()
+    if (!this.draining) this.drained = this.drain()
+  }
+
+  /** Resolves once every pushed event has been written. */
+  flush(): Promise<void> {
+    return this.drained
   }
 
   private async drain() {
-    if (this.draining) return
     this.draining = true
     const db = getDb()
     try {

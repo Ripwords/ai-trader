@@ -30,3 +30,5 @@ export type AgentEvent =
   | { type: 'final-state'; state: Record<string, unknown> }
   | { type: 'run-end'; run_id: string; tokens_in: number; tokens_out: number; cost_usd: number }
   | { type: 'error'; node?: string; message: string }
+  // Transport keepalive from the api; never persisted or rendered.
+  | { type: 'heartbeat' }

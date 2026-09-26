@@ -40,6 +40,7 @@ from app.services.agents import pricing as pricing_mod
 from app.services.agents import reflection as reflection_mod
 from app.services.agents import toolkit as toolkit_mod
 from app.services.agents.cost_cap import DailyCapExceeded, assert_under_daily_cap
+from app.services.agents.heartbeat import HEARTBEAT, with_heartbeats
 from app.services.agents.memory import PostgresMemoryProvider
 from app.services.agents.model_config import build_tradingagents_config
 from app.services.agents.streaming import translate_chunks
@@ -54,6 +55,17 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 # populated by :func:`run_agents` while a stream is live; entries are cleared
 # in the streaming finally-block.
 _active_runs: dict[str, asyncio.Task[Any]] = {}
+
+# Well under undici's 300 s body timeout and nginx's 60 s read timeout.
+HEARTBEAT_INTERVAL_S = 15.0
+
+
+def _line(event: dict[str, Any]) -> bytes:
+    return (json.dumps(event) + "\n").encode()
+
+
+def _heartbeat_line() -> bytes:
+    return _line({"type": "heartbeat"})
 
 
 def _compute_run_cost(tokens_in: int, tokens_out: int) -> float:
@@ -237,40 +249,40 @@ async def run_agents(
             ).encode()
             return
 
-        opend = getattr(request.app.state, "opend_client", None)
-        checkpointer = getattr(request.app.state, "checkpointer", None)
-        # The Nuxt proxy resolves and forwards company_name; a direct API
-        # caller may not, so resolve it here before the graph starts (fail
-        # soft — None just means ticker-only labelling).
-        company_name = body.company_name
-        if not company_name:
-            company_name = await toolkit_mod.resolve_company_name(body.symbol)
-        graph = await graph_mod.build_graph_locked(
-            opend,
-            max_debate_rounds=body.max_debate_rounds,
-            max_risk_discuss_rounds=body.max_risk_discuss_rounds,
-            deep_thinking=body.deep_thinking,
-            reasoning_effort=body.reasoning_effort,
-            response_language=body.response_language,
-            selected_analysts=body.selected_analysts,
-            company_name=company_name,
-            checkpointer=checkpointer,
-        )
-        memory_by_role = await _recall_memory_by_role(request, x_user_id, body.symbol)
-        config = {
-            "max_debate_rounds": body.max_debate_rounds,
-            "max_risk_discuss_rounds": body.max_risk_discuss_rounds,
-            "deep_thinking": body.deep_thinking,
-            "reasoning_effort": body.reasoning_effort,
-            "response_language": body.response_language,
-            "selected_analysts": body.selected_analysts,
-            # ``graph`` may be an opaque test double; only real
-            # TradingAgentsGraph instances expose ``.config``.
-            "models": getattr(getattr(graph, "config", None), "llm_provider", None),
-        }
         accumulator = UsageAccumulator()
         try:
-            async for event in translate_chunks(
+            opend = getattr(request.app.state, "opend_client", None)
+            checkpointer = getattr(request.app.state, "checkpointer", None)
+            # The Nuxt proxy resolves and forwards company_name; a direct API
+            # caller may not, so resolve it here before the graph starts (fail
+            # soft — None just means ticker-only labelling).
+            company_name = body.company_name
+            if not company_name:
+                company_name = await toolkit_mod.resolve_company_name(body.symbol)
+            graph = await graph_mod.build_graph_locked(
+                opend,
+                max_debate_rounds=body.max_debate_rounds,
+                max_risk_discuss_rounds=body.max_risk_discuss_rounds,
+                deep_thinking=body.deep_thinking,
+                reasoning_effort=body.reasoning_effort,
+                response_language=body.response_language,
+                selected_analysts=body.selected_analysts,
+                company_name=company_name,
+                checkpointer=checkpointer,
+            )
+            memory_by_role = await _recall_memory_by_role(request, x_user_id, body.symbol)
+            config = {
+                "max_debate_rounds": body.max_debate_rounds,
+                "max_risk_discuss_rounds": body.max_risk_discuss_rounds,
+                "deep_thinking": body.deep_thinking,
+                "reasoning_effort": body.reasoning_effort,
+                "response_language": body.response_language,
+                "selected_analysts": body.selected_analysts,
+                # ``graph`` may be an opaque test double; only real
+                # TradingAgentsGraph instances expose ``.config``.
+                "models": getattr(getattr(graph, "config", None), "llm_provider", None),
+            }
+            events = translate_chunks(
                 graph_mod.run_graph(
                     graph,
                     body.symbol,
@@ -284,13 +296,14 @@ async def run_agents(
                 run_id=run_id,
                 symbol=body.symbol,
                 config=config,
-            ):
+            )
+            async for event in with_heartbeats(events, HEARTBEAT_INTERVAL_S):
                 # request.is_disconnected exists on FastAPI's Request and is
                 # cheap to call between events; saves us continuing a paid run
                 # after the client gives up.
                 if await request.is_disconnected():
                     return
-                yield (json.dumps(event) + "\n").encode()
+                yield _heartbeat_line() if event is HEARTBEAT else _line(event)
         except DailyCapExceeded as e:
             yield (json.dumps({"type": "error", "message": str(e)}) + "\n").encode()
         except asyncio.CancelledError:
@@ -524,11 +537,8 @@ async def resume_run(
             checkpointer=checkpointer,
         )
         accumulator = UsageAccumulator()
-        # ``run-start`` is emitted by translate_chunks — for resume we drop
-        # it so the client can keep its existing event stream context. The
-        # final ``run-end`` is appended in the finally-block as on a fresh
-        # run.
-        try:
+
+        async def payloads() -> AsyncIterator[dict]:
             async for chunk in graph.graph.astream(
                 None,
                 config={
@@ -537,21 +547,21 @@ async def resume_run(
                 },
                 stream_mode="values",
             ):
-                payload = {
+                yield {
                     "metadata": {"langgraph_node": None, "node_finished": False},
                     "values": chunk if isinstance(chunk, dict) else {},
                 }
-                async for ev in translate_chunks(
-                    _one(payload),
-                    run_id=run_id,
-                    symbol=symbol,
-                    config=cfg,
-                ):
-                    if ev.get("type") == "run-start":
-                        continue
-                    if await request.is_disconnected():
-                        return
-                    yield (json.dumps(ev) + "\n").encode()
+
+        try:
+            events = translate_chunks(payloads(), run_id=run_id, symbol=symbol, config=cfg)
+            async for ev in with_heartbeats(events, HEARTBEAT_INTERVAL_S):
+                if await request.is_disconnected():
+                    return
+                if ev is HEARTBEAT:
+                    yield _heartbeat_line()
+                # The client already holds this run's run-start.
+                elif ev.get("type") != "run-start":
+                    yield _line(ev)
         except asyncio.CancelledError:
             yield (
                 json.dumps({"type": "error", "message": "cancelled"}) + "\n"

@@ -133,6 +133,22 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
   return { run, userId, upstream }
 }
 
+// The api heartbeats every 15 s, so this much silence means it is gone.
+const UPSTREAM_IDLE_TIMEOUT_MS = 90_000
+
+async function readWithin<T>(reader: ReadableStreamDefaultReader<T>, ms: number): Promise<ReadableStreamReadResult<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const idle = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no data from the agents service for ${Math.round(ms / 1000)}s`)), ms)
+  })
+  try {
+    return await Promise.race([reader.read(), idle])
+  }
+  finally {
+    clearTimeout(timer)
+  }
+}
+
 /**
  * Consume the upstream NDJSON stream entirely into a fresh AgentRunTee. Used by
  * the fire-and-forget endpoint: it is started with ``void`` so it outlives the
@@ -141,7 +157,13 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
  * the api's client-disconnect kill does not trigger. The tee finalizes the
  * agent_runs row (complete/failed) exactly as the inline path does.
  */
-export async function drainIntoTee(upstream: Response, runId: string, userId: string): Promise<void> {
+export async function drainIntoTee(
+  upstream: Response,
+  runId: string,
+  userId: string,
+  opts: { idleTimeoutMs?: number } = {},
+): Promise<void> {
+  const idleTimeoutMs = opts.idleTimeoutMs ?? UPSTREAM_IDLE_TIMEOUT_MS
   const tee = new AgentRunTee(runId, userId)
   const reader = upstream.body!.getReader()
   const decoder = new TextDecoder()
@@ -149,7 +171,7 @@ export async function drainIntoTee(upstream: Response, runId: string, userId: st
   let finalizeReason: string | null = 'stream ended without terminal event'
   try {
     while (true) {
-      const { value, done } = await reader.read()
+      const { value, done } = await readWithin(reader, idleTimeoutMs)
       if (done) break
       const { events, rest } = splitNdjson(buf, decoder.decode(value, { stream: true }))
       buf = rest
@@ -166,7 +188,9 @@ export async function drainIntoTee(upstream: Response, runId: string, userId: st
   } catch (e: unknown) {
     console.error('[agents-async] drain failed', (e as Error)?.message)
     finalizeReason = e instanceof Error ? e.message : String(e)
+    void reader.cancel().catch(() => {})
   } finally {
+    await tee.flush()
     if (finalizeReason !== null) {
       await getDb().update(agentRuns)
         .set({ status: 'failed', finishedAt: new Date(), error: finalizeReason })
