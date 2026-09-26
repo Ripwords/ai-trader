@@ -111,6 +111,17 @@ describe.skipIf(!url)('llm settings API (TEST_DATABASE_URL)', () => {
     expect((await providers.getProviderConnection(created.id))?.apiKey).toBe('sk-ant-new-1111')
   })
 
+  it('refuses to move the stored key to a new base URL without a new key', async () => {
+    const created = await providers.createProvider(anthropic)
+    const moved = { baseUrl: 'https://gateway.example.com/v1' }
+    expect(await thrownStatus(providers.updateProvider(created.id, moved))).toBe(400)
+    expect((await providers.getProviderConnection(created.id))?.baseUrl).toBeNull()
+
+    expect((await providers.updateProvider(created.id, { ...moved, apiKey: 'sk-ant-gw-2222' }))?.baseUrl).toBe(moved.baseUrl)
+    expect(await thrownStatus(providers.updateProvider(created.id, { baseUrl: null }))).toBe(400)
+    expect((await providers.updateProvider(created.id, { ...moved, label: 'Same URL' }))?.label).toBe('Same URL')
+  })
+
   it('returns null for an unknown provider', async () => {
     expect(await providers.updateProvider('00000000-0000-4000-8000-000000000000', { label: 'x' })).toBeNull()
     expect(await providers.deleteProvider('00000000-0000-4000-8000-000000000000')).toBe('not-found')

@@ -1,7 +1,8 @@
 import { asc, eq } from 'drizzle-orm'
+import { createError } from 'h3'
 import { getDb } from '../../db/client'
 import { llmProviders } from '../../db/schema'
-import type { LlmProviderView, ProviderCreate, ProviderUpdate } from '../../types/llm'
+import { KEY_REQUIRED_FOR_BASE_URL, type LlmProviderView, type ProviderCreate, type ProviderUpdate } from '../../types/llm'
 import { getLlmSettings, keyHint } from './llm-settings'
 import type { ProviderConnection } from './llm-provider-probe'
 
@@ -36,6 +37,9 @@ export async function createProvider(input: ProviderCreate): Promise<LlmProvider
 export async function updateProvider(id: string, patch: ProviderUpdate): Promise<LlmProviderView | null> {
   const [current] = await getDb().select(viewColumns).from(llmProviders).where(eq(llmProviders.id, id)).limit(1)
   if (!current) return null
+  if (patch.baseUrl !== undefined && patch.baseUrl !== current.baseUrl && patch.apiKey === undefined) {
+    throw createError({ statusCode: 400, statusMessage: KEY_REQUIRED_FOR_BASE_URL })
+  }
   const [row] = await getDb()
     .update(llmProviders)
     .set({
