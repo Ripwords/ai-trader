@@ -4,8 +4,8 @@
  * Prerequisites:
  *   - Docker stack must be running: `docker compose up -d`
  *   - Set APP_PASSWORD env var to the value in your .env, or accept the default 'change-me'
- *   - For the canvas assertion to win (real chart), a valid ANTHROPIC_API_KEY is required
- *     in the stack's .env. Without it, the error-text path will match instead.
+ *   - For the canvas assertion to win (real chart), a chat model with a working key must
+ *     be chosen in Settings. Without one, the error-text path will match instead.
  *
  * Run: cd apps/web && APP_PASSWORD=<your-password> pnpm exec playwright test
  */

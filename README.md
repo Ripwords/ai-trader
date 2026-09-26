@@ -54,6 +54,8 @@ Settings (`/settings`, also reachable from the `model · …` badge in the heade
 - **Upgrading from `LLM_MODEL` env vars.** On first start with an empty provider table, the web service imports `LLM_MODEL`, `LLM_MODEL_QUICK`, and the matching `*_API_KEY` from its environment into Settings and logs `[llm] imported …`. It runs once. After that the env vars are ignored and can be deleted.
 - **Cost.** `/usage` prices calls for models in the built-in price table. Other models, including local ones, show as unpriced.
 
+Behind a reverse proxy, long chat and research streams can sit quiet between tokens. nginx drops a proxied response after 60 s of silence by default. Raising `proxy_read_timeout` (for example to `600s`) on the location that serves the web app is optional but avoids cut-off replies.
+
 ## Stop / clean up
 
 ```sh
@@ -265,11 +267,11 @@ cd apps/api && uv run pytest
 # web: vitest unit + typecheck
 cd apps/web && pnpm exec vitest run && pnpm exec nuxi typecheck
 
-# web: playwright e2e (requires the docker stack running + a real ANTHROPIC_API_KEY)
+# web: playwright e2e (requires the docker stack running + a chat model chosen in Settings)
 cd apps/web && pnpm exec playwright test
 ```
 
-The e2e test passes if either a chart canvas OR an inline error message appears — so it works with both real and placeholder API keys.
+The e2e test passes if either a chart canvas OR an inline error message appears — so it works with or without a working model key.
 
 ## What's next (later plans)
 
