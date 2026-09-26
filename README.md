@@ -85,7 +85,6 @@ docker-compose.yml
 │  web (Nuxt 4 + ai-sdk)   :3000   chat • research • algo │
 │  api (FastAPI)           :8000   TradingAgents          │
 │                                  (LangGraph multi-agent)│
-│  agents-cron             daily reflection trigger       │
 │  drizzle-migrate         one-shot schema sync           │
 │  postgres (16-alpine)    chat • runs • algo • agents    │
 └──┬──────────────┬──────────────────┬────────────────────┘
@@ -111,7 +110,7 @@ Ghostfolio mirrors the moomoo account, so the two sources overlap on purpose:
 | **Investments** — what you own on moomoo live, with day change and P&L | moomoo OpenD | `investment_portfolio`, `investment_performance`, `holdings_context` | `/portfolio` (moomoo tables) |
 | **Net worth** — every account incl. cash and non-investment assets | Ghostfolio | `portfolio_performance`, `ghostfolio_*` reads | `/portfolio` (headline, allocation, planning) |
 
-`holdings_context` reports both quantities for a symbol and flags a mismatch as a reconciliation issue rather than extra shares. The daily net-worth snapshot is recorded only when Ghostfolio reports a total; a moomoo account total (live or paper) is never written as net worth.
+`holdings_context` reports both quantities for a symbol and flags a mismatch as a reconciliation issue rather than extra shares. Opening `/portfolio` records the day's snapshot of both layers (at most one automatic snapshot per UTC day; the performance card's capture button adds a manual one at any time), and the equity curve refreshes when a new point lands. There is no background scheduler, so days the page is not opened have no snapshot. The net-worth snapshot is recorded only when Ghostfolio reports a total; a moomoo account total (live or paper) is never written as net worth.
 
 ### Chat tool catalogue
 

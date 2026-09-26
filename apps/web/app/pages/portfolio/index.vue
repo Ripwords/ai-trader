@@ -1,7 +1,7 @@
 <script setup lang="ts">
 
 definePageMeta({ section: 'portfolio' })
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import type { FullPortfolio, FullPortfolioPosition } from '../../../server/lib/holdings'
 import type { PortfolioCorrelationResult } from '../../../server/lib/portfolio-correlation-core'
 import type {
@@ -13,6 +13,7 @@ import type {
   PlanningSummary,
 } from '../../../server/lib/planning'
 import type { CaptureResult, PortfolioPerformance } from '../../../server/lib/portfolio-history'
+import { captureDailySnapshot } from '../../../composables/useDailySnapshotCapture'
 
 useHead({ title: 'portfolio' })
 
@@ -83,6 +84,12 @@ async function captureSnapshot() {
     snapshotSaving.value = false
   }
 }
+onMounted(() => {
+  void captureDailySnapshot({
+    post: (url, body) => $fetch<CaptureResult>(url, { method: 'POST', body }),
+    refresh: refreshPerformance,
+  })
+})
 const settingsDraft = ref<PlanningSettings | null>(null)
 const settingsSaving = ref(false)
 const settingsMessage = ref('')

@@ -91,7 +91,7 @@ function startOfUtcDay(now: Date): Date {
 /**
  * Run the live portfolio fetch and persist one `portfolio_snapshots` row.
  * source='auto' is idempotent per UTC day: if an auto snapshot already exists
- * today, the call is a cheap no-op (so the cron loop can fire repeatedly).
+ * today, the call is a cheap no-op (so every portfolio page load can fire it).
  * Manual captures always insert.
  */
 export async function capturePortfolioSnapshot(source: SnapshotSource): Promise<CaptureResult> {

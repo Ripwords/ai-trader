@@ -141,7 +141,7 @@ describe('computePerformance', () => {
   })
 
   it('accepts a baseline captured a few minutes short of the full period', () => {
-    // Daily cron: yesterday 08:06, today 08:04. Strictly requiring 24h would
+    // Daily auto capture: yesterday 08:06, today 08:04. Strictly requiring 24h would
     // skip yesterday and report a 2-day move as the 1-day return.
     const perf = computePerformance([
       pt('2026-07-16T08:05:00.000Z', 90),

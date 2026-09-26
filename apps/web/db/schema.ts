@@ -201,8 +201,8 @@ export const agentDecisions = pgTable('agent_decisions', {
 
 // Daily (or manual) portfolio value snapshot — the persistence layer behind
 // the equity curve. `source` ∈ {'auto','manual'}: auto rows are written once
-// per day by the cron capture endpoint (idempotent), manual rows by the
-// portfolio page's capture button. Totals are in `currency` (the aggregate
+// per day when the portfolio page loads (idempotent), manual rows by the
+// page's capture button. Totals are in `currency` (the aggregate
 // base currency, e.g. MYR from Ghostfolio; null when the fallback resolver
 // couldn't report one). `perAccount` mirrors FullPortfolio.accounts,
 // `positions` is [{symbol, qty, price, value, currency}], and `resolver`

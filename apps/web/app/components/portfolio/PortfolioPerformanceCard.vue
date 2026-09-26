@@ -147,7 +147,7 @@ const sinceLabel = computed(() => {
     <div v-else-if="!hasHistory" class="py-10 text-center space-y-2">
       <div class="font-mono text-sm text-[var(--paper-2)]">no snapshots yet</div>
       <div class="font-mono text-xs text-[var(--paper-3)]">
-        the equity curve builds from daily auto-captures — or take the first one now with "capture snapshot".
+        the equity curve gains a point each day this page is opened — or take the first one now with "capture snapshot".
       </div>
     </div>
 

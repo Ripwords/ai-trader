@@ -114,8 +114,9 @@ function startOfUtcDay(now: Date): Date {
 /**
  * Bound a read that has no client-side timeout of its own. The api client is
  * created without one, so when moomoo OpenD is down the underlying HTTP call
- * hangs on OpenD's own reconnect loop — which would stall the unattended daily
- * capture. A missed snapshot is fine; a wedged cron is not.
+ * hangs on OpenD's own reconnect loop — which would stall the daily capture
+ * the portfolio page fires on load. A missed snapshot is fine; a wedged
+ * request is not.
  */
 export function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>
@@ -125,7 +126,7 @@ export function withDeadline<T>(promise: Promise<T>, ms: number, label: string):
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer)) as Promise<T>
 }
 
-/** How long the unattended capture waits on the live investments read. */
+/** How long the capture waits on the live investments read. */
 const CAPTURE_READ_TIMEOUT_MS = 30_000
 
 export interface InvestmentCaptureResult {
@@ -138,7 +139,7 @@ export interface InvestmentCaptureResult {
 
 /**
  * Persist one `investment_snapshots` row. source='auto' is idempotent per UTC
- * day so a cron loop can fire repeatedly; manual captures always insert.
+ * day so every portfolio page load can fire it; manual captures always insert.
  */
 export async function captureInvestmentSnapshot(source: SnapshotSource): Promise<InvestmentCaptureResult> {
   const db = getDb()

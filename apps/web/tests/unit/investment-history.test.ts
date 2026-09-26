@@ -95,7 +95,7 @@ describe('withDeadline', () => {
 
   it('rejects with a named timeout when the read stalls', async () => {
     // moomoo OpenD being down makes the underlying HTTP call hang with no
-    // client timeout, which would otherwise stall the daily capture cron.
+    // client timeout, which would otherwise stall the daily capture.
     const never = new Promise<string>(() => {})
     await expect(withDeadline(never, 10, 'investments read')).rejects.toThrow(/investments read.*10ms/i)
   })
