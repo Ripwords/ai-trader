@@ -1,19 +1,19 @@
-// A chat reply survives a dropped connection: go offline for 5 s after the
-// first text arrives, and the same reply completes in place, saved once.
-import { fail, log, loggedInPage, pass, poll, psql, sendChat } from './browser.mjs'
+// A chat reply survives a dropped connection: cut every socket once the reply
+// has started, and the same reply completes in place, saved once.
+import { cuttableProxy, fail, log, loggedInPage, pass, poll, psql, sendChat } from './browser.mjs'
 
 const marker = `repro-1-${Date.now()}`
-const { browser, context, page } = await loggedInPage()
+const proxy = await cuttableProxy()
+const { browser, page } = await loggedInPage({ baseURL: proxy.baseURL })
 await page.goto('/')
+const words = async () => (await page.locator('body').innerText()).split(/\s+/).length
+const before = await words()
 await sendChat(page, `${marker}: write a detailed 1200-word essay on the history of the NASDAQ. Do not call any tools.`)
 
 const threadId = await poll('the chat got a thread id', () => new URL(page.url()).searchParams.get('c'), 30_000)
-await poll('the first text arrived', async () => (await page.locator('body').innerText()).includes('NASDAQ'), 60_000)
-log(`thread ${threadId}: first text is in; going offline for 5 s`)
-await context.setOffline(true)
-await page.waitForTimeout(5000)
-await context.setOffline(false)
-log('back online')
+await poll('the reply started', async () => (await words()) > before + 80, 90_000)
+log(`thread ${threadId}: the reply is streaming; cutting every connection`)
+proxy.cut()
 
 const assistantCount = () =>
   Number(psql(`select count(*) from chat_messages where thread_id = '${threadId}' and role = 'assistant'`))
@@ -28,3 +28,4 @@ const body = await page.locator('body').innerText()
 if (!body.replace(/\s+/g, ' ').includes(lastWords)) fail(`the page never showed the end of the reply ("${lastWords}")`)
 pass(`reply completed in place without a reload, saved once (thread ${threadId})`)
 await browser.close()
+proxy.close()

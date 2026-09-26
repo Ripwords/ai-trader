@@ -1,6 +1,7 @@
 // Shared helpers for the browser repro scripts: .env, a logged-in page, psql.
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { connect, createServer } from 'node:net'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,9 +40,9 @@ export function psql(sql) {
   ], { cwd: ROOT, encoding: 'utf8' }).trim()
 }
 
-export async function loggedInPage() {
+export async function loggedInPage({ baseURL = BASE } = {}) {
   const browser = await chromium.launch({ headless: process.env.HEADED !== '1' })
-  const context = await browser.newContext({ baseURL: BASE })
+  const context = await browser.newContext({ baseURL })
   const page = await context.newPage()
   await page.goto('/login')
   await page.fill('[name=password]', env.APP_PASSWORD)
@@ -64,4 +65,30 @@ export async function sendChat(page, text) {
   const box = page.locator('textarea').first()
   await box.fill(text)
   await box.press('Enter')
+}
+
+/**
+ * A TCP proxy in front of the web app whose `cut()` destroys every open
+ * connection, the way a proxy timeout or a network switch does. Chromium's
+ * offline emulation is no stand-in: it keeps a live stream open and discards
+ * the bytes that arrive meanwhile, which no real network does.
+ */
+export async function cuttableProxy() {
+  const target = new URL(BASE)
+  const sockets = new Set()
+  const server = createServer(client => {
+    const upstream = connect(Number(target.port), target.hostname)
+    for (const s of [client, upstream]) {
+      sockets.add(s)
+      s.on('close', () => sockets.delete(s))
+      s.on('error', () => {})
+    }
+    client.pipe(upstream).pipe(client)
+  })
+  await new Promise(r => server.listen(0, '127.0.0.1', r))
+  return {
+    baseURL: `http://127.0.0.1:${server.address().port}`,
+    cut: () => { for (const s of sockets) s.destroy() },
+    close: () => server.close(),
+  }
 }
