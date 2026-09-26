@@ -64,7 +64,6 @@ async def test_unauthorized() -> None:
 @pytest.mark.asyncio
 async def test_streams_canned_events(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
-    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
 
     from app.main import create_app
     from app.services.agents import graph as graph_mod
@@ -125,7 +124,6 @@ async def test_streams_canned_events(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_emits_error_event_on_run_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
-    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
 
     from app.main import create_app
     from app.services.agents import graph as graph_mod
@@ -233,7 +231,6 @@ async def test_run_aborts_when_daily_cap_exceeded(
     error / run-end (no node-start, no decision).
     """
     monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
-    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
     monkeypatch.setenv("AGENTS_DAILY_COST_USD_CAP", "5.00")
 
     from app.main import create_app
@@ -285,7 +282,6 @@ async def test_run_proceeds_when_under_daily_cap(
 ) -> None:
     """Sanity-check: when ``fetchval`` is under cap, the graph runs normally."""
     monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
-    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
     monkeypatch.setenv("AGENTS_DAILY_COST_USD_CAP", "5.00")
 
     from app.main import create_app
@@ -340,7 +336,6 @@ async def test_run_refuses_with_503_when_pool_missing(
     """No asyncpg pool means the daily cost cap can't be checked. Fail
     closed: refuse to start the run rather than running uncapped."""
     monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
-    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
 
     from app.main import create_app
     from app.settings import get_settings
@@ -361,7 +356,6 @@ async def test_missing_user_id_enforces_global_cap(
     """Without x-user-id the cap is enforced against the global bucket —
     the run must still be blocked when the summed spend is over cap."""
     monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
-    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
     monkeypatch.setenv("AGENTS_DAILY_COST_USD_CAP", "5.00")
 
     from app.main import create_app
@@ -410,7 +404,6 @@ async def test_run_end_carries_accumulated_token_totals(
     against the configured deep model.
     """
     monkeypatch.setenv("INTERNAL_BEARER", "test-bearer")
-    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-4-6")
 
     from langchain_core.outputs import LLMResult
 
@@ -503,14 +496,17 @@ async def test_run_end_carries_accumulated_token_totals(
     reason="Real-LLM smoke test; set RUN_SMOKE=1 to enable",
 )
 @pytest.mark.asyncio
-async def test_real_run_streams_decision() -> None:
+async def test_real_run_streams_decision(monkeypatch: pytest.MonkeyPatch) -> None:
     """End-to-end smoke test against a live LLM + moomoo OpenD.
 
-    Skipped by default. Requires: ``RUN_SMOKE=1``, ``ANTHROPIC_API_KEY`` (or
-    equivalent for the configured provider), and a reachable OpenD on the
-    host configured via ``OPEND_HOST``/``OPEND_PORT``.
+    Skipped by default. Requires: ``RUN_SMOKE=1``, the web service reachable
+    at ``WEB_INTERNAL_BASE_URL`` with a model chosen in Settings, and a
+    reachable OpenD on the host configured via ``OPEND_HOST``/``OPEND_PORT``.
     """
     from app.main import create_app
+    from app.services.agents import llm_config
+
+    monkeypatch.setattr(llm_config, "_transport", None)
 
     headers = {"authorization": f"Bearer {os.environ['INTERNAL_BEARER']}"}
     transport = ASGITransport(app=create_app())

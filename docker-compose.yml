@@ -47,14 +47,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # TradingAgents pipeline — LangChain/LangGraph multi-agent debate.
       # WEB_INTERNAL_BASE_URL is the sibling Nuxt container's /internal/* mount
-      # (Yahoo, news search, pricing). LLM keys mirror the web service so
-      # either side can run model inference. Cost cap is a hard $/day ceiling.
-      LLM_MODEL: ${LLM_MODEL}
-      LLM_MODEL_QUICK: ${LLM_MODEL_QUICK:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # (Yahoo, news search, pricing, and the models chosen in Settings with
+      # their keys). Cost cap is a hard $/day ceiling.
       AGENTS_DAILY_COST_USD_CAP: ${AGENTS_DAILY_COST_USD_CAP:-5.00}
       WEB_INTERNAL_BASE_URL: http://web:3000
     extra_hosts:
@@ -79,9 +73,10 @@ services:
     # Container ships the Nitro prod bundle (no bind mount, no HMR).
     # After editing apps/web: `docker compose up -d --build web`.
     environment:
-      # Provider routing reads these via process.env from "<provider>/<model-id>".
-      # Set whichever provider you actually use; LLM_MODEL picks the route.
-      LLM_MODEL: ${LLM_MODEL}
+      # Legacy model config, read once to seed Settings when no provider is
+      # stored yet. Safe to delete from .env after the first start.
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_MODEL_QUICK: ${LLM_MODEL_QUICK:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
