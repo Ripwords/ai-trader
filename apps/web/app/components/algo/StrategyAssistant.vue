@@ -4,6 +4,8 @@ import { Chat } from '@ai-sdk/vue'
 import { onMounted, ref, shallowRef, watch } from 'vue'
 import type { Highlighter } from 'shiki'
 import { isPartStreaming } from '@nuxt/ui/utils/ai'
+import ConfirmModal from '~/components/settings/ConfirmModal.vue'
+import { askConfirm } from '~/lib/confirm'
 
 interface ProposedConfig {
   initial_capital?: number
@@ -182,12 +184,19 @@ function isStale(key: string): boolean {
   return s.baseSnapshot !== props.currentCode
 }
 
-function review(key: string, code: string) {
+const overlay = useOverlay()
+
+async function review(key: string, code: string) {
   const s = blockState.value.get(key)
   if (!s) return
   if (s.baseSnapshot !== props.currentCode) {
-    const ok = window.confirm(
-      'Your draft has changed since this suggestion was made. Reviewing will diff against the snapshot from when this message arrived. Continue?',
+    const ok = await askConfirm(
+      p => overlay.create(ConfirmModal, { destroyOnClose: true }).open(p),
+      {
+        title: 'Your draft has changed since this suggestion',
+        description: 'Reviewing will diff against the snapshot from when this message arrived.',
+        confirmLabel: 'Review anyway',
+      },
     )
     if (!ok) return
   }
@@ -306,7 +315,7 @@ async function rerenderMessage(m: UIMessage) {
     }
   }
   if (dirty) blockState.value = new Map(blockState.value)
-  if (toAutoFire) review(toAutoFire.key, toAutoFire.code)
+  if (toAutoFire) void review(toAutoFire.key, toAutoFire.code)
 }
 
 // Recompute previews + auto-fire whenever a message's text changes (streaming).
