@@ -1,0 +1,6 @@
+# Overlay for the repro scripts: runs the api's agents pipeline as a sleeping
+# stub (apps/api/app/services/agents/stub.py). Never use it for a real stack.
+services:
+  api:
+    environment:
+      AGENTS_STUB_RUN_SECONDS: ${AGENTS_STUB_RUN_SECONDS:-5}
