@@ -18,13 +18,19 @@ from app.services.agents.llm_timeouts import (
     [
         ("anthropic", "timeout"),
         ("openai", "timeout"),
-        ("openrouter", "timeout"),
         ("google_genai", "timeout"),
         ("litellm", "request_timeout"),
     ],
 )
 def test_timeout_kwargs_use_each_providers_field_name(provider: str, timeout_key: str) -> None:
     assert llm_timeout_kwargs(provider) == {timeout_key: LLM_TIMEOUT_S, "max_retries": LLM_MAX_RETRIES}
+
+
+def test_timeout_table_covers_exactly_the_providers_settings_map_to() -> None:
+    from app.services.agents import llm_timeouts
+    from app.services.agents.llm_config import _TA_PROVIDER
+
+    assert set(llm_timeouts._TIMEOUT_FIELD) == set(_TA_PROVIDER.values())
 
 
 def test_unknown_provider_gets_no_kwargs() -> None:
