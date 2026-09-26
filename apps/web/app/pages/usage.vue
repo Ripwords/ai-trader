@@ -12,7 +12,7 @@ interface UsageRow {
   inputTokens: number
   outputTokens: number
   totalTokens: number
-  estimatedCostUsd: number
+  estimatedCostUsd: number | null
   ts: string
 }
 
@@ -51,7 +51,8 @@ const maxCost = computed(() => {
   return rows.reduce((m, r) => Math.max(m, r.estimatedCostUsd), 0)
 })
 
-function formatUsd(n: number): string {
+function formatUsd(n: number | null): string {
+  if (n === null) return 'unpriced'
   if (n === 0) return '$0.00'
   if (n < 0.01) return `$${n.toFixed(6)}`
   return `$${n.toFixed(4)}`

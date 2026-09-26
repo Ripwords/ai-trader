@@ -1,8 +1,8 @@
 import { MODEL_PRICING } from './model-pricing'
 
-export function estimateCost(modelSpec: string, inputTokens: number, outputTokens: number): number {
+export function estimateCost(modelSpec: string, inputTokens: number, outputTokens: number): number | null {
   const p = MODEL_PRICING[modelSpec as keyof typeof MODEL_PRICING]
-  if (!p) return 0
+  if (!p) return null
   return (inputTokens * p.input_per_1m + outputTokens * p.output_per_1m) / 1_000_000
 }
 

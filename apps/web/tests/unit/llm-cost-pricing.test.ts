@@ -3,8 +3,8 @@ import { estimateCost } from '../../server/lib/llm-cost'
 import { MODEL_PRICING } from '../../server/lib/model-pricing'
 
 /**
- * estimateCost returns 0 for any model missing from its table, so a gap reads
- * as "this turn was free" rather than as an error. deepseek/deepseek-v4-pro —
+ * A model missing from the table used to price at 0, so a gap read as "this
+ * turn was free". deepseek/deepseek-v4-pro —
  * the model this deployment actually runs — was missing, and the v4-flash rate
  * disagreed with apps/api/app/services/agents/pricing.py. One table now backs
  * both the estimator and the /internal/pricing mirror.
@@ -22,7 +22,7 @@ describe('llm cost estimation', () => {
     }
   })
 
-  it('still returns 0 for a genuinely unknown model', () => {
-    expect(estimateCost('acme/does-not-exist', 1_000_000, 1_000_000)).toBe(0)
+  it('returns null for an unpriced model rather than calling it free', () => {
+    expect(estimateCost('openai_compatible/qwen3:8b', 1_000_000, 1_000_000)).toBeNull()
   })
 })

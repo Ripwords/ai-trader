@@ -1,5 +1,5 @@
 /**
- * USD per 1M tokens, keyed by the `<provider>/<model-id>` LLM_MODEL spec.
+ * USD per 1M tokens, keyed by the `<provider kind>/<model-id>` spec of the selected model.
  *
  * Hardcoded mirror of apps/api/app/services/agents/pricing.py MODELS. Keep the
  * two in sync manually until the /internal/pricing route becomes a live fetch.

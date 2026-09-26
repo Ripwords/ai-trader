@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const generateObjectMock = vi.fn()
 vi.mock('ai', () => ({ generateObject: generateObjectMock }))
-vi.mock('../../server/llm/model', () => ({ buildModel: () => ({}) }))
+vi.mock('../../server/llm/model', () => ({
+  resolveModel: async () => ({ model: {}, spec: 'anthropic/claude-haiku-4-5-20251001', providerKind: 'anthropic', modelId: 'claude-haiku-4-5-20251001' }),
+}))
 vi.mock('../../server/lib/llm-cost', () => ({ recordUsageSafely: vi.fn() }))
 
 let deriveAngles: typeof import('../../server/lib/contextual-news-angles')['deriveAngles']
@@ -10,7 +12,6 @@ let deriveAngles: typeof import('../../server/lib/contextual-news-angles')['deri
 beforeEach(async () => {
   vi.resetModules()
   generateObjectMock.mockReset()
-  process.env.LLM_MODEL = 'anthropic/claude-sonnet-4-6'
   ;({ deriveAngles } = await import('../../server/lib/contextual-news-angles'))
 })
 

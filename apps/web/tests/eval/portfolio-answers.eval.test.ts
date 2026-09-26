@@ -1,7 +1,7 @@
 import { generateText, stepCountIs, tool } from 'ai'
 import { describe, expect, it } from 'vitest'
 import { buildSystemPrompt } from '../../server/llm/chat-context'
-import { buildModel } from '../../server/llm/model'
+import { resolveModel } from '../../server/llm/model'
 import { makeTools } from '../../server/llm/tools'
 import type { ApiClient } from '../../server/llm/http'
 
@@ -18,8 +18,9 @@ import type { ApiClient } from '../../server/llm/http'
  * actual moomoo positions had moved far more. Tiers 1 and 2 (tests/unit) pin
  * the data and the prompt; this tier pins what the model actually says.
  *
- * Opt-in — costs real tokens:
- *   EVAL_LLM=1 npx vitest run tests/eval
+ * Opt-in — costs real tokens. Uses the chat model selected in Settings, so it
+ * needs the app's database and key:
+ *   EVAL_LLM=1 DATABASE_URL=... ENCRYPTION_KEY=... npx vitest run tests/eval
  *
  * Verified teeth (run against the pre-fix commit 0677bae, old prompt + no
  * investment_portfolio tool): the first two cases FAIL, and the overnight case
@@ -144,7 +145,7 @@ interface AnswerResult {
 
 async function ask(question: string, overrides: Record<string, unknown>): Promise<AnswerResult> {
   const result = await generateText({
-    model: buildModel(),
+    model: (await resolveModel('chat')).model,
     system: buildSystemPrompt('ok'),
     prompt: question,
     tools: evalTools(overrides) as never,
@@ -160,12 +161,9 @@ function digits(text: string): string {
 }
 
 d('golden portfolio questions', () => {
-  it('has an API key configured', () => {
-    expect(
-      process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY
-        || process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.DEEPSEEK_API_KEY,
-      'EVAL_LLM=1 needs a provider API key in the environment',
-    ).toBeTruthy()
+  it('has a chat model selected in Settings', async () => {
+    // Reads the selection from the database: EVAL_LLM=1 needs DATABASE_URL and ENCRYPTION_KEY.
+    await expect(resolveModel('chat')).resolves.toBeTruthy()
   })
 
   it('"check my portfolio" reads the investments layer, not net worth', async () => {

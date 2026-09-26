@@ -2,7 +2,7 @@ import { convertToModelMessages } from 'ai'
 import { buildSystemPrompt, estimateChatInputTokens } from '../llm/chat-context'
 import { getApiClient } from '../llm/http'
 import { getGhostfolioStatus, getGhostfolioTools } from '../llm/mcp'
-import { getModelInfo } from '../llm/model'
+import { getModelInfo, resolveModel } from '../llm/model'
 import { makeTools } from '../llm/tools'
 
 interface ChatContextBody {
@@ -12,7 +12,7 @@ interface ChatContextBody {
 export default defineEventHandler(async (event) => {
   const body = await readBody<ChatContextBody>(event)
   const messages = Array.isArray(body?.messages) ? body.messages : []
-  const model = getModelInfo()
+  const model = getModelInfo(await resolveModel('chat'))
   const [ghostfolioStatus, ghostfolioTools] = await Promise.all([
     getGhostfolioStatus(),
     getGhostfolioTools(),

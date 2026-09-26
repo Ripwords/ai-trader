@@ -110,7 +110,8 @@ export interface LlmUsageInput {
   inputTokens: number
   outputTokens: number
   totalTokens: number
-  estimatedCostUsd: number
+  /** Null when the model has no pricing entry. */
+  estimatedCostUsd: number | null
 }
 
 export interface LlmUsageRow {
@@ -120,7 +121,7 @@ export interface LlmUsageRow {
   inputTokens: number
   outputTokens: number
   totalTokens: number
-  estimatedCostUsd: number
+  estimatedCostUsd: number | null
   ts: Date
 }
 
@@ -154,7 +155,7 @@ export async function recordLlmUsage(userId: string, input: LlmUsageInput): Prom
       inputTokens: input.inputTokens,
       outputTokens: input.outputTokens,
       totalTokens: input.totalTokens,
-      estimatedCostUsd: input.estimatedCostUsd.toString(),
+      estimatedCostUsd: input.estimatedCostUsd?.toString() ?? null,
     })
     .returning({ id: llmUsage.id })
   if (!inserted[0]) throw new Error('failed to record llm usage')
@@ -190,7 +191,7 @@ export async function listLlmUsage(
     inputTokens: r.inputTokens,
     outputTokens: r.outputTokens,
     totalTokens: r.totalTokens,
-    estimatedCostUsd: Number(r.estimatedCostUsd),
+    estimatedCostUsd: r.estimatedCostUsd == null ? null : Number(r.estimatedCostUsd),
     ts: r.ts,
   }))
 }
