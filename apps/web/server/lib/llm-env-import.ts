@@ -66,7 +66,20 @@ export function planEnvImport(env: Env): EnvImportPlan | null {
   return { providers, selection: { chat, quick } }
 }
 
-export type EnvImportOutcome = 'imported' | 'already-imported' | 'skipped' | 'nothing-to-import'
+export type EnvImportOutcome =
+  | 'imported'
+  | 'imported-providers-only'
+  | 'already-imported'
+  | 'skipped'
+  | 'nothing-to-import'
+
+export function envImportMessage(outcome: EnvImportOutcome): string | null {
+  if (outcome === 'imported') return '[llm] imported LLM_MODEL and *_API_KEY from the environment into Settings; remove them from .env'
+  if (outcome === 'imported-providers-only') {
+    return '[llm] imported *_API_KEY from the environment into Settings, but LLM_MODEL did not name one of those providers; pick the chat and quick models in Settings'
+  }
+  return null
+}
 
 /**
  * Idempotent: a marker row records that the import ran, so providers the user
@@ -81,7 +94,9 @@ export async function importLlmEnvOnce(env: Env): Promise<EnvImportOutcome> {
 
     const existing = await tx.select({ id: llmProviders.id }).from(llmProviders).limit(1)
     const plan = existing.length > 0 ? null : planEnvImport(env)
-    const outcome: EnvImportOutcome = existing.length > 0 ? 'skipped' : plan ? 'imported' : 'nothing-to-import'
+    const outcome: EnvImportOutcome = existing.length > 0
+      ? 'skipped'
+      : !plan ? 'nothing-to-import' : plan.selection ? 'imported' : 'imported-providers-only'
 
     if (plan) {
       const inserted = await tx

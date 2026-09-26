@@ -44,6 +44,13 @@ describe.skipIf(!url)('llm settings persistence (TEST_DATABASE_URL)', () => {
     expect((await settings.getModelConfig('quick'))?.modelId).toBe('claude-haiku-4-5-20251001')
   })
 
+  it('imports keys without a selection when LLM_MODEL names a provider with no key', async () => {
+    expect(await envImport.importLlmEnvOnce({ LLM_MODEL: 'openai/gpt-4o', ANTHROPIC_API_KEY: 'sk-ant-live-1234' }))
+      .toBe('imported-providers-only')
+    expect(await db.select().from(schema.llmProviders)).toHaveLength(1)
+    expect(await settings.getModelConfig('chat')).toBeNull()
+  })
+
   it('does not resurrect providers the user deleted after the import', async () => {
     await envImport.importLlmEnvOnce(env)
     await db.delete(schema.llmProviders)
