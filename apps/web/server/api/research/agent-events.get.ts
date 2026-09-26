@@ -17,9 +17,9 @@ function parseSeq(v: unknown): number {
  *
  * Server-sent events for one run: every persisted event after `after` (or the
  * browser's Last-Event-ID on reconnect), then new ones as the drain writes
- * them. Each message's id is its seq. Ends with an `end` event carrying the
- * terminal status; the client must close the EventSource on it, or the
- * browser reconnects.
+ * them. Opens with a `run` event carrying startedAt; each event message's id
+ * is its seq. Ends with an `end` event carrying the terminal status. An
+ * EventSource client must close on `end`, or the browser reconnects.
  */
 export default defineEventHandler(async (event) => {
   const userId = await getOwnerId()
@@ -28,7 +28,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'run_id required' })
   }
   const [run] = await getDb()
-    .select({ userId: agentRuns.userId })
+    .select({ userId: agentRuns.userId, startedAt: agentRuns.startedAt })
     .from(agentRuns)
     .where(eq(agentRuns.id, run_id))
     .limit(1)
@@ -51,6 +51,7 @@ export default defineEventHandler(async (event) => {
 
   void (async () => {
     try {
+      await stream.push({ event: 'run', data: JSON.stringify({ startedAt: run.startedAt }) })
       for await (const frame of tailRun(run_id, { afterSeq, signal: ac.signal })) {
         if (frame.kind === 'event') {
           await stream.push({ id: String(frame.seq), data: JSON.stringify(frame.event) })

@@ -92,9 +92,11 @@ export class AgentRunTee {
               .where(this.stillRunning())
           }
           if (ev.type === 'error') {
+            // The api reports a cancelled task as this exact error.
+            const status = ev.message === 'cancelled' ? 'cancelled' : 'failed'
             await db
               .update(agentRuns)
-              .set({ status: 'failed', finishedAt: new Date(), error: ev.message })
+              .set({ status, finishedAt: new Date(), error: ev.message })
               .where(this.stillRunning())
           }
           if (ev.type === 'final-state') {

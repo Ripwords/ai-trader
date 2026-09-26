@@ -40,4 +40,11 @@ describe('AgentRunTee', () => {
     expect(usage.set).toMatchObject({ tokensOut: 4, costUsd: '0.5' })
     expect(usage.set.status).toBeUndefined()
   })
+  it("records the api's cancelled error as a cancelled run", async () => {
+    const tee = new AgentRunTee('run-1', 'user-1')
+    tee.push({ type: 'error', message: 'cancelled' })
+    await tee.flush()
+
+    expect(fake.updates.map(u => u.set.status)).toEqual(['cancelled'])
+  })
 })

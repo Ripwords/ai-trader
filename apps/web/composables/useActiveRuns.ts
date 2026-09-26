@@ -1,9 +1,12 @@
-import { onMounted, onUnmounted } from 'vue'
-import type { ActiveRunsResponse, FinishedRun } from '../server/lib/agents/runs-query'
+import { onMounted, onUnmounted, shallowRef } from 'vue'
+import type { ActiveRun, ActiveRunsResponse, FinishedRun } from '../server/lib/agents/runs-query'
 
 const NOTIFIED_KEY = 'aitrader.notifiedRuns'
 const NOTIFIED_CAP = 200
 const POLL_MS = 4000
+
+/** Latest running runs from the global poll; client-only, so module state is safe. */
+export const activeRuns = shallowRef<ActiveRun[]>([])
 
 /**
  * Pure reducer: given the active-runs response and the set of already-notified
@@ -48,6 +51,7 @@ export function useActiveRuns() {
     } catch {
       return
     }
+    activeRuns.value = resp.active
 
     const { requestRunNotificationPermission, fireRunNotification } = await import('../app/lib/notify')
     // Ask for permission lazily the first time a run is in flight.
