@@ -709,8 +709,9 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       }),
       // Async generator: each yield is sent as a preliminary
       // `tool-output-available` frame, which keeps the chat stream moving
-      // during the run and drives AgentsDebateCard's node timeline. The
-      // return value is the final output the LLM consumes.
+      // during the run and drives AgentsDebateCard's node timeline. The SDK
+      // takes the LAST YIELD as the final output the LLM consumes and drops
+      // the return value, so every outcome, errors included, is yielded.
       execute: async function* (args, { abortSignal }) {
         const events: Array<{ type: 'node-start'; node: string }> = []
         yield { events: [...events] }
@@ -728,7 +729,8 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           body: JSON.stringify(args),
         })
         if (!res.ok) {
-          return { events, error: `agents service failed: ${res.status}` }
+          yield { events, error: `agents service failed: ${res.status}` }
+          return
         }
         const { runId } = await res.json() as { runId: string }
 
@@ -737,7 +739,8 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         for await (const frame of tailRun(runId, { signal: abortSignal })) {
           if (frame.kind === 'end') {
             if (frame.status !== 'complete') {
-              return { runId, events, ...verdict, error: `run ${frame.status}: ${frame.error ?? 'no reason recorded'}` }
+              yield { runId, events, ...verdict, error: `run ${frame.status}: ${frame.error ?? 'no reason recorded'}` }
+              return
             }
             break
           }
@@ -750,9 +753,10 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         }
 
         if (!verdict.rating) {
-          return { runId, events, error: 'no decision emitted' }
+          yield { runId, events, error: 'no decision emitted' }
+          return
         }
-        return { runId, events, ...verdict }
+        yield { runId, events, ...verdict }
       },
     }),
 
