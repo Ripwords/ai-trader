@@ -140,3 +140,12 @@ def test_build_graph_gives_the_chat_role_to_deep_agents_and_quick_to_fast_ones(t
     assert ta.deep_thinking_llm.anthropic_api_key.get_secret_value() == "sk-test"
     assert isinstance(ta.quick_thinking_llm, ChatOpenAI)
     assert ta.quick_thinking_llm.openai_api_base == "http://ollama:11434/v1"
+
+
+def test_build_graph_without_deep_thinking_uses_an_effort_tradingagents_accepts(tmp_path: Any) -> None:
+    from app.services.agents.graph import build_graph
+    from app.services.agents.llm_config import LlmRuntimeConfig
+
+    config = LlmRuntimeConfig(chat=_role("anthropic"), quick=_role("anthropic"))
+    ta = build_graph(None, models=config, results_dir=tmp_path, deep_thinking=False)
+    assert ta.config.reasoning_effort == "low"

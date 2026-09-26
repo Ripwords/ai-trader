@@ -153,7 +153,7 @@ def build_graph(
     """Construct a TradingAgentsGraph wired to our toolkit and config.
 
     ``deep_thinking`` is layered on top of ``reasoning_effort``: when False
-    we override whatever effort was passed to ``"minimal"`` so a single
+    we override whatever effort was passed to ``"low"`` (the lowest effort TradingAgents accepts) so a single
     cheap+fast pass runs even if the caller forgot to lower the effort.
     Otherwise ``reasoning_effort`` is honoured verbatim
     (``low|medium|high|xhigh|max``) and mapped to the provider-native knob
@@ -171,7 +171,7 @@ def build_graph(
     ``models`` supplies the deep agents (chat role) and the fast ones (quick
     role), each with its own provider and key.
     """
-    effort = "minimal" if not deep_thinking else reasoning_effort
+    effort = "low" if not deep_thinking else reasoning_effort
     cfg = TradingAgentsConfig(
         llm_provider=llm_config.ta_provider(models.chat.kind),
         deep_think_llm=models.chat.model_id,
