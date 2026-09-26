@@ -164,7 +164,7 @@ async function saveSelection(): Promise<void> {
                   <div class="font-mono text-xs text-[var(--paper-3)] mt-1 break-words">
                     {{ PROVIDER_KIND_META[provider.kind].label }}
                     <template v-if="provider.baseUrl"> · {{ provider.baseUrl }}</template>
-                    · {{ provider.apiKeyHint ? `key ${provider.apiKeyHint}` : 'no key' }}
+                    · <span class="whitespace-nowrap">{{ provider.apiKeyHint ? `key ${provider.apiKeyHint}` : 'no key' }}</span>
                   </div>
                 </div>
                 <div class="flex shrink-0 items-center gap-2">
