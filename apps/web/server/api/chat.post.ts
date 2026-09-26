@@ -53,14 +53,6 @@ export default defineEventHandler(async (event) => {
   }
 
   const thread = threadId
-  if (chatStreams.isActive(thread)) throw busy()
-
-  // Persist the user message immediately so it survives a refresh during streaming.
-  // A retry resends the question; it is saved already unless its first send
-  // never reached us.
-  if (newestUser && (!newestUser.id || newestUser.id !== await lastMessageId(thread))) {
-    await appendMessages(thread, [newestUser])
-  }
 
   const recordUsage = async (usage: { inputTokens?: number; outputTokens?: number }) => {
     const { recordUsageSafely } = await import('../lib/llm-cost')
@@ -82,6 +74,13 @@ export default defineEventHandler(async (event) => {
   try {
     chatStreams.start(thread, abortSignal => createUIMessageStream({
       execute: async ({ writer }) => {
+        // Saved here, once the thread is reserved, so a send refused as busy
+        // leaves no question behind. Still before any model work, so it
+        // survives a refresh during streaming. A retry resends the question;
+        // it is saved already unless its first send never reached us.
+        if (newestUser && (!newestUser.id || newestUser.id !== await lastMessageId(thread))) {
+          await appendMessages(thread, [newestUser])
+        }
         const client = getApiClient()
         const [[ghostfolioTools, ghostfolioStatus], recallContext] = await Promise.all([
           within(
@@ -152,7 +151,6 @@ export default defineEventHandler(async (event) => {
       },
     }))
   } catch (err) {
-    // Two sends raced past the isActive check above.
     if (err instanceof ChatStreamBusyError) throw busy()
     throw err
   }

@@ -202,6 +202,27 @@ describe('POST /api/chat', () => {
   })
 })
 
+describe('POST /api/chat concurrent sends', () => {
+  it('refuses the second of two near-simultaneous sends before saving its question', async () => {
+    let release!: () => void
+    repo.lastMessageId.mockImplementationOnce(() => new Promise(r => { release = () => r(null) }))
+    const first = post(event({ messages: [userMessage('one')], chatId: 'th-1' }))
+    const second = post(event({ messages: [{ ...userMessage('two'), id: 'u2' }], chatId: 'th-1' }))
+
+    await expect(second).rejects.toMatchObject({ statusCode: 409, data: { code: 'chat_busy' } })
+    await until(() => release !== undefined)
+    release()
+    await first
+    await until(() => feeder !== undefined)
+    finish()
+    await until(() => !chatStreams.isActive('th-1'))
+
+    const questions = (repo.appendMessages.mock.calls as unknown as Array<[string, Array<{ id: string; role: string }>]>)
+      .flatMap(([, msgs]) => msgs.filter(m => m.role === 'user').map(m => m.id))
+    expect(questions).toEqual(['u1'])
+  })
+})
+
 describe('POST /api/chat retry', () => {
   it('does not save the question again when retrying its reply', async () => {
     repo.lastMessageId.mockResolvedValueOnce('u1')
