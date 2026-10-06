@@ -58,6 +58,14 @@ describe('research_start tool', () => {
     expect(typeof out.error).toBe('string')
     expect(String(out.error)).toMatch(/500/)
   })
+
+  it('passes on the reason the run could not start', async () => {
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
+      jsonResponse(503, { statusMessage: 'symbol lookup failed, try again' })) as unknown as typeof fetch
+    const tools = makeTools({} as unknown as ApiClient)
+    const out = await tools.research_start.execute({ symbol: 'VZ' }, {} as unknown) as Record<string, unknown>
+    expect(String(out.error)).toContain('symbol lookup failed, try again')
+  })
 })
 
 describe('research_status tool', () => {

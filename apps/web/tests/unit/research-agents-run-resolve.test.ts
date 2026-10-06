@@ -69,4 +69,14 @@ describe('/api/research/agents-run — canonical resolution gate', () => {
     })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
+
+  it('reports a failed lookup as a 503, not as an unknown symbol', async () => {
+    resolveSymbol.mockResolvedValue({ status: 'error' })
+
+    await expect(handler(makeEvent({ symbol: 'US.VZ' }))).rejects.toMatchObject({
+      statusCode: 503,
+      statusMessage: expect.stringContaining('lookup failed'),
+    })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
 })

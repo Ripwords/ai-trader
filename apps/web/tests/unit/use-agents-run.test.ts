@@ -117,6 +117,19 @@ describe('useAgentsRun.start', () => {
     expect(run.resolution.value).toMatchObject({ status: 'ambiguous' })
     expect(run.error.value?.toLowerCase()).toContain('pick')
   })
+
+  it('shows the reason the server gave when the run cannot start', async () => {
+    mockFetch(() => Response.json(
+      { statusCode: 503, statusMessage: 'symbol lookup failed, try again' },
+      { status: 503 },
+    ))
+    const run = useAgentsRun()
+    await run.start('VZ')
+
+    expect(run.status.value).toBe('failed')
+    expect(run.resolution.value).toBeNull()
+    expect(run.error.value).toContain('symbol lookup failed, try again')
+  })
 })
 
 describe('useAgentsRun.follow', () => {

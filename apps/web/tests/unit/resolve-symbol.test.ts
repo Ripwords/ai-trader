@@ -146,6 +146,17 @@ describe('resolveSymbol', () => {
     expect(await resolveSymbol('US.MU')).toEqual({ status: 'error' })
   })
 
+  it('resolves when a failed Yahoo search succeeds on the second attempt', async () => {
+    search
+      .mockRejectedValueOnce(new Error('fetch failed'))
+      .mockResolvedValue({
+        quotes: [{ symbol: 'VZ', shortname: 'Verizon Communications Inc.', exchDisp: 'NYSE', typeDisp: 'Equity' }],
+      })
+
+    expect(await resolveSymbol('US.VZ')).toMatchObject({ status: 'resolved', symbol: 'US.VZ' })
+    expect(search).toHaveBeenCalledTimes(2)
+  })
+
   it('searches symbols with result validation disabled for Yahoo response drift', async () => {
     search.mockImplementation((_query, _queryOptions, moduleOptions?: { validateResult?: boolean }) => {
       if (moduleOptions?.validateResult !== false) {

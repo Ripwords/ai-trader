@@ -150,4 +150,13 @@ describe('agents_debate tool catalogue', () => {
     expect(final).toMatchObject({ error: expect.stringContaining('502') })
     expect(tailRun).not.toHaveBeenCalled()
   })
+
+  it('passes on the reason the run could not start', async () => {
+    const tools = makeTools({} as unknown as ApiClient)
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
+      Response.json({ statusCode: 503, statusMessage: 'symbol lookup failed, try again' }, { status: 503 }),
+    ) as unknown as typeof fetch
+    const { final } = await drain(tools.agents_debate.execute(args, {} as unknown))
+    expect(final).toMatchObject({ error: expect.stringContaining('symbol lookup failed, try again') })
+  })
 })

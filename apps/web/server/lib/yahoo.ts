@@ -651,7 +651,12 @@ export async function resolveSymbol(input: string): Promise<SymbolResolution> {
   const expectedYahoo = toYahooSymbol(raw.toUpperCase())
   let results: SymbolSearchResult[]
   try {
-    results = await fetchSymbolSearch(expectedYahoo, 10)
+    // A search that fails has gone through seconds later, so try once more
+    // before reporting the lookup as failed.
+    results = await fetchSymbolSearch(expectedYahoo, 10).catch((err) => {
+      console.warn('[yahoo] resolveSymbol retrying', input, err)
+      return fetchSymbolSearch(expectedYahoo, 10)
+    })
   } catch (err) {
     console.error('[yahoo] resolveSymbol failed', input, err)
     return { status: 'error' }

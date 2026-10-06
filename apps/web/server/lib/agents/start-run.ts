@@ -27,13 +27,17 @@ export interface StartedRun {
 /**
  * Resolve + concurrency-gate + insert the agent_runs row + open the upstream
  * FastAPI NDJSON stream. Throws createError on every failure path
- * (400/409/422/502).
+ * (400/409/422/502/503).
  */
 export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
   const userId = await getOwnerId()
   if (!body?.symbol) throw createError({ statusCode: 400, statusMessage: 'symbol required' })
 
   const resolution = await resolveSymbol(body.symbol)
+  if (resolution.status === 'error') {
+    // The lookup itself failed, which says nothing about the symbol.
+    throw createError({ statusCode: 503, statusMessage: 'symbol lookup failed, try again' })
+  }
   if (resolution.status !== 'resolved') {
     throw createError({
       statusCode: 422,

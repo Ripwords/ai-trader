@@ -241,7 +241,10 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; id
       resolution.value = body.data ?? null
       return fail('pick the right instrument from search — this symbol is ambiguous or unknown')
     }
-    if (!res.ok) return fail(`the run could not start (${res.status})`)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { statusMessage?: string }
+      return fail(body.statusMessage ?? `the run could not start (${res.status})`)
+    }
 
     const { runId: id } = await res.json() as { runId: string }
     await follow(id, { keep: true })

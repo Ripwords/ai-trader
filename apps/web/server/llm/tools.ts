@@ -8,6 +8,12 @@ import { getContextualNews } from '../lib/contextual-news'
 // Self-fetches to this app's own /api routes; none of them stream.
 const SELF_FETCH_TIMEOUT_MS = 30_000
 
+/** The status of a failed self-fetch, with the route's own reason when it gave one. */
+async function failureReason(res: Response): Promise<string> {
+  const body = await res.json().catch(() => ({})) as { statusMessage?: string }
+  return body.statusMessage ? `${res.status} ${body.statusMessage}` : String(res.status)
+}
+
 interface MakeToolsOptions {
   event?: H3Event
   latestUserText?: string
@@ -594,7 +600,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           return { status: 'already_running', runId: body?.data?.run_id ?? null, symbol: args.symbol }
         }
         if (!res.ok) {
-          return { status: 'error', error: `research start failed: ${res.status}`, symbol: args.symbol }
+          return { status: 'error', error: `research start failed: ${await failureReason(res)}`, symbol: args.symbol }
         }
         const body = await res.json() as { runId: string; status: string; symbol: string }
         return {
@@ -739,7 +745,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           runId = body.data.run_id
         }
         else if (!res.ok) {
-          yield { events, error: `agents service failed: ${res.status}` }
+          yield { events, error: `run could not start: ${await failureReason(res)}` }
           return
         }
         else {
