@@ -57,6 +57,13 @@
       "when": 1790428204629,
       "tag": "0007_debate_run_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791268213294,
+      "tag": "0008_nullable_decision_confidence",
+      "breakpoints": true
     }
   ]
 }

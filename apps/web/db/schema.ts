@@ -203,7 +203,7 @@ export const agentDecisions = pgTable('agent_decisions', {
   symbol: text('symbol').notNull(),
   tradeDate: date('trade_date').notNull(),
   rating: text('rating').notNull(),
-  confidence: integer('confidence').notNull(),
+  confidence: integer('confidence'),
   rationale: text('rationale').notNull(),
   priceAtDecision: numeric('price_at_decision', { precision: 18, scale: 6 }),
   // No FK — paper_orders table not yet introduced. Will gain FK in a later migration.

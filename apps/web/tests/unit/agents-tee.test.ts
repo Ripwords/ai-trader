@@ -75,6 +75,17 @@ describe('AgentRunTee', () => {
     expect(fake.updates.filter(u => u.set.status).map(u => u.set.status)).toEqual(['cancelled'])
   })
 
+  it('stores a decision with no judged confidence as null, not a made-up 50', async () => {
+    fake = createFakeDb(table => table === 'agent_runs' ? [{ symbol: 'US.AAPL', tradeDate: '2026-10-06' }] : [])
+    const tee = new AgentRunTee('run-1', 'user-1')
+    tee.push({ type: 'decision', rating: 'hold', confidence: null, rationale: 'wait' })
+    tee.push({ type: 'decision', rating: 'buy', confidence: 63, rationale: 'go' })
+    await tee.flush()
+
+    const decisions = fake.inserts.filter(i => i.table === 'agent_decisions').map(i => i.values.confidence)
+    expect(decisions).toEqual([null, 63])
+  })
+
   it('ends a stream that stopped after an error without run-end, keeping that error', async () => {
     const tee = new AgentRunTee('run-1', 'user-1')
     tee.push({ type: 'error', message: 'boom' })

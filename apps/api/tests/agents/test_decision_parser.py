@@ -2,10 +2,8 @@
 
 The parser maps the trader's free-text ``final_trade_decision`` field to the
 five wire-supported ratings (``strong-buy``, ``buy``, ``hold``, ``reduce``,
-``sell``) and a confidence integer. The tee writer inserts those values into
-``agent_decisions`` whose ``confidence`` is ``NOT NULL`` — so the parser must
-default confidence to a sane integer (50) rather than ``None`` when a number
-isn't extractable.
+``sell``). Confidence is left ``None`` here; the judge in ``confidence.py``
+fills it during the run.
 """
 
 from __future__ import annotations
@@ -101,34 +99,6 @@ def test_confidence_is_none_when_no_number_present() -> None:
     assert out["confidence"] is None
 
 
-def test_confidence_parses_numeric_when_present() -> None:
-    out = _decision_for("BUY with confidence: 85")
-    assert out["confidence"] == 85
-
-
-def test_confidence_parses_with_pct_sign() -> None:
-    out = _decision_for("BUY (confidence 72%)")
-    assert out["confidence"] == 72
-
-
-def test_confidence_parses_conviction_phrasing() -> None:
-    out = _decision_for("HOLD with conviction of 60%")
-    assert out["confidence"] == 60
-
-
-def test_confidence_parses_percent_before_keyword() -> None:
-    out = _decision_for("SELL — 80% conviction in the bear case")
-    assert out["confidence"] == 80
-
-
-def test_confidence_clamps_to_0_100() -> None:
-    out_low = _decision_for("BUY confidence: -5")
-    out_high = _decision_for("BUY confidence: 200")
-    # negative gets clamped (sign discarded by the unsigned regex), 200 clamped to 100
-    assert 0 <= out_low["confidence"] <= 100
-    assert out_high["confidence"] == 100
-
-
 # ---- Rationale: full text, never truncated ------------------------------
 
 
@@ -181,13 +151,11 @@ def test_canonical_buy_marker_beats_body_hold_mentions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_decisions_insert_succeeds_with_default_confidence(
+async def test_agent_decisions_insert_accepts_null_confidence(
     pg_pool,
 ) -> None:
-    """``agent_decisions.confidence`` is ``NOT NULL``. The parser now returns
-    ``None`` when the model gives no number, so the persistence boundary (the
-    web tee writer) supplies the neutral 50 default; this test mirrors that
-    coercion to prove the NOT NULL path still holds."""
+    """A run whose judge failed persists ``confidence`` as NULL rather than a
+    fabricated number (migration 0008 dropped the NOT NULL)."""
     user_id = "00000000-0000-0000-0000-000000000099"
     async with pg_pool.acquire() as conn:
         await conn.execute(
@@ -202,9 +170,6 @@ async def test_agent_decisions_insert_succeeds_with_default_confidence(
             user_id,
         )
         out = _decision_for("Recommendation: REDUCE exposure")
-        # No confidence number in the text -> parser returns None; the tee
-        # writer coerces to the neutral 50 to satisfy NOT NULL.
-        confidence = out["confidence"] if out["confidence"] is not None else 50
         await conn.execute(
             "INSERT INTO agent_decisions"
             "(run_id, user_id, symbol, trade_date, rating, confidence, rationale) "
@@ -212,7 +177,7 @@ async def test_agent_decisions_insert_succeeds_with_default_confidence(
             run_id,
             user_id,
             out["rating"],
-            confidence,
+            out["confidence"],
             out["rationale"],
         )
         row = await conn.fetchrow(
@@ -221,7 +186,7 @@ async def test_agent_decisions_insert_succeeds_with_default_confidence(
         )
     assert row is not None
     assert row["rating"] == "reduce"
-    assert row["confidence"] == 50
+    assert row["confidence"] is None
 
 
 def test_signal_processor_picks_up_final_marker_when_regex_misses() -> None:

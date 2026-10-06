@@ -45,7 +45,7 @@ class BacktestRunResult:
     symbol: str
     trade_date: date
     rating: str
-    confidence: int
+    confidence: int | None
     realized_return: float
     benchmark_return: float
     alpha: float
@@ -75,23 +75,20 @@ class BacktestAggregate:
         return (self.n_correct / actionable) if actionable > 0 else 0.0
 
 
-async def _consume_decision(events_iter: Any) -> tuple[str, int, str]:
+async def _consume_decision(events_iter: Any) -> tuple[str, int | None, str]:
     """Drain the run_graph stream and return ``(rating, confidence, rationale)``.
 
     The stream yields normalized chunks; we only care about the one with
-    a ``decision`` payload. Defaults to ``hold`` / 50 / "" when no
+    a ``decision`` payload. Defaults to ``hold`` / None / "" when no
     decision arrives (failed run, abort, etc).
     """
-    rating, confidence, rationale = "hold", 50, ""
+    rating, confidence, rationale = "hold", None, ""
     async for chunk in events_iter:
         values = (chunk or {}).get("values") or {}
         d = values.get("decision")
         if d:
             rating = d.get("rating", "hold")
-            # ``confidence`` is now ``int | None`` (None when the model gave no
-            # number); coerce to the neutral 50 for the int-typed result.
-            raw_conf = d.get("confidence")
-            confidence = int(raw_conf) if raw_conf is not None else 50
+            confidence = d.get("confidence")
             rationale = d.get("rationale", "")
     return rating, confidence, rationale
 
@@ -134,7 +131,7 @@ async def run_backtest(
             symbol=p.symbol,
             trade_date=p.trade_date,
             rating="hold",
-            confidence=0,
+            confidence=None,
             realized_return=0.0,
             benchmark_return=0.0,
             alpha=0.0,

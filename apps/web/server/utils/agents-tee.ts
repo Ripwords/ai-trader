@@ -109,9 +109,7 @@ export class AgentRunTee {
                 symbol: run.symbol,
                 tradeDate: run.tradeDate,
                 rating: ev.rating,
-                // ``confidence`` is ``NOT NULL``; the parser sends null when
-                // the model gave no number, so persist the neutral 50 default.
-                confidence: ev.confidence ?? 50,
+                confidence: ev.confidence,
                 rationale: ev.rationale,
               })
             }

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from langchain_core.messages import AIMessage
 
 from tests.agents.test_router_sync import _FakePool
 
@@ -88,10 +89,16 @@ class _Compiled:
         yield {**state, "final_trade_decision": "FINAL TRANSACTION PROPOSAL: **SELL**"}
 
 
+class _JudgeLlm:
+    async def ainvoke(self, _prompt: str, config: Any = None) -> AIMessage:
+        return AIMessage(content="CONFIDENCE: 66\nREASON: resumed")
+
+
 class _Graph:
     def __init__(self) -> None:
         self.graph = _Compiled()
         self.propagator = _Propagator()
+        self.deep_thinking_llm = _JudgeLlm()
 
 
 @pytest.fixture(autouse=True)
@@ -124,6 +131,7 @@ async def test_resume_streams_the_same_shape_as_a_normal_run(
 
     decision = next(e for e in lines if e["type"] == "decision")
     assert decision["rating"] == "sell"
+    assert decision["confidence"] == 66
     reports = [e for e in lines if e["type"] == "report"]
     # Only what the resume produced; the checkpointed reports were already streamed.
     assert [r["kind"] for r in reports] == ["fundamentals"]

@@ -62,10 +62,11 @@ Checkpointing (Task 8):
 from __future__ import annotations
 
 import asyncio
+import functools
 import re
 from datetime import date
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, ToolMessage
@@ -74,6 +75,7 @@ from tradingagents.agents.utils import agent_utils as _agent_utils
 from tradingagents.config import TradingAgentsConfig
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
+from .confidence import judge_confidence
 from .deepseek_compat import install_litellm_thinking_patch
 from . import llm_config
 from .llm_config import LlmRuntimeConfig
@@ -92,6 +94,8 @@ from app.services.valuation.summary import format_valuation_for_agents
 # critical section (``_install_toolkit`` -> ``TradingAgentsGraph(...)`` ->
 # accessing ``ta.graph``) is always single-threaded.
 _build_lock = asyncio.Lock()
+
+Judge = Callable[[dict, str], Awaitable[int | None]]
 
 
 # Names on tradingagents.agents.utils.agent_utils we override with our toolkit.
@@ -525,15 +529,6 @@ _RATING_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("hold", re.compile(r"\bhold\b", re.IGNORECASE)),
 )
 
-# Confidence/conviction is reported in several shapes — ``confidence: 85``,
-# ``confidence 72%``, ``conviction of 60%``, or ``80% conviction``. Accept the
-# number on either side of the keyword. The unsigned ``\d`` naturally drops a
-# leading ``-`` (so ``-5`` is read as ``5``, then clamped to 0).
-_CONFIDENCE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(?:confidence|conviction)\b[^\d%]{0,12}(\d{1,3})\s*%?", re.IGNORECASE),
-    re.compile(r"(\d{1,3})\s*%\s*(?:confidence|conviction)", re.IGNORECASE),
-)
-
 # Explicit verdict markers other than the canonical ``FINAL TRANSACTION
 # PROPOSAL`` line — the Risk Manager / synthesis often *leads* with one
 # (e.g. ``Final Recommendation: HOLD``). We anchor on the marker and read the
@@ -620,22 +615,6 @@ def _parse_rating(text: str) -> str:
     return regex or "hold"
 
 
-def _parse_confidence(text: str) -> int | None:
-    """Extract an integer confidence in [0, 100], or ``None`` when absent.
-
-    The Risk Manager is never *prompted* for a confidence number, so most
-    runs won't contain one. Returning ``None`` (rather than a fabricated
-    default) lets the UI show a qualitative conviction band instead of a
-    misleading flat ``50%``. The persistence boundary (the web tee writer)
-    coerces ``None`` to the neutral 50 to satisfy the ``NOT NULL`` column.
-    """
-    for pattern in _CONFIDENCE_PATTERNS:
-        m = pattern.search(text)
-        if m:
-            return max(0, min(100, int(m.group(1))))
-    return None
-
-
 def _extract_decision(
     prev: dict,
     curr: dict,
@@ -644,14 +623,12 @@ def _extract_decision(
     """Surface ``final_trade_decision`` as a structured decision event.
 
     Recognises all five wire ratings (``strong-buy``, ``buy``, ``hold``,
-    ``reduce``, ``sell``) and parses an optional confidence number from
-    the decision text. Returns ``None`` when nothing changed (or the field
+    ``reduce``, ``sell``). Returns ``None`` when nothing changed (or the field
     is empty), letting the caller skip emitting a ``decision`` event.
 
-    ``confidence`` is ``int | None`` — ``None`` when the model gave no number.
-    The tee writer coerces ``None`` to the neutral 50 at the ``NOT NULL``
-    ``agent_decisions.confidence`` boundary; the streamed event keeps ``None``
-    so the UI can show a qualitative band rather than a fabricated percentage.
+    ``confidence`` starts as ``None``; :func:`_translate_states` fills it from
+    the confidence judge. No role is prompted for a number, so the decision
+    text itself never carries a trustworthy one.
 
     ``rationale`` is the full decision text — the UI renders it as a structured
     report, so we must not clip it (the ``rationale`` column is unlimited
@@ -668,7 +645,7 @@ def _extract_decision(
     rating = _parse_rating(cdec)
     decision: dict = {
         "rating": rating,
-        "confidence": _parse_confidence(cdec),
+        "confidence": None,
         "rationale": cdec,
     }
     if valuation is not None and valuation.veto.triggered:
@@ -805,7 +782,8 @@ async def run_graph(
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
     args = _graph_args(graph, run_id, usage)
     async for chunk in _translate_states(
-        graph.graph.astream(init_state, **args), run_valuation, prev={}
+        graph.graph.astream(init_state, **args), run_valuation, prev={},
+        judge=_confidence_judge(graph, args),
     ):
         yield chunk
 
@@ -831,7 +809,8 @@ async def resume_graph(
     checkpoint = await graph.graph.aget_state(args["config"])
     prev = _state_snapshot(checkpoint.values) if checkpoint is not None else {}
     async for chunk in _translate_states(
-        graph.graph.astream(None, **args), run_valuation, prev=prev
+        graph.graph.astream(None, **args), run_valuation, prev=prev,
+        judge=_confidence_judge(graph, args),
     ):
         yield chunk
 
@@ -852,10 +831,19 @@ def _graph_args(
     return {**args, "config": new_config}
 
 
+def _confidence_judge(graph: TradingAgentsGraph, args: dict) -> Judge:
+    """Bind the judge to the run's deep-think model and config, so its tokens
+    land on the same usage callback as the rest of the run."""
+    return functools.partial(
+        judge_confidence, graph.deep_thinking_llm, config=args["config"]
+    )
+
+
 async def _translate_states(
     states: AsyncIterator[Any],
     run_valuation: ValuationResult | None,
     prev: dict,
+    judge: Judge | None = None,
 ) -> AsyncIterator[dict]:
     """Diff successive AgentState snapshots into normalized chunks, then yield
     the terminal state as a ``final_state`` chunk."""
@@ -896,6 +884,8 @@ async def _translate_states(
             values["synthesis"] = synthesis
         decision = _extract_decision(prev, curr, valuation=run_valuation)
         if decision:
+            if judge is not None:
+                decision["confidence"] = await judge(curr, decision["rating"])
             values["decision"] = decision
             if decision.get("veto"):
                 values["valuation_veto"] = {

@@ -48,7 +48,7 @@ function toIso(value: string | Date): string {
   return new Date(value).toISOString()
 }
 
-function toNumber(value: number | string | null): number | null {
+export function toNumber(value: number | string | null): number | null {
   if (value === null || value === undefined) return null
   const n = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(n) ? n : null

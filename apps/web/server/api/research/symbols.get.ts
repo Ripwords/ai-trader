@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm'
 import { getDb } from '../../../db/client'
 import { agentRuns, agentDecisions } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
+import { toNumber } from '../../lib/research-intelligence'
 
 /**
  * GET /api/research/symbols
@@ -60,12 +61,12 @@ export default defineEventHandler(async () => {
       AND r.status = 'complete'
     ORDER BY d.symbol, d.created_at DESC
   `)
-  const latestBySymbol = new Map<string, { rating: string; confidence: number; decided_at: string }>()
-  for (const row of latest.rows ?? latest as unknown as Array<{ symbol: string; rating: string; confidence: number; decided_at: string }>) {
-    const r = row as { symbol: string; rating: string; confidence: number; decided_at: string }
+  const latestBySymbol = new Map<string, { rating: string; confidence: number | null; decided_at: string }>()
+  for (const row of latest.rows ?? latest as unknown as Array<{ symbol: string; rating: string; confidence: number | string | null; decided_at: string }>) {
+    const r = row as { symbol: string; rating: string; confidence: number | string | null; decided_at: string }
     latestBySymbol.set(r.symbol, {
       rating: r.rating,
-      confidence: Number(r.confidence),
+      confidence: toNumber(r.confidence),
       decided_at: r.decided_at,
     })
   }
