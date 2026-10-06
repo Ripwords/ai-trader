@@ -10,10 +10,12 @@ import { MODEL_PRICING } from '../../server/lib/model-pricing'
  * both the estimator and the /internal/pricing mirror.
  */
 describe('llm cost estimation', () => {
-  it('prices the deepseek models that still exist', () => {
-    // 1M input + 1M output at 0.55 / 2.20.
-    expect(estimateCost('deepseek/deepseek-v4-pro', 1_000_000, 1_000_000)).toBeCloseTo(2.75, 6)
-    expect(estimateCost('deepseek/deepseek-v4-flash', 1_000_000, 1_000_000)).toBeCloseTo(0.35, 6)
+  it('prices the deepseek models at their peak list rates', () => {
+    // 1M input + 1M output: flash at 0.30 / 1.20, v4-pro at 1.32 / 3.96.
+    expect(estimateCost('deepseek/deepseek-flash', 1_000_000, 1_000_000)).toBeCloseTo(1.50, 6)
+    expect(estimateCost('deepseek/deepseek-v4-pro', 1_000_000, 1_000_000)).toBeCloseTo(5.28, 6)
+    // The retired v4-flash name is served and billed as deepseek-flash.
+    expect(estimateCost('deepseek/deepseek-v4-flash', 1_000_000, 1_000_000)).toBeCloseTo(1.50, 6)
   })
 
   it('prices every model in the shared table (no silent zeroes)', () => {

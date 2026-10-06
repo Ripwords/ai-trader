@@ -10,6 +10,13 @@
  * deepseek-v4-pro entirely — costing every turn on it at $0 — and carried a
  * v4-flash rate that matched neither the Python table nor DeepSeek's list price.
  *
+ * DeepSeek bills peak and off-peak hours differently (off-peak is half). The
+ * table holds one rate per model, so it holds the peak cache-miss rate: the
+ * peak windows are 01:00-04:00 and 06:00-10:00 UTC on weekdays, and a cost cap
+ * should overcount rather than undercount. Rates read from
+ * https://api-docs.deepseek.com/quick_start/pricing on 2026-10-06. The retired
+ * deepseek-v4-flash name is served and billed as deepseek-flash.
+ *
  * DeepSeek's deepseek-chat / deepseek-reasoner aliases are deprecated and out of
  * `GET /models`, but still resolve server-side, so their rates stay listed:
  * usage recorded under an old spec should not silently price at zero.
@@ -24,8 +31,9 @@ export const MODEL_PRICING = {
   'openai/gpt-4o-mini':                  { input_per_1m: 0.15,  output_per_1m: 0.60 },
   'google/gemini-2.5-pro':               { input_per_1m: 1.25,  output_per_1m: 5.00 },
   'google/gemini-2.5-flash':             { input_per_1m: 0.075, output_per_1m: 0.30 },
-  'deepseek/deepseek-v4-pro':            { input_per_1m: 0.55,  output_per_1m: 2.20 },
-  'deepseek/deepseek-v4-flash':          { input_per_1m: 0.07,  output_per_1m: 0.28 },
+  'deepseek/deepseek-v4-pro':            { input_per_1m: 1.32,  output_per_1m: 3.96 },
+  'deepseek/deepseek-flash':             { input_per_1m: 0.30,  output_per_1m: 1.20 },
+  'deepseek/deepseek-v4-flash':          { input_per_1m: 0.30,  output_per_1m: 1.20 },
   'deepseek/deepseek-chat':              { input_per_1m: 0.07,  output_per_1m: 0.28 },
   'deepseek/deepseek-reasoner':          { input_per_1m: 0.55,  output_per_1m: 2.20 },
 } as const satisfies Record<string, ModelRate>

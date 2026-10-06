@@ -9,11 +9,17 @@ MODELS: dict[tuple[str, str], dict[str, float]] = {
     ("openai", "gpt-4o-mini"): {"input_per_1m": 0.15, "output_per_1m": 0.60},
     ("google", "gemini-2.5-pro"): {"input_per_1m": 1.25, "output_per_1m": 5.00},
     ("google", "gemini-2.5-flash"): {"input_per_1m": 0.075, "output_per_1m": 0.30},
-    ("deepseek", "deepseek-v4-pro"): {"input_per_1m": 0.55, "output_per_1m": 2.20},
-    ("deepseek", "deepseek-v4-flash"): {"input_per_1m": 0.07, "output_per_1m": 0.28},
+    # DeepSeek bills off-peak hours at half these rates. One rate per model
+    # fits here, so it is the peak cache-miss rate: a cost cap should overcount
+    # rather than undercount. Read from
+    # https://api-docs.deepseek.com/quick_start/pricing on 2026-10-06.
+    ("deepseek", "deepseek-v4-pro"): {"input_per_1m": 1.32, "output_per_1m": 3.96},
+    ("deepseek", "deepseek-flash"): {"input_per_1m": 0.30, "output_per_1m": 1.20},
+    # Retired name, served and billed as deepseek-flash.
+    ("deepseek", "deepseek-v4-flash"): {"input_per_1m": 0.30, "output_per_1m": 1.20},
     # Retired DeepSeek aliases (out of GET /models as of 2026-09-05, but they
     # still resolve). Kept so a run pinned to an old name is priced correctly
-    # instead of silently costing $0. New runs should use the v4 ids above.
+    # instead of silently costing $0. New runs should use the current ids above.
     ("deepseek", "deepseek-chat"): {"input_per_1m": 0.07, "output_per_1m": 0.28},
     ("deepseek", "deepseek-reasoner"): {"input_per_1m": 0.55, "output_per_1m": 2.20},
 }
