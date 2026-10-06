@@ -225,7 +225,7 @@ function shortTs(t: string): string { return new Date(t).toISOString().slice(0, 
     </div>
 
     <!-- Metrics row -->
-    <div v-if="metrics" class="grid grid-cols-7 gap-4 font-mono text-xs uppercase tracking-[0.18em]">
+    <div v-if="metrics" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 font-mono text-xs uppercase tracking-[0.18em]">
       <div>
         <div class="text-[var(--paper-3)]">PnL</div>
         <div
@@ -273,12 +273,12 @@ function shortTs(t: string): string { return new Date(t).toISOString().slice(0, 
 
     <!-- Stacked charts -->
     <div class="space-y-2">
-      <div class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">price · trade markers</div>
+      <div class="font-mono text-[11px] uppercase tracking-wider text-[var(--paper-3)]">price · trade markers</div>
       <div ref="priceEl" class="w-full" />
-      <div class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] flex gap-4 items-center">
+      <div class="font-mono text-[11px] uppercase tracking-wider text-[var(--paper-3)] flex gap-4 items-center">
         <span>equity</span>
         <span class="inline-flex items-center gap-1.5">
-          <span class="inline-block w-3 h-[2px] bg-[#d4a96a]" /> strategy
+          <span class="inline-block w-3 h-[2px] bg-[var(--accent)]" /> strategy
         </span>
         <span class="inline-flex items-center gap-1.5">
           <span class="inline-block w-3 border-t border-dashed border-[#6b6558]" /> buy &amp; hold
@@ -290,7 +290,7 @@ function shortTs(t: string): string { return new Date(t).toISOString().slice(0, 
     <!-- Trades table -->
     <div v-if="trades.length">
       <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mb-2">trades</div>
-      <div class="max-h-72 overflow-y-auto scroll-hidden">
+      <div class="table-scroll max-h-72 overflow-y-auto">
         <table class="w-full font-mono text-xs">
           <thead class="text-[var(--paper-3)] uppercase tracking-wider">
             <tr>
@@ -302,7 +302,7 @@ function shortTs(t: string): string { return new Date(t).toISOString().slice(0, 
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(t, i) in trades" :key="i" class="border-t border-[rgba(255,245,230,0.06)]">
+            <tr v-for="(t, i) in trades" :key="i" class="border-t border-[var(--ink-line)]">
               <td class="py-1.5 text-[var(--paper-2)]">{{ shortTs(t.ts) }}</td>
               <td
                 class="py-1.5"

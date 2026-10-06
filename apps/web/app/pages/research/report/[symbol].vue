@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/* Hallmark · genre: modern-minimal · macrostructure: breadcrumb header, price strip, streamed report sections each with loading, ready and unavailable states · design-system: design.md · designed-as-app */
 import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useEventSource } from '@vueuse/core'
 import type {
@@ -11,6 +12,7 @@ import type {
   RiskReport,
   RiskReportEvent,
 } from '../../../../types/research'
+import { sectionState, type ReportPhase, type SectionState } from '~/utils/research-view'
 
 definePageMeta({ section: 'research' })
 
@@ -66,8 +68,10 @@ function emptyState(sym: string): ReportState {
 }
 
 const state = shallowRef<ReportState>(emptyState(symbol.value))
-const phase = ref<'connecting' | 'streaming' | 'done' | 'error'>('connecting')
+const phase = ref<ReportPhase>('connecting')
 const errorMessage = ref<string | null>(null)
+/** Non-fatal stream errors: the report continues without that source. */
+const warnings = ref<string[]>([])
 const refreshKey = ref(0)
 
 const STREAM_EVENTS = ['cached', 'meta', 'price', 'chart', 'fundamentals', 'llm', 'done', 'error', 'ping'] as const
@@ -168,10 +172,13 @@ watch([event, data], ([ev, dat]) => {
       close()
       break
     case 'error':
-      errorMessage.value = payload.message
       if (payload.fatal) {
+        errorMessage.value = payload.message
         phase.value = 'error'
         close()
+      }
+      else {
+        warnings.value = [...warnings.value, `${payload.source}: ${payload.message}`]
       }
       break
   }
@@ -183,6 +190,7 @@ function regenerate() {
   state.value = emptyState(symbol.value)
   phase.value = 'connecting'
   errorMessage.value = null
+  warnings.value = []
   refreshKey.value++
   // useEventSource reacts to URL changes, but force-open in case it's already
   // closed.
@@ -191,9 +199,20 @@ function regenerate() {
 
 onUnmounted(() => close())
 
-const showLoadingScreen = computed(() => {
-  // Only show the full-screen loader before any section has hydrated.
-  return state.value.price === null && state.value.bars === null && phase.value !== 'error'
+const hydrated = computed(() => state.value.price !== null || state.value.bars !== null)
+
+const sections = computed(() => {
+  const st = state.value
+  const p = phase.value
+  return {
+    price: sectionState(st.price !== null, p),
+    gauge: sectionState(st.risk_score !== null, p),
+    bottomLine: sectionState(st.bottom_line !== null && st.rating !== null, p),
+    kpis: sectionState(st.kpis !== null, p),
+    chart: sectionState(st.bars !== null, p),
+    pillars: sectionState(st.valuation !== null && st.health !== null && st.growth !== null, p),
+    quarterly: sectionState(st.quarterly !== null, p),
+  } satisfies Record<string, SectionState>
 })
 </script>
 
@@ -201,46 +220,52 @@ const showLoadingScreen = computed(() => {
   <div class="flex-1 flex flex-col min-w-0">
     <PageHeader>
       <template #lead>
-        <span>research</span>
-        <span class="text-[var(--paper-3)]">/</span>
-        <span class="text-[var(--paper-1)]" data-mono>{{ symbol }}</span>
-        <span class="text-[var(--paper-3)]">/</span>
-        <span class="text-[var(--paper-1)]">risk report</span>
+        <nav class="crumb" aria-label="breadcrumb">
+          <NuxtLink to="/research" class="crumb__link">research</NuxtLink>
+          <span class="crumb__sep" aria-hidden="true">/</span>
+          <NuxtLink :to="`/research/${encodeURIComponent(symbol)}`" class="crumb__link crumb__symbol" data-mono>{{ symbol }}</NuxtLink>
+          <span class="crumb__sep" aria-hidden="true">/</span>
+          <span class="crumb__leaf" aria-current="page">risk report</span>
+        </nav>
         <span v-if="phase === 'streaming'" class="streaming-tag">streaming<span class="dots"><span>.</span><span>.</span><span>.</span></span></span>
-        <span v-else-if="state.cached" class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">cached</span>
+        <span v-else-if="state.cached" class="label-eyebrow">cached</span>
       </template>
       <template #actions>
         <button
           v-if="phase === 'done' || phase === 'error'"
           type="button"
-          class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
+          class="regen text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
           @click="regenerate"
         >
-          regenerate ↻
+          <UIcon name="i-lucide-refresh-cw" class="regen__icon" aria-hidden="true" />
+          regenerate
         </button>
-        <NuxtLink
-          to="/research"
-          class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
-        >
-          ← research
-        </NuxtLink>
       </template>
     </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div v-if="showLoadingScreen" class="loading">
-        <div class="ring"><span /><span /><span /></div>
-        <p>connecting · waiting on the first sections to arrive…</p>
+      <div v-if="!hydrated && phase === 'error'" class="report">
+        <PageState kind="error" :message="errorMessage ?? 'the report failed to load'" @retry="regenerate" />
       </div>
 
-      <div v-else-if="phase === 'error' && errorMessage" class="errorbox">
-        <div class="mark">!</div>
-        <p>{{ errorMessage }}</p>
-        <button type="button" class="retry" @click="regenerate">retry</button>
+      <div v-else-if="!hydrated && phase !== 'done'" class="report">
+        <PageState kind="loading" message="connecting · waiting on the first sections to arrive…" />
       </div>
 
       <div v-else data-risk-report class="report">
-        <!-- Header — paints as soon as snapshot lands -->
+        <PageState
+          v-if="phase === 'error'"
+          kind="error"
+          :message="`report stopped early: ${errorMessage ?? 'unknown error'}`"
+          @retry="regenerate"
+        />
+        <section v-if="warnings.length > 0" class="warnings" role="status" aria-label="report warnings">
+          <span class="label-eyebrow">some sources failed</span>
+          <ul class="warnings__list">
+            <li v-for="(w, i) in warnings" :key="i" data-mono>{{ w }}</li>
+          </ul>
+        </section>
+
         <PriceHeader
           v-if="state.price"
           :symbol="state.symbol"
@@ -249,39 +274,43 @@ const showLoadingScreen = computed(() => {
           :change="state.price.change"
           :change-pct="state.price.change_pct"
           :currency="state.price.currency"
-          :generated-at="state.generated_at ?? new Date().toISOString()"
+          :generated-at="state.generated_at"
           :cached="state.cached"
         />
-        <div v-else class="skel header-skel surface-1">
+        <div v-else-if="sections.price === 'loading'" class="skel header-skel surface-1">
           <div class="skel-bar" style="width: 10rem; height: 1.6rem" />
           <div class="skel-bar" style="width: 14rem; height: 1.6rem; margin-left: auto" />
         </div>
+        <p v-else class="unavailable surface-1" data-mono>price unavailable</p>
 
-        <!-- Gauge + bottom-line live in the LLM event -->
         <div class="row two-up">
           <RiskGauge v-if="state.risk_score !== null" :score="state.risk_score" />
-          <div v-else class="skel surface-1 skel-block" style="min-height: 240px">
+          <div v-else-if="sections.gauge === 'loading'" class="skel surface-1 skel-block" style="min-height: 240px">
             <div class="ring"><span /><span /><span /></div>
             <span class="skel-label">scoring pillars…</span>
           </div>
+          <p v-else class="unavailable surface-1" data-mono>risk score unavailable</p>
 
           <BottomLine v-if="state.bottom_line && state.rating" :rating="state.rating" :bottom-line="state.bottom_line" />
-          <div v-else class="skel surface-1 skel-block" style="min-height: 240px">
+          <div v-else-if="sections.bottomLine === 'loading'" class="skel surface-1 skel-block" style="min-height: 240px">
             <div class="ring"><span /><span /><span /></div>
             <span class="skel-label">writing bottom line…</span>
           </div>
+          <p v-else class="unavailable surface-1" data-mono>bottom line unavailable</p>
         </div>
 
         <KpiStrip v-if="state.kpis" :kpis="state.kpis" />
-        <div v-else class="skel surface-1 kpi-skel">
+        <div v-else-if="sections.kpis === 'loading'" class="skel surface-1 kpi-skel">
           <div v-for="i in 4" :key="i" class="skel-bar" style="height: 2.2rem" />
         </div>
+        <p v-else class="unavailable surface-1" data-mono>key figures unavailable</p>
 
         <PriceChart12mo v-if="state.bars" :bars="state.bars" :markers="state.markers" />
-        <div v-else class="skel surface-1" style="min-height: 360px">
+        <div v-else-if="sections.chart === 'loading'" class="skel surface-1" style="min-height: 360px">
           <div class="ring"><span /><span /><span /></div>
           <span class="skel-label">fetching 12-month price from moomoo…</span>
         </div>
+        <p v-else class="unavailable surface-1" data-mono>12-month price chart unavailable</p>
 
         <ScoreBreakdown
           v-if="state.valuation && state.health && state.growth && state.risk_score !== null"
@@ -296,20 +325,22 @@ const showLoadingScreen = computed(() => {
           <PillarGrid title="health" :pillar="state.health" />
           <PillarGrid title="growth" :pillar="state.growth" />
         </div>
-        <div v-else class="skel surface-1" style="min-height: 200px">
+        <div v-else-if="sections.pillars === 'loading'" class="skel surface-1" style="min-height: 200px">
           <div class="ring"><span /><span /><span /></div>
           <span class="skel-label">analyzing valuation, health, growth…</span>
         </div>
+        <p v-else class="unavailable surface-1" data-mono>valuation, health and growth unavailable</p>
 
         <QuarterlyTrendTable v-if="state.quarterly" :rows="state.quarterly" />
-        <div v-else class="skel surface-1" style="min-height: 220px">
+        <div v-else-if="sections.quarterly === 'loading'" class="skel surface-1" style="min-height: 220px">
           <div class="ring"><span /><span /><span /></div>
           <span class="skel-label">pulling quarterly results…</span>
         </div>
+        <p v-else class="unavailable surface-1" data-mono>quarterly results unavailable</p>
 
         <section v-if="state.earnings_update" class="earnings surface-1">
           <header>
-            <span class="eyebrow">latest earnings update</span>
+            <span class="label-eyebrow">latest earnings update</span>
             <span class="date" data-mono>{{ state.earnings_update.date }}</span>
           </header>
           <h2>{{ state.earnings_update.headline }}</h2>
@@ -345,37 +376,62 @@ const showLoadingScreen = computed(() => {
   .three-up { grid-template-columns: repeat(3, 1fr); }
 }
 
-.loading, .errorbox {
-  max-width: 520px;
-  margin: 6rem auto;
-  text-align: center;
+.crumb {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.crumb__link {
+  color: var(--paper-3);
+  text-decoration: none;
+  transition: color 140ms ease;
+}
+.crumb__link:hover { color: var(--accent); }
+.crumb__symbol { color: var(--paper-1); letter-spacing: 0.06em; }
+.crumb__sep { color: var(--paper-3); }
+.crumb__leaf { color: var(--paper-0); }
+@media (pointer: coarse) {
+  .crumb__link { position: relative; }
+  .crumb__link::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
+.regen { gap: 0.4rem; min-height: 40px; }
+.regen__icon { width: 0.85rem; height: 0.85rem; }
+
+.warnings {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 1.25rem;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  color: var(--paper-2);
-  letter-spacing: 0.04em;
-}
-.errorbox .mark {
-  font-family: var(--font-mono);
-  font-size: 1.6rem;
-  color: var(--tape-down);
-}
-.retry {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--paper-1);
-  background: transparent;
+  gap: 0.4rem;
+  padding: 0.75rem 1rem;
   border: 1px solid var(--ink-line-strong);
-  padding: 0.55rem 1.1rem;
-  border-radius: 4px;
-  cursor: pointer;
+  border-radius: var(--radius-card);
 }
-.retry:hover { color: var(--accent); border-color: var(--accent); }
+.warnings__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+  color: var(--paper-2);
+  overflow-wrap: anywhere;
+}
+
+.unavailable {
+  margin: 0;
+  padding: 1rem 1.2rem;
+  font-size: 0.75rem;
+  color: var(--paper-3);
+}
 
 .ring { display: inline-flex; gap: 5px; }
 .ring span {
@@ -418,7 +474,7 @@ const showLoadingScreen = computed(() => {
 }
 
 .earnings {
-  border-radius: 6px;
+  border-radius: var(--radius-card);
   padding: 1.1rem 1.3rem 1.25rem;
   display: flex;
   flex-direction: column;
@@ -428,13 +484,6 @@ const showLoadingScreen = computed(() => {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-}
-.earnings .eyebrow {
-  font-family: var(--font-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--paper-3);
 }
 .earnings .date {
   font-family: var(--font-mono);
@@ -458,7 +507,7 @@ const showLoadingScreen = computed(() => {
 /* Skeletons — visible while a piece of state is still null. The shimmering
    bar uses a translateX gradient so the user sees the page is alive. */
 .skel {
-  border-radius: 6px;
+  border-radius: var(--radius-card);
   display: flex;
   align-items: center;
   justify-content: center;

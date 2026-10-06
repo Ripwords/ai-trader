@@ -1,5 +1,8 @@
 <script setup lang="ts">
+/* Hallmark · genre: modern-minimal · macrostructure: breadcrumb header, live run strip, latest-verdict strip, run workspace with history aside · design-system: design.md · designed-as-app */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { apiErrorMessage } from '~/lib/api-error'
+import { ageLabel, fmtConfidence, latestVerdict, ratingTone } from '~/utils/research-view'
 import { useAgentsRun } from '../../../composables/useAgentsRun'
 import { activeRuns } from '../../../composables/useActiveRuns'
 import { runSymbolMatches } from '../../../types/run-symbol'
@@ -42,9 +45,10 @@ const resolutionCandidates = computed(() =>
 )
 const router = useRouter()
 
-const { data: runHistory, refresh: refreshHistory } = await useFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs', {
+const {
+  data: runHistory, refresh: refreshHistory, status: historyStatus, error: historyError,
+} = await useFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs', {
   query: { symbol },
-  default: () => ({ rows: [] }),
 })
 
 const canResume = computed(() => status.value === 'failed' && runId.value !== null)
@@ -73,6 +77,8 @@ const liveRun = computed(() => {
 const liveRunId = computed(() =>
   activeRuns.value.find(r => runSymbolMatches(r.symbol, symbol.value))?.runId ?? liveRun.value?.id ?? null,
 )
+
+const latest = computed(() => latestVerdict(historyRows.value))
 
 const costSamples = computed(() =>
   historyRows.value.map(r => ({ costUsd: r.costUsd })),
@@ -134,16 +140,23 @@ interface StartOpts {
  * into. Hits the same DELETE endpoint the run-view's cancel button uses,
  * then refreshes history so the row flips to ``cancelled`` in the UI.
  */
+const cancelError = ref<string | null>(null)
+const cancelling = ref(false)
+
 async function onCancelInFlight(targetRunId: string) {
+  cancelError.value = null
+  cancelling.value = true
   try {
-    await fetch(
-      `/api/research/agents-run?run_id=${encodeURIComponent(targetRunId)}`,
-      { method: 'DELETE' },
-    )
+    await $fetch('/api/research/agents-run', {
+      method: 'DELETE',
+      query: { run_id: targetRunId },
+    })
   }
-  catch {
-    /* server error — DB row is still in 'running'; refresh below
-       so the user can see what state we're actually in. */
+  catch (e) {
+    cancelError.value = `cancel failed: ${apiErrorMessage(e, 'the server did not respond')}`
+  }
+  finally {
+    cancelling.value = false
   }
   void refreshHistory()
 }
@@ -261,7 +274,7 @@ watch(
           :to="`/research/report/${symbol}`"
           class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
         >
-          risk report →
+          risk report
         </NuxtLink>
       </template>
     </PageHeader>
@@ -302,9 +315,19 @@ watch(
               @click="onResume"
             >
               <span data-mono>resume from checkpoint</span>
-              <span class="resume-card__btn-glyph" data-mono>↻</span>
+              <UIcon name="i-lucide-rotate-ccw" class="resume-card__btn-icon" aria-hidden="true" />
             </button>
             <TechnicalDetails :rows="runId ? [{ label: 'run id', value: runId }] : []" />
+          </section>
+
+          <section
+            v-if="status === 'idle' && !canResume && latest"
+            class="verdict-strip"
+            aria-label="latest verdict"
+          >
+            <StatTile label="latest rating" :value="latest.rating ?? '—'" :tone="ratingTone(latest.rating)" size="lg" />
+            <StatTile label="confidence" :value="fmtConfidence(latest.confidence)" size="lg" />
+            <StatTile label="age" :value="ageLabel(latest.finishedAt ?? latest.startedAt, Date.now())" :sub="latest.tradeDate" size="lg" />
           </section>
 
           <RunCostEstimate
@@ -313,6 +336,8 @@ watch(
             :run-history="costSamples"
             :in-flight="!!liveRun"
             :in-flight-run-id="liveRun?.id ?? null"
+            :cancelling="cancelling"
+            :cancel-error="cancelError"
             @start="onStart"
             @cancel-in-flight="onCancelInFlight"
           />
@@ -363,7 +388,7 @@ watch(
             </p>
             <button type="button" class="resume-card__btn" @click="reconnect">
               <span data-mono>reconnect</span>
-              <span class="resume-card__btn-glyph" data-mono>↻</span>
+              <UIcon name="i-lucide-rotate-ccw" class="resume-card__btn-icon" aria-hidden="true" />
             </button>
           </section>
 
@@ -396,12 +421,19 @@ watch(
         <!-- ─── SECONDARY column: history. Quieter, smaller. ─── -->
         <aside class="research-secondary">
           <header class="aside-head">
-            <span class="aside-head__eyebrow">recent runs</span>
-            <span class="aside-head__count" data-mono>
+            <span class="label-eyebrow">recent runs</span>
+            <span v-if="runHistory" class="aside-head__count" data-mono>
               {{ historyRows.length }}
             </span>
           </header>
-          <RunHistoryTable :rows="historyRows" />
+          <PageState v-if="historyStatus === 'pending' && !runHistory" kind="loading" message="loading run history…" />
+          <PageState
+            v-else-if="historyError"
+            kind="error"
+            :message="apiErrorMessage(historyError, 'could not load run history')"
+            @retry="refreshHistory()"
+          />
+          <RunHistoryTable v-else :rows="historyRows" />
         </aside>
       </div>
     </main>
@@ -433,6 +465,7 @@ watch(
   /* Grow the touch area without growing the box, so the hover underline stays
      against the text instead of sitting 44px below it. */
   .crumb__link { position: relative; }
+  .resume-card__btn { min-height: 44px; }
   .crumb__link::after {
     content: '';
     position: absolute;
@@ -454,7 +487,7 @@ watch(
   color: var(--paper-0);
   cursor: default;
 }
-.crumb__sep { color: var(--ink-line-strong); }
+.crumb__sep { color: var(--paper-3); }
 
 .crumb__pill {
   display: inline-flex;
@@ -463,7 +496,7 @@ watch(
   padding: 0.18rem 0.55rem;
   border-radius: 2px;
   border: 1px solid var(--ink-line-strong);
-  font-size: 0.62rem;
+  font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--paper-3);
@@ -482,13 +515,11 @@ watch(
   height: 5px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 0 rgba(212, 169, 106, 0.5);
-  animation: crumb-beacon 1.4s ease-out infinite;
+  animation: crumb-beacon 1.4s ease-in-out infinite;
 }
 @keyframes crumb-beacon {
-  0%   { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0.55); }
-  70%  { box-shadow: 0 0 0 5px rgba(212, 169, 106, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0); }
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
 }
 
 /* ─── Layout: a generous editorial column for the active run, with a
@@ -498,7 +529,7 @@ watch(
   background:
     radial-gradient(
       ellipse at top,
-      rgba(212, 169, 106, 0.025) 0%,
+      color-mix(in srgb, var(--accent) 2.5%, transparent) 0%,
       transparent 55%
     ),
     var(--ink-0);
@@ -539,15 +570,8 @@ watch(
   padding: 0 0.2rem 0.4rem;
   border-bottom: 1px solid var(--ink-line);
 }
-.aside-head__eyebrow {
-  font-family: var(--font-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--paper-3);
-}
 .aside-head__count {
-  font-size: 0.7rem;
+  font-size: 11px;
   color: var(--paper-3);
   font-variant-numeric: tabular-nums;
 }
@@ -560,8 +584,7 @@ watch(
   padding: 1rem 1.2rem;
   background: var(--ink-1);
   border: 1px solid var(--ink-line-strong);
-  border-left: 3px solid var(--tape-down);
-  border-radius: 3px;
+  border-radius: var(--radius-card);
 }
 .resume-card__head {
   display: flex;
@@ -573,8 +596,8 @@ watch(
   align-items: center;
   gap: 0.45rem;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.22em;
+  font-size: 11px;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--tape-down);
 }
@@ -595,15 +618,15 @@ watch(
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
+  min-height: 40px;
   padding: 0.5rem 0.95rem;
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
   color: var(--paper-1);
   background: transparent;
   border: 1px solid var(--ink-line-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: color 160ms ease, border-color 160ms ease;
 }
@@ -615,9 +638,18 @@ watch(
   color: var(--accent);
   border-color: var(--accent);
 }
-.resume-card__btn-glyph {
-  font-size: 0.85rem;
-  line-height: 1;
+.resume-card__btn-icon { width: 0.9rem; height: 0.9rem; }
+
+/* ─── Latest verdict strip ─── */
+.verdict-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  padding-bottom: 1.2rem;
+  border-bottom: 1px solid var(--ink-line);
+}
+@media (max-width: 420px) {
+  .verdict-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* ─── Warm-up state ─── */
@@ -670,15 +702,15 @@ watch(
 /* ─── Error card ─── */
 .error-card {
   padding: 1rem 1.2rem;
-  background: rgba(224, 122, 95, 0.04);
-  border: 1px solid rgba(224, 122, 95, 0.25);
-  border-radius: 3px;
+  background: color-mix(in srgb, var(--tape-down) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tape-down) 25%, transparent);
+  border-radius: var(--radius-card);
 }
 .error-card__head { margin-bottom: 0.4rem; }
 .error-card__eyebrow {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.22em;
+  font-size: 11px;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--tape-down);
 }
@@ -721,7 +753,7 @@ watch(
 }
 .resolve-picker__meta {
   color: var(--paper-3);
-  font-size: 0.6rem;
+  font-size: 11px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }

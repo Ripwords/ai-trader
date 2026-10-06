@@ -1,3 +1,4 @@
+<!-- Hallmark · component: shell · genre: modern-minimal · design-system: design.md -->
 <script setup lang="ts">
 import { SECTIONS, activeSectionKey, type Section } from '~/lib/sections'
 
@@ -24,7 +25,7 @@ function isActive(s: Section): boolean {
       v-for="s in SECTIONS"
       :key="s.key"
       :to="s.to"
-      class="section-link"
+      class="section-link tap"
       :class="{ 'is-active': isActive(s) }"
       @click="emit('navigate', s)"
     >
@@ -47,7 +48,7 @@ function isActive(s: Section): boolean {
         <span class="stack-label">{{ s.label }}</span>
         <span class="stack-blurb">{{ s.blurb }}</span>
       </span>
-      <span class="stack-marker" aria-hidden="true">→</span>
+      <UIcon name="i-lucide-arrow-right" class="stack-marker" aria-hidden="true" />
     </NuxtLink>
   </nav>
 </template>
@@ -57,7 +58,7 @@ function isActive(s: Section): boolean {
 .section-link {
   position: relative;
   padding: 0.4rem 0.85rem;
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.7rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -89,7 +90,7 @@ function isActive(s: Section): boolean {
   gap: 1.25rem;
   align-items: center;
   padding: 1.05rem 1.5rem;
-  border-bottom: 1px solid var(--hairline, rgba(255,255,255,0.06));
+  border-bottom: 1px solid var(--ink-line);
   text-decoration: none;
   position: relative;
   transition: background-color 160ms ease;
@@ -105,8 +106,8 @@ function isActive(s: Section): boolean {
 }
 
 .stack-index {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
   letter-spacing: 0.18em;
   color: var(--paper-3);
   font-variant-numeric: tabular-nums;
@@ -126,15 +127,15 @@ function isActive(s: Section): boolean {
   color: var(--paper-0);
 }
 .stack-blurb {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.7rem;
   letter-spacing: 0.05em;
   color: var(--paper-3);
 }
 .stack-marker {
+  width: 16px;
+  height: 16px;
   color: var(--paper-3);
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 0.95rem;
   transition: transform 180ms ease, color 180ms ease;
 }
 .stack-row:hover .stack-marker { transform: translateX(4px); color: var(--accent); }

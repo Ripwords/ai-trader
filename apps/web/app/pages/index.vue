@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/* Hallmark · genre: modern-minimal · macrostructure: conversation + composer · design-system: design.md · designed-as-app */
 import { DefaultChatTransport, generateId, type UIMessage } from 'ai'
 import { Chat } from '@ai-sdk/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -16,6 +17,7 @@ import { afterRequest, endedWithoutFinish, followRunningReply, interruptionOf, r
 import { createChatFetch } from '../lib/chat-transport'
 import { buildMirrorStyle, cycleIndex, filterCommandPalette, splitSlashHighlight, type PaletteItem } from '../lib/slash'
 import { DEFAULT_SUGGESTIONS } from '../../server/lib/chat-suggestions'
+import { dayPart, type DayPart } from '../utils/greeting'
 
 definePageMeta({ title: 'chat' })
 
@@ -49,11 +51,13 @@ function bumpMaxSteps(delta: number) {
 }
 
 // The full hint is three lines of text on a phone, which grows the textarea to
-// two rows and leaves it scrolling before a character is typed. Resolves false
-// during SSR, so the server and the first client paint agree on the long form.
+// two rows and leaves it scrolling before a character is typed. The short form
+// waits for mount: the server can't see the width, and hydration must match it.
 const isNarrow = useMediaQuery('(max-width: 639px)')
+const hydrated = ref(false)
+onMounted(() => { hydrated.value = true })
 const promptPlaceholder = computed(() => (
-  isNarrow.value ? 'Ask anything…' : 'Show me NVDA daily, what\'s on my watchlist, any news on…'
+  hydrated.value && isNarrow.value ? 'Ask anything…' : 'Show me NVDA daily, what\'s on my watchlist, any news on…'
 ))
 
 // BorderBeam's ClientOnly fallback renders a second UChatPrompt, so both of
@@ -62,7 +66,7 @@ const promptPlaceholder = computed(() => (
 // padding-end grows with it so text never runs under the button.
 const PROMPT_UI = { body: '!pe-11 max-sm:!pe-14' }
 const SUBMIT_UI = {
-  base: '!absolute !bottom-0 !end-0 !size-8 max-sm:!size-11 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
+  base: '!absolute !bottom-0 !end-0 !size-8 max-sm:!size-11 !p-0 !rounded-md !bg-[var(--accent)] hover:!bg-[var(--color-brand-600)] !text-[var(--ink-0)] !inline-flex !items-center !justify-center',
   leadingIcon: '!size-4',
   trailingIcon: '!size-4',
 }
@@ -506,6 +510,18 @@ async function recordActiveDecision() {
 
 const hasMessages = computed(() => chat.messages.length > 0)
 
+// The server cannot know the reader's local hour, so the greeting stays
+// hidden until the client fills it in; rendering a guess would flash or
+// mismatch on hydration.
+const greetingPart = ref<DayPart | null>(null)
+onMounted(() => { greetingPart.value = dayPart(new Date().getHours()) })
+
+const detailsOpen = ref(false)
+const hasMemory = computed(() => {
+  const m = activeConversationMetadata.value
+  return !!m && (!!m.summary || m.decisions.length > 0)
+})
+
 // Opening prompts come from the user's own watchlist, positions, and alerts.
 // Client-only so the greeting paints first; the static list covers a failed
 // fetch, and a fresh draw happens on every new chat.
@@ -577,10 +593,10 @@ const contextBarClass = computed(() => {
   if (contextInfo.value?.status === 'warn') return 'bg-[var(--accent)]'
   return 'bg-[var(--paper-2)]'
 })
-const contextTooltip = computed(() => {
-  if (!contextInfo.value) return 'Context estimate is loading'
-  const src = contextInfo.value.contextWindowSource === 'env' ? 'configured' : 'model default'
-  return `Approximate prompt + output reserve: ${formatTokens(contextInfo.value.estimatedTotalTokens)} / ${formatTokens(contextInfo.value.contextWindow)} tokens (${src})`
+const contextNote = computed(() => {
+  if (!contextInfo.value) return 'Estimating how much of the context window this chat uses.'
+  const src = contextInfo.value.contextWindowSource === 'env' ? 'configured' : 'the model\'s default'
+  return `Approximate tokens for this chat plus room for the reply, against ${src} context window.`
 })
 const activeToolNames = computed(() => {
   const names = new Set<string>()
@@ -604,9 +620,9 @@ const liveStatusText = computed(() => {
   return ''
 })
 function agentsVerdict(output: unknown) {
-  const o = output as { rating?: 'strong-buy' | 'buy' | 'hold' | 'reduce' | 'sell'; confidence?: number; rationale?: string } | undefined
+  const o = output as { rating?: 'strong-buy' | 'buy' | 'hold' | 'reduce' | 'sell'; confidence?: number | null; rationale?: string } | undefined
   if (!o?.rating) return null
-  return { rating: o.rating, confidence: o.confidence ?? 0, rationale: o.rationale ?? '' }
+  return { rating: o.rating, confidence: o.confidence ?? null, rationale: o.rationale ?? '' }
 }
 </script>
 
@@ -637,8 +653,12 @@ function agentsVerdict(output: unknown) {
         class="flex-1 flex flex-col items-center justify-center page-x max-w-2xl mx-auto text-center gap-10"
       >
         <div class="rise-in">
-          <div class="text-4xl sm:text-5xl font-semibold tracking-tight text-[var(--paper-0)] leading-none">
-            Good <span class="text-[var(--accent)]">morning</span>
+          <div
+            class="text-4xl sm:text-5xl font-semibold tracking-tight text-[var(--paper-0)] leading-none"
+            :class="{ invisible: !greetingPart }"
+          >
+            <template v-if="greetingPart">Good <span class="text-[var(--accent)]">{{ greetingPart }}</span></template>
+            <template v-else>Hello</template>
           </div>
           <div class="font-mono text-xs sm:text-sm uppercase tracking-[0.25em] text-[var(--paper-3)] mt-4">
             ask anything · charts, news, your portfolio
@@ -737,7 +757,7 @@ function agentsVerdict(output: unknown) {
           </template>
           <p
             v-if="replyEnding(message) && message.id !== chat.messages.at(-1)?.id"
-            class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)]"
+            class="font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--paper-3)]"
           >
             {{ replyEnding(message)?.kind === 'stopped' ? 'stopped' : 'ended with an error' }}
           </p>
@@ -753,117 +773,155 @@ function agentsVerdict(output: unknown) {
           :class="interruption.kind === 'error' ? 'border-[var(--tape-down)]' : ''"
         >
           <p class="min-w-0 text-sm text-[var(--paper-2)] break-words">{{ interruptionText }}</p>
-          <button
-            type="button"
-            class="shrink-0 font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--accent)]"
+          <UButton
+            variant="ghost"
+            color="neutral"
+            size="sm"
+            icon="i-lucide-rotate-ccw"
+            class="tap shrink-0 min-h-8 font-mono text-[11px] lowercase"
             data-testid="chat-retry"
             @click="retryReply()"
           >
             retry
-          </button>
+          </UButton>
         </div>
       </div>
     </main>
 
     <footer class="composer-footer page-x border-t hairline shrink-0">
       <div class="max-w-3xl mx-auto">
-        <div class="mb-3 space-y-2">
+        <div class="mb-2 space-y-1">
           <div
-            v-if="chatId"
-            class="border hairline bg-[var(--ink-2)] px-3 py-2"
+            v-if="hasMemory"
+            class="flex items-baseline gap-2 min-w-0 text-xs"
+            data-testid="chat-memory"
           >
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div class="min-w-0">
-                <div class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)]">
-                  chat memory
-                  <span v-if="activeConversationMetadata?.decisions.length" class="text-[var(--paper-2)]">
-                    · {{ activeConversationMetadata.decisions.length }} decision{{ activeConversationMetadata.decisions.length === 1 ? '' : 's' }}
-                  </span>
-                </div>
-                <div class="mt-1 text-xs text-[var(--paper-2)] truncate">
-                  {{ activeConversationMetadata?.summary || conversationMessage || 'save a summary or decision record for this chat' }}
-                </div>
+            <span class="label-eyebrow shrink-0">memory</span>
+            <span v-if="activeConversationMetadata?.decisions.length" class="font-mono shrink-0 text-[var(--paper-2)]">
+              {{ activeConversationMetadata.decisions.length }} decision{{ activeConversationMetadata.decisions.length === 1 ? '' : 's' }}
+            </span>
+            <span v-if="activeConversationMetadata?.summary" class="min-w-0 truncate text-[var(--paper-2)]">
+              {{ activeConversationMetadata.summary }}
+            </span>
+          </div>
+
+          <div class="flex items-center justify-between gap-3 font-mono text-[11px] lowercase text-[var(--paper-3)]">
+            <span v-if="liveStatusText" class="flex min-w-0 items-center gap-2" role="status">
+              <span class="size-2 rounded-full bg-[var(--accent)] dot-pulse shrink-0" aria-hidden="true" />
+              <span class="truncate">{{ liveStatusText }}</span>
+            </span>
+            <span v-else />
+            <button
+              type="button"
+              class="tap shrink-0 inline-flex items-center gap-1.5 min-h-8 hover:text-[var(--accent)]"
+              :aria-expanded="detailsOpen"
+              aria-controls="composer-details"
+              data-testid="composer-details-toggle"
+              @click="detailsOpen = !detailsOpen"
+            >
+              <span>details</span>
+              <span v-if="contextError" class="text-[var(--tape-down)]">· context unavailable</span>
+              <span v-else-if="contextInfo" :class="contextToneClass">· {{ contextPct }}% context</span>
+              <UIcon
+                name="i-lucide-chevron-down"
+                class="size-3.5 transition-transform"
+                :class="{ 'rotate-180': detailsOpen }"
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+
+          <div
+            v-show="detailsOpen"
+            id="composer-details"
+            class="space-y-3 border hairline rounded-[var(--radius-sm)] bg-[var(--ink-2)] p-3 font-mono text-xs text-[var(--paper-3)]"
+          >
+            <div class="flex items-baseline justify-between gap-3 min-w-0">
+              <span class="shrink-0">model</span>
+              <span class="min-w-0 truncate text-[var(--paper-2)]">{{ contextInfo?.modelSpec ?? (contextError ? 'unknown' : 'loading…') }}</span>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <span>steps</span>
+                <span class="flex items-center gap-1">
+                  <button
+                    type="button"
+                    class="step-btn hover:text-[var(--accent)] disabled:opacity-40"
+                    :disabled="maxSteps <= MAX_STEPS_MIN"
+                    aria-label="decrease max agentic steps"
+                    @click="bumpMaxSteps(-5)"
+                  ><UIcon name="i-lucide-minus" class="size-3.5" aria-hidden="true" /></button>
+                  <input
+                    v-model.number="maxSteps"
+                    type="number"
+                    :min="MAX_STEPS_MIN"
+                    :max="MAX_STEPS_MAX"
+                    class="step-input w-8 bg-transparent text-center text-[var(--paper-2)] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                    aria-label="max agentic steps per message"
+                  >
+                  <button
+                    type="button"
+                    class="step-btn hover:text-[var(--accent)] disabled:opacity-40"
+                    :disabled="maxSteps >= MAX_STEPS_MAX"
+                    aria-label="increase max agentic steps"
+                    @click="bumpMaxSteps(5)"
+                  ><UIcon name="i-lucide-plus" class="size-3.5" aria-hidden="true" /></button>
+                </span>
               </div>
-              <div class="shrink-0 flex items-center gap-3">
-                <button
-                  class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--paper-3)]"
+              <p class="mt-1 font-sans text-[11px] text-[var(--paper-3)]">
+                Most model turns per message. Raise it for deep multi-tool research.
+              </p>
+            </div>
+
+            <div>
+              <div class="flex items-baseline justify-between gap-3">
+                <span>context</span>
+                <span v-if="contextError" class="text-[var(--tape-down)]">unavailable</span>
+                <span v-else :class="contextToneClass">
+                  {{ contextInfo ? `${formatTokens(contextInfo.estimatedTotalTokens)} / ${formatTokens(contextInfo.contextWindow)} (${contextPct}%)` : 'estimating' }}<span v-if="contextPending" class="text-[var(--paper-3)]">…</span>
+                </span>
+              </div>
+              <template v-if="!contextError">
+                <div class="mt-1.5 h-1 bg-[var(--ink-3)] rounded-sm overflow-hidden">
+                  <div
+                    class="h-full transition-[width] duration-300"
+                    :class="contextBarClass"
+                    :style="{ width: contextInfo ? `${contextPct}%` : '8%' }"
+                  />
+                </div>
+                <p class="mt-1 font-sans text-[11px] text-[var(--paper-3)]">{{ contextNote }}</p>
+              </template>
+              <p v-else class="mt-1 font-sans text-[11px] text-[var(--paper-3)]">
+                Couldn't estimate how much of the context window this chat uses.
+              </p>
+            </div>
+
+            <div v-if="chatId" class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <span>chat memory</span>
+              <span class="flex items-center gap-1">
+                <span v-if="conversationMessage" class="me-1 text-[var(--paper-2)]" role="status">{{ conversationMessage }}</span>
+                <UButton
+                  variant="ghost"
+                  color="neutral"
+                  size="xs"
+                  class="tap font-mono text-[11px] lowercase"
                   :disabled="!!conversationAction"
                   @click="summarizeActiveConversation()"
                 >
                   {{ conversationAction === 'summary' ? 'saving…' : 'summarize' }}
-                </button>
-                <button
-                  class="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--paper-3)]"
+                </UButton>
+                <UButton
+                  variant="ghost"
+                  color="neutral"
+                  size="xs"
+                  class="tap font-mono text-[11px] lowercase"
                   :disabled="!!conversationAction"
                   @click="recordActiveDecision()"
                 >
-                  {{ conversationAction === 'decision' ? 'saving…' : 'decision' }}
-                </button>
-              </div>
-            </div>
-          </div>
-          <div
-            v-if="liveStatusText"
-            class="flex items-center justify-between gap-4 font-mono text-xs uppercase tracking-[0.16em] text-[var(--paper-3)]"
-          >
-            <span>{{ liveStatusText }}</span>
-            <span class="size-2 rounded-full bg-[var(--accent)] dot-pulse shrink-0" />
-          </div>
-
-          <div
-            class="space-y-1"
-            :title="contextTooltip"
-          >
-            <div class="composer-meta font-mono text-xs uppercase tracking-[0.14em]">
-              <div class="min-w-0 text-[var(--paper-3)] truncate">
-                model
-                <span class="text-[var(--paper-2)] normal-case tracking-normal">{{ contextInfo?.modelSpec ?? 'loading' }}</span>
-              </div>
-              <div
-                class="flex items-center gap-1 text-[var(--paper-3)]"
-                title="Max agentic steps (model turns) per message. Raise this for deep multi-tool research so the assistant doesn't stop early."
-              >
-                <span>steps</span>
-                <button
-                  type="button"
-                  class="step-btn hover:text-[var(--accent)] disabled:opacity-40"
-                  :disabled="maxSteps <= MAX_STEPS_MIN"
-                  aria-label="decrease max agentic steps"
-                  @click="bumpMaxSteps(-5)"
-                >−</button>
-                <input
-                  v-model.number="maxSteps"
-                  type="number"
-                  :min="MAX_STEPS_MIN"
-                  :max="MAX_STEPS_MAX"
-                  class="step-input w-8 bg-transparent text-center text-[var(--paper-2)] normal-case tracking-normal outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
-                  aria-label="max agentic steps per message"
-                >
-                <button
-                  type="button"
-                  class="step-btn hover:text-[var(--accent)] disabled:opacity-40"
-                  :disabled="maxSteps >= MAX_STEPS_MAX"
-                  aria-label="increase max agentic steps"
-                  @click="bumpMaxSteps(5)"
-                >+</button>
-              </div>
-              <div v-if="contextError" class="text-[var(--tape-down)]">
-                context unavailable
-              </div>
-              <div v-else class="text-[var(--paper-3)]">
-                context
-                <span :class="contextToneClass">
-                  {{ contextInfo ? `${formatTokens(contextInfo.estimatedTotalTokens)} / ${formatTokens(contextInfo.contextWindow)} (${contextPct}%)` : 'estimating' }}
-                </span>
-                <span v-if="contextPending" class="text-[var(--paper-3)]">...</span>
-              </div>
-            </div>
-            <div class="h-1 bg-[var(--ink-2)] rounded-sm overflow-hidden">
-              <div
-                class="h-full transition-[width] duration-300"
-                :class="contextBarClass"
-                :style="{ width: contextInfo ? `${contextPct}%` : '8%' }"
-              />
+                  {{ conversationAction === 'decision' ? 'saving…' : 'record decision' }}
+                </UButton>
+              </span>
             </div>
           </div>
         </div>
@@ -891,7 +949,7 @@ function agentsVerdict(output: unknown) {
             No model provider is configured. <NuxtLink to="/settings" class="underline">Add one in Settings</NuxtLink>.
           </p>
           <p v-else-if="llmKeyUnreadable" class="mb-2 font-mono text-xs text-[var(--tape-down)]">
-            The stored API key can't be decrypted because ENCRYPTION_KEY changed.
+            The stored API key can't be decrypted because your server's encryption key changed.
             <NuxtLink to="/settings" class="underline">Re-enter it in Settings</NuxtLink>.
           </p>
           <!-- BorderBeam gates its render on onMounted, so it must be
@@ -963,7 +1021,7 @@ function agentsVerdict(output: unknown) {
 .rail-desktop {
   width: 300px;
   flex-shrink: 0;
-  border-right: 1px solid var(--hairline, rgba(255,255,255,0.06));
+  border-right: 1px solid var(--ink-line);
   flex-direction: column;
   height: 100%;
   background: var(--ink-0);
@@ -998,36 +1056,18 @@ function agentsVerdict(output: unknown) {
   }
 }
 
-/* model / steps / context. One row is 60-odd characters of mono text, which
-   only fits from tablet width up; below that the items wrap.
-
-   Flex rather than grid on purpose: a grid item spanning `1 / -1` contributes
-   its min-content width to the column tracks, so the long context string sized
-   the whole strip wider than the composer no matter what the other items did. */
-.composer-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 1rem;
-}
-.composer-meta > * { min-width: 0; }
-@media (min-width: 640px) {
-  .composer-meta { justify-content: space-between; }
-}
-
 .step-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1rem;
-  height: 1rem;
+  width: 1.5rem;
+  height: 1.5rem;
   line-height: 1;
 }
 @media (pointer: coarse) {
   /* Full 44px boxes with no negative margin. Clawing the width back with
      negative margins made adjacent hit areas overlap by 24px, so a tap between
-     `−` and the field landed on whichever won the stacking order. The strip
-     wraps, so the extra ~60px costs a row, not a clipped control. */
+     minus and the field landed on whichever won the stacking order. */
   .step-btn,
   .step-input {
     width: 44px;
@@ -1054,19 +1094,19 @@ function agentsVerdict(output: unknown) {
 }
 
 .slash-palette {
-  border: 1px solid var(--hairline, rgba(255,255,255,0.06));
-  border-radius: 6px;
-  background: var(--ink-1, #111);
+  border: 1px solid var(--ink-line);
+  border-radius: var(--radius-sm);
+  background: var(--ink-1);
   margin-bottom: 4px;
   overflow: hidden;
 }
 
 .slash-item--active {
-  background: var(--ink-2, #1a1a1a);
+  background: var(--ink-2);
 }
 
 .slash-item--active .slash-desc {
-  color: var(--paper-2, rgba(255,255,255,0.7));
+  color: var(--paper-2);
 }
 
 .beam-frame {
@@ -1079,16 +1119,16 @@ function agentsVerdict(output: unknown) {
 .slash-hl :deep(textarea) {
   color: transparent;
   -webkit-text-fill-color: transparent;
-  caret-color: var(--paper-0, #fff);
+  caret-color: var(--paper-0);
 }
 
 /* Text-highlight overlay: pixel-aligned with the textarea, painting the
    command token in the accent colour and the rest in the normal text colour.
    Colours are owned HERE, not copied off the textarea — its computed color is
    `transparent` while the highlight is active, so copying it made the args
-   after the command invisible. Same var + fallback as the caret above. */
+   after the command invisible. */
 .slash-mirror {
-  color: var(--paper-0, #fff);
+  color: var(--paper-0);
   z-index: 5;
   margin: 0;
   white-space: pre-wrap;
@@ -1100,7 +1140,7 @@ function agentsVerdict(output: unknown) {
 }
 
 .mirror-cmd {
-  color: var(--accent, #d4a96a);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -1118,19 +1158,19 @@ function agentsVerdict(output: unknown) {
 }
 
 .slash-item:hover {
-  background: var(--ink-2, #1a1a1a);
+  background: var(--ink-2);
 }
 
 .slash-name {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 0.8rem;
-  color: var(--accent, #d4a96a);
+  color: var(--accent);
   white-space: nowrap;
 }
 
 .slash-desc {
   font-size: 0.75rem;
-  color: var(--paper-3, rgba(255,255,255,0.4));
+  color: var(--paper-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

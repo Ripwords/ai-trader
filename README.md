@@ -13,7 +13,7 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 - Ask `any news on NVDA?` → Tavily-powered news cards.
 - Ask `show me my portfolio` → real positions + cash from your paper or live moomoo account; Ghostfolio MCP can add tracker/reconciliation context when configured.
 - Ask for a full ticker analysis → TradingAgents runs analysts, bull/bear debate, risk review, and a portfolio-manager verdict.
-- Manage paper algo strategies from `/algo`; scheduler order placement is paper-only.
+- Manage paper algo strategies from `/algo`; scheduler order placement is paper-only. **go live (paper)** stays disabled until the strategy is saved and its latest backtest clears the blocking checks, and the reason is printed under the button. A failed go-live, stop, or kill-switch request shows its error next to the control. Passing checks fold into one "all N checks passed" line. Below 1024px the strategy assistant opens from the **chat** button as a side panel (Esc closes it); order ids sit under **technical details** in the signals table.
 
 ## Prereqs
 
@@ -48,15 +48,15 @@ A sign-in lasts 30 days, then the app asks for the password again. After 10 wron
 
 ## Model providers
 
-Settings (`/settings`, also reachable from the `model · …` badge in the header) holds the LLM configuration. Nothing about models lives in `.env` except `ENCRYPTION_KEY`.
+Settings (`/settings`, also reachable from the `model · …` badge in the header on wide screens, or the model line at the foot of the menu drawer on phones) holds the LLM configuration. Nothing about models lives in `.env` except `ENCRYPTION_KEY`.
 
 - **Providers.** Add as many as you like from the online providers: Anthropic, OpenAI, Google, DeepSeek, and OpenRouter. Local model servers such as Ollama are not supported. Every provider needs an API key. Each uses its public endpoint unless you switch on **Override base URL**, for example to route through a company proxy. An override must be an `https://` URL on a public host: `localhost`, private, loopback and link-local addresses, bare container names such as `api`, and `.local` or `.internal` hosts are rejected. For models none of these host directly, use OpenRouter.
-- **Keys.** A key is encrypted with AES-256-GCM under `ENCRYPTION_KEY` before it is stored. The page shows only its last four characters. Editing a provider with the key field blank keeps the stored key, unless you change the base URL or switch the override off: then the key field is required, so a stored key is never sent to a host it was not entered for. Changing or losing `ENCRYPTION_KEY` makes stored keys unreadable, so re-enter them if you rotate it. Until you do, chat, Test connection and research runs report that the stored key can't be decrypted and point you to Settings.
+- **Keys.** A key is encrypted with AES-256-GCM under `ENCRYPTION_KEY` before it is stored. The page shows only its last four characters. Editing a provider with the key field blank keeps the stored key, unless you change the base URL or switch the override off: then the key field is required, so a stored key is never sent to a host it was not entered for. Changing or losing `ENCRYPTION_KEY` makes stored keys unreadable, so re-enter them if you rotate it. Until you do, chat, **test connection** and research runs report that the stored key can't be decrypted and point you to Settings.
 - **Test connection.** Lists the provider's models. It also sends a short request to each model the Models section currently points at this provider, saved or not, so a wrong model id for either the chat or the quick role shows up here rather than in chat. Switching a role to another provider clears its model unless that provider lists the same id. Editing a provider clears its earlier test result and model list.
 - **Models.** Two roles. The **chat model** runs chat, risk reports, strategy authoring, and the research debate's deep-thinking agents. The **quick model** runs news angles and the debate's fast analyst passes. Each role picks a provider and a model id. The model field suggests the provider's model list and accepts any id you type.
 - **Removing a provider.** Blocked while either role uses it. Point the role at another provider and save first.
 - **Upgrading from `LLM_MODEL` env vars.** On first start with an empty provider table, the web service imports `LLM_MODEL`, `LLM_MODEL_QUICK`, and the matching `*_API_KEY` from its environment into Settings and logs `[llm] imported …`. If `LLM_MODEL` names a provider with no key in the environment, only the keys are imported and the log says to pick the chat and quick models in Settings. It runs once. After that the env vars are ignored and can be deleted.
-- **Cost.** `/usage` prices calls for models in the built-in price table. Other models show as unpriced.
+- **Cost.** `/usage` prices calls for models in the built-in price table. Other models show as unpriced. Costs show to the cent; a cost under a cent shows two significant digits (e.g. `$0.0042`) so it doesn't read as free.
 
 Behind a reverse proxy, long chat and research streams can sit quiet between tokens. nginx drops a proxied response after 60 s of silence by default. Raising `proxy_read_timeout` (for example to `600s`) on the location that serves the web app is optional but avoids cut-off replies.
 
@@ -111,10 +111,23 @@ Ghostfolio mirrors the moomoo account, so the two sources overlap on purpose:
 
 | Layer | Source | Chat tools | Page |
 |---|---|---|---|
-| **Investments** — what you own on moomoo live, with day change and P&L | moomoo OpenD | `investment_portfolio`, `investment_performance`, `holdings_context` | `/portfolio` (moomoo tables) |
-| **Net worth** — every account incl. cash and non-investment assets | Ghostfolio | `portfolio_performance`, `ghostfolio_*` reads | `/portfolio` (headline, allocation, planning) |
+| **Investments** — what you own on moomoo live, with day change and P&L | moomoo OpenD | `investment_portfolio`, `investment_performance`, `holdings_context` | `/portfolio` → **holdings** tab |
+| **Net worth** — every account incl. cash and non-investment assets | Ghostfolio | `portfolio_performance`, `ghostfolio_*` reads | `/portfolio` key figures and **plan** tab |
 
-`holdings_context` reports both quantities for a symbol and flags a mismatch as a reconciliation issue rather than extra shares. Opening `/portfolio` records the day's snapshot of both layers (at most one automatic snapshot per UTC day; the performance card's capture button adds a manual one at any time), and the equity curve refreshes when a new point lands. There is no background scheduler, so days the page is not opened have no snapshot. The net-worth snapshot is recorded only when Ghostfolio reports a total; a moomoo account total (live or paper) is never written as net worth.
+`holdings_context` reports both quantities for a symbol and flags a mismatch as a reconciliation issue rather than extra shares. Opening `/portfolio` records the day's snapshot of both layers (at most one automatic snapshot per UTC day; the performance card's **save snapshot** button adds a manual one at any time), and the equity curve refreshes when a new point lands. There is no background scheduler, so days the page is not opened have no snapshot. The net-worth snapshot is recorded only when Ghostfolio reports a total; a moomoo account total (live or paper) is never written as net worth.
+
+### Portfolio page
+
+`/portfolio` opens on four key figures (net worth, 1-day change, P&L on cost, cash) and splits the rest into tabs. The tab is kept in the URL (`?tab=holdings`, `?tab=plan`, `?tab=risk`), so a tab can be bookmarked or linked.
+
+| Tab | What it shows |
+|---|---|
+| **overview** | A "needs attention" list (rebalance actions, a position over the concentration limit, goals that are behind) and the performance card with total return, max drawdown and 1/7/30-day change. |
+| **holdings** | One sortable positions table. When more than one source is connected, a switch picks all accounts, moomoo live or moomoo paper. Closed positions and empty accounts are folded behind a "show N" toggle. Below 640px the table becomes a card list with a sort picker. Price alerts sit underneath. |
+| **plan** | Adjusted net worth, liabilities, monthly surplus, savings rate; allocation against target with the buy/sell amount per bucket; goals; the last five monthly snapshots and a "save today" button. |
+| **risk** | Largest position and its weight, positions over 20% / 10%, and the correlation matrix. |
+
+**edit plan** (page header, or the plan tab) opens a side panel for targets, cash reserve, debts and monthly cashflow. Targets must add up to 100% before **save plan** is enabled; **scale to 100%** rescales them proportionally. Cancel or Esc discards the edits.
 
 ### Chat tool catalogue
 
@@ -146,7 +159,7 @@ Chat replies and research runs are generated on the server, apart from the page 
 
 - **Chat.** Reopening a chat while its reply is still generating replays the reply so far and follows it to the end. After a dropped connection the page waits until it is back online, then reattaches once. If that fails too, a card under the thread shows the error with **retry**. An error the server answers with (no model provider configured, a server error) is not a dropped connection: the card shows it with its HTTP status. A chat takes one reply at a time. Sending is blocked while a reply is generating, and a send from a second tab puts the text back in the box and follows the running reply. **Stop** ends the generation on the server and keeps the partial reply, marked stopped. It also works while the chat is still waiting for the first token; on a new chat the page then opens the thread the question was saved to. Stopping from one tab updates every other tab following the reply, and opening another chat stops following the old one. A reply that ended with an error or was stopped, a reply that finished without an answer (an empty completion, the model's output limit, a content filter, or the step limit reached on a tool call), or a question left without a reply (the web container restarted mid-reply) shows the same card, saying which, with **retry**. An error from the provider before the first token is saved with the thread, so a reload shows it too. Retrying does not save the question twice. Deleting a chat stops its reply.
 - **Ghostfolio.** The chat waits at most 3 s for the Ghostfolio MCP server. If the server is down, the reply goes ahead without the `ghostfolio_*` tools, and the connection is retried after 60 s.
-- **Research.** Leaving or reloading `/research/<symbol>` does not stop a run. Reopening the page replays its events and follows the rest, and a run started from chat or another tab shows up the same way. A symbol has at most one running run. Starting another, from the page or from chat, follows the one already running instead. A dropped stream reconnects on its own, and so does a stream that goes silent for 45 s (the server pings every 15 s). After repeated failures the page shows **connection lost** with **reconnect**, separate from the run's own status. The api sends heartbeats during long silent steps, and a run whose upstream goes quiet for 90 s ends as failed rather than hanging. A run whose start cannot reach the api ends as failed. If the web or api restarts mid-run, the run ends as failed. **Cancel** stops a running run; a run that finished first keeps its result. **Resume** continues a failed or cancelled run from its last checkpoint with the same options, and its events continue the same timeline. The button is disabled while the resume request is pending, and a completed run cannot be resumed.
+- **Research.** Leaving or reloading `/research/<symbol>` does not stop a run. Reopening the page replays its events and follows the rest, and a run started from chat or another tab shows up the same way. A symbol has at most one running run. Starting another, from the page or from chat, follows the one already running instead. A dropped stream reconnects on its own, and so does a stream that goes silent for 45 s (the server pings every 15 s). After repeated failures the page shows **connection lost** with **reconnect**, separate from the run's own status. The api sends heartbeats during long silent steps, and a run whose upstream goes quiet for 90 s ends as failed rather than hanging. A run whose start cannot reach the api ends as failed. If the web or api restarts mid-run, the run ends as failed. **Cancel** stops a running run; a run that finished first keeps its result. If the cancel request fails, the error shows next to the button. **Resume** continues a failed or cancelled run from its last checkpoint with the same options, and its events continue the same timeline. The button is disabled while the resume request is pending, and a completed run cannot be resumed.
 
 ### Research pipeline
 
@@ -265,7 +278,8 @@ flowchart LR
 | **Bull / Bear Researchers** | Debate the analyst reports for `max_debate_rounds` turns. | Analyst reports |
 | **Trader** | Synthesises debate into a concrete proposal (direction, sizing rationale). | Debate transcript |
 | **Aggressive / Neutral / Conservative Risk** | Debate the trader's proposal from three risk stances. | Proposal + reports |
-| **Portfolio Manager** | Authorises BUY / SELL / HOLD with a confidence + reasoning. | Risk debate |
+| **Portfolio Manager** | Authorises BUY / SELL / HOLD with reasoning. | Risk debate |
+| **Confidence judge** | Reads the whole debate and the final call, then states the probability (0–100) that the rating is right over the next 7 trading days, scored the same way the backtest scores it. A failed or unreadable reply stores no confidence rather than a placeholder. | Debate + decision |
 | **Execution** | Places the order against `SIMULATE` (paper) by default; `REAL` is gated by `MAX_DAILY_LIVE_NOTIONAL_USD`. | Manager decision → moomoo OpenD |
 
 Each run starts fresh: agents do not carry lessons from past decisions into later runs. The only extra context is the deterministic DCF valuation, which the Research Manager and Risk Manager see before they rule.

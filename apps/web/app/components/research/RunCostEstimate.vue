@@ -15,6 +15,10 @@ interface Props {
   inFlight?: boolean
   /** Run-id of the in-flight run, if any. Used in the disabled-state hint. */
   inFlightRunId?: string | null
+  /** The page's DELETE for the in-flight run is pending. */
+  cancelling?: boolean
+  /** Why the last cancel failed, shown next to the cancel control. */
+  cancelError?: string | null
 }
 
 const props = defineProps<Props>()
@@ -159,7 +163,8 @@ function onStart() {
           </li>
         </ul>
         <p v-if="!enoughAnalysts" class="cost__warn" data-mono>
-          ⚠ pick at least one analyst — pipeline can't run with none
+          <UIcon name="i-lucide-triangle-alert" class="cost__warn-icon" aria-hidden="true" />
+          pick at least one analyst. the pipeline can't run with none.
         </p>
       </fieldset>
 
@@ -243,16 +248,20 @@ function onStart() {
         class="cost__live-jump"
         data-mono
       >
-        view →
+        view run
       </NuxtLink>
       <button
         v-if="inFlightRunId"
         type="button"
         class="cost__live-cancel"
+        :disabled="cancelling"
         @click="emit('cancelInFlight', inFlightRunId)"
       >
-        <span data-mono>cancel</span>
+        <span data-mono>{{ cancelling ? 'cancelling…' : 'cancel' }}</span>
       </button>
+      <p v-if="cancelError" class="cost__live-error" role="alert" data-mono>
+        {{ cancelError }}
+      </p>
     </div>
     <TechnicalDetails
       v-if="inFlight"
@@ -267,7 +276,7 @@ function onStart() {
       @click="onStart"
     >
       <span data-mono>{{ inFlight ? 'run pending' : 'transmit run' }}</span>
-      <span class="cost__run-glyph" data-mono aria-hidden="true">→</span>
+      <UIcon name="i-lucide-arrow-right" class="cost__run-icon" aria-hidden="true" />
     </button>
   </section>
 </template>
@@ -311,13 +320,12 @@ function onStart() {
   padding: 0.55rem 0.85rem;
   background: var(--ink-2);
   border: 1px solid var(--ink-line);
-  border-left: 2px solid var(--accent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 0.8rem;
   flex-wrap: wrap;
 }
 .cost__estimate-label {
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--paper-3);
@@ -348,7 +356,7 @@ function onStart() {
 .cost__fieldset--span-2 { grid-column: 1 / -1; }
 .cost__legend {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: 11px;
   letter-spacing: 0.24em;
   text-transform: uppercase;
   color: var(--paper-3);
@@ -390,7 +398,7 @@ function onStart() {
 }
 .cost__analyst[data-on="true"] .cost__analyst-name { color: var(--paper-0); }
 .cost__analyst-hint {
-  font-size: 0.66rem;
+  font-size: 11px;
   color: var(--paper-3);
   flex: 1;
   line-height: 1.35;
@@ -450,7 +458,7 @@ function onStart() {
 }
 .cost__hint {
   margin: 0;
-  font-size: 0.66rem;
+  font-size: 11px;
   color: var(--paper-3);
 }
 
@@ -504,24 +512,21 @@ function onStart() {
   align-items: center;
   gap: 0.6rem;
   padding: 0.55rem 0.8rem;
-  background: rgba(212, 169, 106, 0.06);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-left: 2px solid var(--accent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   flex-wrap: wrap;
 }
 .cost__live-beacon {
   width: 7px; height: 7px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 0 rgba(212, 169, 106, 0.55);
-  animation: live-beacon 1.4s ease-out infinite;
+  animation: live-beacon 1.4s ease-in-out infinite;
   flex-shrink: 0;
 }
 @keyframes live-beacon {
-  0%   { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0.55); }
-  70%  { box-shadow: 0 0 0 7px rgba(212, 169, 106, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0); }
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
 }
 .cost__live-text {
   flex: 1;
@@ -560,7 +565,24 @@ function onStart() {
 .cost__live-cancel:hover {
   color: var(--tape-down);
   border-color: var(--tape-down);
-  background: rgba(224, 122, 95, 0.06);
+  background: color-mix(in srgb, var(--tape-down) 6%, transparent);
+}
+.cost__live-cancel:disabled { opacity: 0.6; cursor: progress; }
+.cost__live-error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--tape-down);
+}
+.cost__live-jump,
+.cost__live-cancel {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+}
+@media (pointer: coarse) {
+  .cost__live-jump,
+  .cost__live-cancel { min-height: 44px; }
 }
 
 /* ─── Run button ─── */
@@ -583,7 +605,7 @@ function onStart() {
   font-weight: 500;
 }
 .cost__run:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 88%, white);
+  background: color-mix(in srgb, var(--accent) 88%, var(--paper-0));
 }
 .cost__run:active:not(:disabled) { transform: translateY(1px); }
 .cost__run:disabled {
@@ -592,5 +614,6 @@ function onStart() {
   border-color: var(--ink-line-strong);
   cursor: not-allowed;
 }
-.cost__run-glyph { font-size: 1rem; }
+.cost__run-icon { width: 1rem; height: 1rem; }
+.cost__warn-icon { width: 0.85rem; height: 0.85rem; vertical-align: -0.12em; }
 </style>

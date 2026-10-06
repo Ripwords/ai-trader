@@ -231,23 +231,23 @@ function mosClass(v: string | number | null | undefined): string {
 
 .veto-label {
   text-transform: uppercase;
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.2em;
   font-weight: 700;
-  color: var(--tape-down, #e07a5f);
+  color: var(--tape-down);
   padding: 0.15rem 0.5rem;
-  border: 1px solid var(--tape-down, #e07a5f);
+  border: 1px solid var(--tape-down);
 }
 
 .veto-reason {
-  color: var(--paper-1, #e8dfd0);
+  color: var(--paper-1);
   font-size: 0.72rem;
   flex: 1;
 }
 
 .veto-cap {
-  font-size: 0.62rem;
-  color: var(--paper-3, #9e9789);
+  font-size: 0.6875rem;
+  color: var(--paper-3);
   text-transform: uppercase;
   letter-spacing: 0.12em;
 }
@@ -265,12 +265,12 @@ function mosClass(v: string | number | null | undefined): string {
 .val-symbol {
   font-size: 1.15rem;
   font-weight: 600;
-  color: var(--paper-0, #f5f0e8);
+  color: var(--paper-0);
   letter-spacing: 0.06em;
 }
 
 .val-badge {
-  font-size: 0.6rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   padding: 0.15rem 0.5rem;
@@ -278,15 +278,15 @@ function mosClass(v: string | number | null | undefined): string {
 }
 
 .badge-full {
-  color: var(--tape-up, #7ec99c);
+  color: var(--tape-up);
 }
 
 .badge-multiples_only {
-  color: var(--accent, #b09a6e);
+  color: var(--accent);
 }
 
 .badge-unavailable {
-  color: var(--tape-down, #e07a5f);
+  color: var(--tape-down);
 }
 
 /* Body */
@@ -311,8 +311,8 @@ function mosClass(v: string | number | null | undefined): string {
 
 .val-stat span {
   display: block;
-  color: var(--paper-3, #9e9789);
-  font-size: 0.6rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -320,24 +320,24 @@ function mosClass(v: string | number | null | undefined): string {
 .val-stat strong {
   display: block;
   margin-top: 0.45rem;
-  color: var(--paper-0, #f5f0e8);
+  color: var(--paper-0);
   font-size: 1.15rem;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
 .val-stat strong.pos {
-  color: var(--tape-up, #7ec99c);
+  color: var(--tape-up);
 }
 
 .val-stat strong.neg {
-  color: var(--tape-down, #e07a5f);
+  color: var(--tape-down);
 }
 
 /* Section heading */
 .val-section-title {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.62rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   margin-bottom: 0.5rem;
@@ -351,8 +351,8 @@ function mosClass(v: string | number | null | undefined): string {
 }
 
 .val-table th {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.6rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   text-align: left;
@@ -363,7 +363,7 @@ function mosClass(v: string | number | null | undefined): string {
 
 .val-table td {
   padding: 0.35rem 0.5rem;
-  color: var(--paper-1, #e8dfd0);
+  color: var(--paper-1);
   border-bottom: 1px solid rgba(255, 245, 230, 0.04);
   font-variant-numeric: tabular-nums;
 }
@@ -385,14 +385,14 @@ function mosClass(v: string | number | null | undefined): string {
 }
 
 .val-mult span {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.6rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .val-mult strong {
-  color: var(--paper-0, #f5f0e8);
+  color: var(--paper-0);
   font-size: 1rem;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
@@ -403,12 +403,12 @@ function mosClass(v: string | number | null | undefined): string {
   gap: 0.75rem;
   flex-wrap: wrap;
   margin-top: 0.5rem;
-  color: var(--paper-3, #9e9789);
-  font-size: 0.68rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
 }
 
 .val-mult-label {
-  color: var(--paper-3, #9e9789);
+  color: var(--paper-3);
   font-style: italic;
 }
 
@@ -417,8 +417,8 @@ function mosClass(v: string | number | null | undefined): string {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1rem;
-  color: var(--paper-3, #9e9789);
-  font-size: 0.68rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
 }
 
 /* Empty state */
@@ -428,7 +428,7 @@ function mosClass(v: string | number | null | undefined): string {
 
 .val-empty-label {
   margin: 0 0 0.5rem;
-  color: var(--tape-down, #e07a5f);
+  color: var(--tape-down);
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -444,8 +444,8 @@ function mosClass(v: string | number | null | undefined): string {
 }
 
 .val-warnings li {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.68rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   padding-left: 1rem;
   position: relative;
 }

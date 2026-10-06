@@ -1,0 +1,10 @@
+[
+  {
+    "date": "2026-10-06",
+    "scope": "app",
+    "macrostructure": "Workbench (header / key figures / tabbed workspace / slideover editor)",
+    "theme": "existing system (design.md: ink + paper + amber accent)",
+    "enrichment": "none",
+    "brief": "ai-trader · app-wide redesign, portfolio page rebuilt into tabs"
+  }
+]

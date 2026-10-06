@@ -52,7 +52,7 @@ defineProps<{ kpis: { label: string, value: string, tone: RiskCardTone }[] }>()
 
 .label {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--paper-3);

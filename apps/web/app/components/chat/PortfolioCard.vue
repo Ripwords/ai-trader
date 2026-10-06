@@ -58,7 +58,7 @@ function fmtSigned(n: number): string {
             :key="ccy"
             class="font-mono text-2xl text-[var(--paper-0)] mt-2" data-mono
           >{{ fmt(amt) }} <span class="text-sm text-[var(--paper-3)]">{{ ccy }}</span></div>
-          <div v-if="currencyLabel" class="font-mono text-[10px] text-[var(--paper-3)] mt-1" data-mono>
+          <div v-if="currencyLabel" class="font-mono text-[11px] text-[var(--paper-3)] mt-1" data-mono>
             ≈ {{ fmt(props.cash) }} {{ currencyLabel }} base
           </div>
         </template>

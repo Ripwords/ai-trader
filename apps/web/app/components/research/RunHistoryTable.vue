@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Rating } from '../../../types/agents'
+import { formatUsdCost } from '../../utils/usage-view'
 
 interface Row {
   id: string
@@ -36,9 +37,7 @@ function statusTone(s: string): 'up' | 'down' | 'neutral' | 'pending' {
 function fmtCost(c?: number | string | null): string {
   if (c === null || c === undefined) return '—'
   const n = typeof c === 'number' ? c : Number(c)
-  if (!Number.isFinite(n)) return '—'
-  if (n < 0.01) return `$${n.toFixed(4)}`
-  return `$${n.toFixed(2)}`
+  return Number.isFinite(n) ? formatUsdCost(n) : '—'
 }
 
 function fmtDuration(row: Row): string {
@@ -165,18 +164,18 @@ function rowClick(row: Row) {
   transition: height 140ms ease, top 140ms ease;
 }
 .row:hover {
-  background: rgba(255, 245, 230, 0.018);
+  background: color-mix(in srgb, var(--paper-0) 1.8%, transparent);
   padding-left: 0.6rem;
 }
 .row:hover::before { height: 60%; top: 20%; }
 .row:focus-visible {
-  background: rgba(255, 245, 230, 0.018);
+  background: color-mix(in srgb, var(--paper-0) 1.8%, transparent);
   padding-left: 0.6rem;
   outline: 1px solid var(--ink-line-strong);
   outline-offset: -1px;
 }
 .row[data-status="running"] {
-  background: linear-gradient(90deg, rgba(212, 169, 106, 0.04) 0%, transparent 70%);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 4%, transparent) 0%, transparent 70%);
 }
 
 .row__lead {
@@ -207,7 +206,7 @@ function rowClick(row: Row) {
 .row__rating[data-tone="neutral"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 .row__rating-pending { color: var(--paper-3); }
 .row__conf {
-  font-size: 0.66rem;
+  font-size: 11px;
   color: currentColor;
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
@@ -235,7 +234,7 @@ function rowClick(row: Row) {
 }
 .row__status {
   margin-left: auto;
-  font-size: 0.6rem;
+  font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--paper-3);

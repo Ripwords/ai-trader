@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/* Hallmark · genre: modern-minimal · macrostructure: page header with kill switch + new, inline create form, strategy list · design-system: design.md · designed-as-app */
 
 definePageMeta({ section: 'algo' })
 import { ref } from 'vue'
@@ -6,6 +7,7 @@ import type { AlgoState, AlgoStrategy, AlgoCadence } from '../../../server/llm/h
 import ConfirmModal from '~/components/settings/ConfirmModal.vue'
 import { askConfirm } from '~/lib/confirm'
 import { apiErrorMessage } from '~/lib/api-error'
+import { describeSizing } from '~/utils/algo-view'
 
 useHead({ title: 'algo' })
 
@@ -75,7 +77,7 @@ async function createStrategy() {
 async function remove(id: string, name: string) {
   const ok = await askConfirm(
     props => overlay.create(ConfirmModal, { destroyOnClose: true }).open(props),
-    { title: `Delete strategy "${name}"?`, description: 'Its signals and backtest runs are deleted with it.', confirmLabel: 'Delete' },
+    { title: `delete strategy "${name}"?`, description: 'its signals and backtest runs are deleted with it.', confirmLabel: 'delete' },
   )
   if (!ok) return
   actionError.value = null
@@ -104,16 +106,18 @@ function fmt(t: string): string {
           :disabled="killing"
           class="px-3 py-2 rounded transition-colors disabled:opacity-60"
           :class="state.kill_active
-            ? 'bg-[var(--tape-down)] text-[#07080a]'
-            : 'border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)]'"
+            ? 'bg-[var(--tape-down)] text-[var(--ink-0)]'
+            : 'border border-[var(--ink-line-strong)] text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)]'"
           @click="toggleKill"
-        >{{ state.kill_active ? '◼ kill active' : '◯ kill switch' }}</button>
-        <button
-          class="px-3 py-2 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
+        >{{ killing ? 'switching…' : state.kill_active ? 'kill active · release' : 'kill switch' }}</button>
+        <UButton
+          color="primary"
+          :icon="showNew ? 'i-lucide-x' : 'i-lucide-plus'"
+          class="px-3 py-2"
+          :label="showNew ? 'cancel' : 'new strategy'"
+          :aria-expanded="showNew"
           @click="showNew = !showNew"
-        >
-          {{ showNew ? 'cancel' : '+ new strategy' }}
-        </button>
+        />
       </template>
     </PageHeader>
 
@@ -141,21 +145,21 @@ function fmt(t: string): string {
               <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">name</span>
               <input
                 v-model="draft.name"
-                class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+                class="block w-full mt-1 bg-[var(--ink-1)] border border-[var(--ink-line-strong)] rounded px-3 py-2 text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
               />
             </label>
             <label class="block">
               <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">symbol</span>
               <input
                 v-model="draft.symbol"
-                class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+                class="block w-full mt-1 bg-[var(--ink-1)] border border-[var(--ink-line-strong)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
               />
             </label>
             <label class="block">
               <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">cadence</span>
               <select
                 v-model="draft.cadence"
-                class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+                class="block w-full mt-1 bg-[var(--ink-1)] border border-[var(--ink-line-strong)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
               >
                 <option value="1m">1m</option>
                 <option value="5m">5m</option>
@@ -175,35 +179,34 @@ function fmt(t: string): string {
             {{ error }}
           </div>
 
-          <button
+          <UButton
+            color="primary"
             :disabled="creating"
-            class="font-mono text-xs uppercase tracking-[0.18em] px-4 py-2 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f] disabled:opacity-60"
+            class="tap font-mono text-xs uppercase tracking-[0.18em] px-4 py-2"
+            :label="creating ? 'creating…' : 'create'"
             @click="createStrategy"
-          >
-            {{ creating ? 'creating…' : 'create' }}
-          </button>
+          />
         </div>
 
         <!-- Existing strategies -->
-        <div v-if="!listError && (!data || data.length === 0)" class="font-mono text-sm text-[var(--paper-3)] text-center py-16">
-          no strategies yet — click <span class="text-[var(--accent)]">+ new strategy</span> to author one.
-        </div>
+        <PageState
+          v-if="!listError && (!data || data.length === 0)"
+          kind="empty"
+          message="no strategies yet. use new strategy to write one."
+        />
         <div v-else class="space-y-3">
           <div
             v-for="s in data"
             :key="s.id"
-            class="surface-1 p-5 hover:border-[var(--accent)] transition-colors flex items-center justify-between"
+            class="surface-1 p-4 sm:p-5 hover:border-[var(--accent)] transition-colors flex items-center justify-between gap-3"
           >
             <NuxtLink :to="`/algo/${s.id}`" class="flex-1 min-w-0">
-              <div class="flex items-baseline gap-3">
+              <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <div class="text-base font-medium text-[var(--paper-0)]">{{ s.name }}</div>
-                <span
-                  class="font-mono text-xs uppercase tracking-wider"
-                  :class="s.enabled ? 'text-[var(--tape-up)]' : 'text-[var(--paper-3)]'"
-                >{{ s.enabled ? '● live (paper)' : '○ paused' }}</span>
+                <StatusPill :tone="s.enabled ? 'up' : 'neutral'" :label="s.enabled ? 'live (paper)' : 'paused'" />
               </div>
               <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mt-1">
-                {{ s.symbol }} · {{ s.cadence }} · {{ s.sizing_mode }} {{ s.sizing_value }} · created {{ fmt(s.created_at) }}
+                {{ s.symbol }} · {{ s.cadence }} · {{ describeSizing(s.sizing_mode, s.sizing_value) }} · created {{ fmt(s.created_at) }}
               </div>
             </NuxtLink>
             <button

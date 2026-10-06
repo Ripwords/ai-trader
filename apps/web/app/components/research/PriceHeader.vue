@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { ageLabel } from '~/utils/research-view'
 
 const props = defineProps<{
   symbol: string
@@ -8,7 +9,8 @@ const props = defineProps<{
   change: number | null
   changePct: number | null
   currency: string
-  generatedAt: string
+  /** Null until the report finishes; the age is hidden until then. */
+  generatedAt: string | null
   cached: boolean
 }>()
 
@@ -29,13 +31,7 @@ const fmtPct = computed(() => {
   return `${sign}${(props.changePct * 100).toFixed(2)}%`
 })
 
-const generatedAgo = computed(() => {
-  const diff = Date.now() - new Date(props.generatedAt).getTime()
-  const min = Math.round(diff / 60000)
-  if (min < 1) return 'moments ago'
-  if (min < 60) return `${min}m ago`
-  return `${Math.round(min / 60)}h ago`
-})
+const generatedAgo = computed(() => (props.generatedAt ? ageLabel(props.generatedAt, Date.now()) : null))
 </script>
 
 <template>
@@ -55,8 +51,10 @@ const generatedAgo = computed(() => {
       <span>{{ cached ? 'cached' : 'live' }}</span>
       <span class="dot">·</span>
       <span>moomoo</span>
-      <span class="dot">·</span>
-      <span>{{ generatedAgo }}</span>
+      <template v-if="generatedAgo">
+        <span class="dot">·</span>
+        <span>{{ generatedAgo }}</span>
+      </template>
     </div>
   </header>
 </template>

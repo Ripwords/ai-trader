@@ -96,7 +96,7 @@ header {
 }
 .copy {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--paper-3);
@@ -149,7 +149,7 @@ header {
 .stop[data-active="true"][data-side="down"] .tick { background: var(--tape-down); border-color: var(--tape-down); box-shadow: 0 0 14px color-mix(in srgb, var(--tape-down) 60%, transparent); }
 .label {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--paper-3);

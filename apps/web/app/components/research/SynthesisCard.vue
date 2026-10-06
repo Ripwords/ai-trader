@@ -72,7 +72,7 @@ const tone = computed<'plan' | 'trade' | 'verdict'>(() => {
   background: var(--ink-1);
   transition: background-color 140ms ease;
 }
-.synth__head:hover { background: rgba(255, 245, 230, 0.018); }
+.synth__head:hover { background: color-mix(in srgb, var(--paper-0) 1.8%, transparent); }
 
 .synth__rule {
   font-family: var(--font-mono);
@@ -105,7 +105,7 @@ const tone = computed<'plan' | 'trade' | 'verdict'>(() => {
   color: var(--paper-2);
   text-transform: uppercase;
   letter-spacing: 0.18em;
-  font-size: 0.66rem;
+  font-size: 11px;
   padding: 0.18rem 0.45rem;
   border-radius: 2px;
   border: 1px solid var(--ink-line);

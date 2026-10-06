@@ -232,7 +232,7 @@ function cellStyle(value: number | null) {
 
 .mpt-eyebrow {
   color: var(--paper-2);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
 }
@@ -240,13 +240,13 @@ function cellStyle(value: number | null) {
 .mpt-sub {
   margin-top: 0.35rem;
   color: var(--paper-3);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
 }
 
 .mpt-status {
   text-align: right;
   color: var(--paper-3);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.12em;
 }
@@ -282,7 +282,7 @@ function cellStyle(value: number | null) {
 .heatmap-title span {
   display: block;
   color: var(--paper-3);
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -299,14 +299,14 @@ function cellStyle(value: number | null) {
   display: block;
   margin-top: 0.25rem;
   color: var(--paper-2);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
 }
 
 .mpt-stat em {
   display: block;
   margin-top: 0.55rem;
   color: var(--paper-3);
-  font-size: 0.64rem;
+  font-size: 0.6875rem;
   font-style: normal;
   overflow-wrap: anywhere;
 }
@@ -328,7 +328,7 @@ function cellStyle(value: number | null) {
 
 .tick {
   fill: var(--paper-3);
-  font-size: 10px;
+  font-size: 0.6875rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   text-anchor: middle;
@@ -377,7 +377,7 @@ function cellStyle(value: number | null) {
 
 .heatmap-title strong {
   color: var(--paper-2);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   font-weight: 500;
 }
 
@@ -430,7 +430,7 @@ function cellStyle(value: number | null) {
   padding: 0 0.45rem;
   color: var(--paper-2);
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -440,14 +440,14 @@ function cellStyle(value: number | null) {
   min-width: 54px;
   padding: 0 0.3rem;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
 }
 
 .mpt-note {
   margin: 0;
   color: var(--paper-3);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   line-height: 1.5;
 }
 

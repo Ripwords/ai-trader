@@ -1,7 +1,9 @@
 <script setup lang="ts">
+/* Hallmark · genre: modern-minimal · macrostructure: page header, key-figure strip led by 30-day cost, cost-by-source bars, recent-calls table · design-system: design.md · designed-as-app */
 
 definePageMeta({ section: 'usage' })
 import { computed } from 'vue'
+import { formatUsdCost as formatUsd } from '../utils/usage-view'
 
 useHead({ title: 'usage' })
 
@@ -51,27 +53,14 @@ const maxCost = computed(() => {
   return rows.reduce((m, r) => Math.max(m, r.estimatedCostUsd), 0)
 })
 
-function formatUsd(n: number | null): string {
-  if (n === null) return 'unpriced'
-  if (n === 0) return '$0.00'
-  if (n < 0.01) return `$${n.toFixed(6)}`
-  return `$${n.toFixed(4)}`
-}
-
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
   return String(n)
 }
 
-function formatTs(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+function callsAndTokens(t: PeriodTotals): string {
+  return `${t.calls} call${t.calls === 1 ? '' : 's'} · ${formatTokens(t.totalTokens)} tokens`
 }
 
 function barWidth(cost: number): string {
@@ -95,6 +84,7 @@ function sourceColor(source: string): string {
       <template #actions>
         <button
           class="text-[var(--paper-3)] hover:text-[var(--accent)]"
+          :disabled="pending"
           @click="refresh()"
         >
           refresh
@@ -103,46 +93,30 @@ function sourceColor(source: string): string {
     </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-6xl mx-auto page-pad space-y-8">
-        <div v-if="pending && !data" class="font-mono text-sm text-[var(--paper-3)] text-center py-16">
-          loading…
-        </div>
-
-        <div v-else-if="error" class="font-mono text-sm text-[var(--tape-down)] whitespace-pre-wrap">
-          failed to load usage: {{ error.message }}
-        </div>
+      <div class="max-w-6xl mx-auto page-pad space-y-6">
+        <PageState v-if="pending && !data" kind="loading" message="loading usage…" />
+        <PageState v-else-if="error" kind="error" :message="`usage failed to load: ${error.message}`" @retry="refresh()" />
 
         <template v-else-if="data">
-          <!-- Period totals -->
-          <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div
-              v-for="period in [
-                { label: 'today', t: data.summary.totals.today },
-                { label: 'last 7 days', t: data.summary.totals.week },
-                { label: 'last 30 days', t: data.summary.totals.month },
-                { label: 'all time', t: data.summary.totals.allTime },
-              ]"
-              :key="period.label"
-              class="surface-1 p-5 space-y-2"
-            >
-              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
-                {{ period.label }}
-              </div>
-              <div class="font-mono stat-value text-[var(--paper-0)]">
-                {{ formatUsd(period.t.estimatedCostUsd) }}
-              </div>
-              <div class="font-mono text-xs text-[var(--paper-3)]">
-                {{ period.t.calls }} call{{ period.t.calls === 1 ? '' : 's' }} · {{ formatTokens(period.t.totalTokens) }} tokens
-              </div>
+          <section class="surface-1 p-4 sm:p-5 space-y-5" aria-label="spend">
+            <StatTile
+              label="last 30 days"
+              size="lg"
+              :value="formatUsd(data.summary.totals.month.estimatedCostUsd)"
+              :sub="`${data.summary.totals.month.calls} call${data.summary.totals.month.calls === 1 ? '' : 's'}`"
+            />
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-5 border-t hairline pt-5">
+              <StatTile label="today" :value="formatUsd(data.summary.totals.today.estimatedCostUsd)" :sub="callsAndTokens(data.summary.totals.today)" />
+              <StatTile label="last 7 days" :value="formatUsd(data.summary.totals.week.estimatedCostUsd)" :sub="callsAndTokens(data.summary.totals.week)" />
+              <StatTile label="all time" :value="formatUsd(data.summary.totals.allTime.estimatedCostUsd)" :sub="callsAndTokens(data.summary.totals.allTime)" />
+              <StatTile label="tokens" :value="formatTokens(data.summary.totals.month.totalTokens)" sub="last 30 days" />
             </div>
           </section>
 
           <!-- Cost by source -->
-          <section class="surface-1 p-6 space-y-5">
+          <section class="surface-1 p-4 sm:p-5 space-y-5">
             <div class="flex items-baseline justify-between">
-              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
-                cost by source · last 30d
-              </div>
+              <h2 class="label-eyebrow">cost by source · last 30d</h2>
               <div class="font-mono text-xs text-[var(--paper-3)]">
                 {{ data.summary.bySource.length }} source{{ data.summary.bySource.length === 1 ? '' : 's' }}
               </div>
@@ -177,9 +151,7 @@ function sourceColor(source: string): string {
           <!-- Recent calls -->
           <section class="space-y-4">
             <div class="flex items-baseline justify-between">
-              <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">
-                recent calls
-              </div>
+              <h2 class="label-eyebrow">recent calls</h2>
               <div class="font-mono text-xs text-[var(--paper-3)]">{{ data.recent.length }} rows</div>
             </div>
 
@@ -207,7 +179,7 @@ function sourceColor(source: string): string {
                       :key="row.id"
                       class="border-b hairline last:border-b-0"
                     >
-                      <td class="px-4 py-2.5 text-[var(--paper-2)]">{{ formatTs(row.ts) }}</td>
+                      <td class="px-4 py-2.5 text-[var(--paper-2)]"><NuxtTime :datetime="row.ts" month="short" day="numeric" hour="2-digit" minute="2-digit" /></td>
                       <td class="px-4 py-2.5 text-[var(--paper-1)]">{{ row.source }}</td>
                       <td class="px-4 py-2.5 text-[var(--paper-3)]">{{ row.modelSpec }}</td>
                       <td class="px-4 py-2.5 text-right text-[var(--paper-2)]">{{ formatTokens(row.inputTokens) }}</td>

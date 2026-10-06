@@ -16,7 +16,7 @@ const emit = defineEmits<{ close: [confirmed: boolean] }>()
     :ui="{ footer: 'justify-end' }"
   >
     <template #footer>
-      <UButton label="Cancel" color="neutral" variant="outline" @click="emit('close', false)" />
+      <UButton label="cancel" color="neutral" variant="outline" @click="emit('close', false)" />
       <UButton :label="confirmLabel" color="error" @click="emit('close', true)" />
     </template>
   </UModal>

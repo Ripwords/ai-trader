@@ -33,10 +33,10 @@ function toggle() {
   expanded.value = !expanded.value
 }
 
-const stateGlyph = computed(() => {
-  if (props.state === 'done') return '─'
-  if (props.state === 'failed') return '×'
-  return '◆'
+const stateIcon = computed(() => {
+  if (props.state === 'done') return 'i-lucide-check'
+  if (props.state === 'failed') return 'i-lucide-x'
+  return 'i-lucide-diamond'
 })
 
 const tone = computed(() => {
@@ -70,7 +70,7 @@ function previewSnippet(s: string | undefined): string {
   >
     <header class="step__head" @click="toggle">
       <span class="step__rule" aria-hidden="true">
-        <span class="step__rule-glyph" data-mono>{{ stateGlyph }}</span>
+        <UIcon :name="stateIcon" class="step__rule-glyph" aria-hidden="true" />
       </span>
       <span class="step__node">{{ label }}</span>
       <span v-if="toolCalls.length > 0" class="step__count" data-mono>
@@ -142,7 +142,7 @@ function previewSnippet(s: string | undefined): string {
 }
 .step[data-tone="running"] {
   /* Active card has a faint amber wash + a heartbeat pulse on its left rule. */
-  background: linear-gradient(90deg, rgba(212, 169, 106, 0.04) 0%, transparent 60%);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 4%, transparent) 0%, transparent 60%);
 }
 .step[data-tone="done"] { opacity: 0.78; }
 
@@ -155,7 +155,7 @@ function previewSnippet(s: string | undefined): string {
   user-select: none;
   border-top: 1px solid var(--ink-line);
 }
-.step__head:hover { background: rgba(255, 245, 230, 0.015); }
+.step__head:hover { background: color-mix(in srgb, var(--paper-0) 1.5%, transparent); }
 
 .step__rule {
   position: relative;
@@ -164,7 +164,8 @@ function previewSnippet(s: string | undefined): string {
   justify-content: center;
 }
 .step__rule-glyph {
-  font-size: 0.95rem;
+  width: 0.95rem;
+  height: 0.95rem;
   color: var(--paper-2);
   line-height: 1;
 }
@@ -258,7 +259,7 @@ function previewSnippet(s: string | undefined): string {
   word-break: break-all;
 }
 .tool__state {
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--paper-3);
@@ -288,8 +289,7 @@ function previewSnippet(s: string | undefined): string {
 .summary {
   padding: 0.6rem 0.85rem;
   background: var(--ink-2);
-  border-radius: 3px;
-  border-left: 2px solid var(--accent-soft);
+  border-radius: var(--radius-sm);
   max-width: 72ch;
   /* MarkdownText sets its own font sizes / colours; we only provide the
      surrounding card surface. */
@@ -303,8 +303,7 @@ function previewSnippet(s: string | undefined): string {
   padding: 0.7rem 0.95rem;
   background: var(--ink-1);
   border: 1px solid var(--ink-line);
-  border-left: 2px solid var(--accent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   /* Reports are long-form prose; let them breathe wider than tool log. */
   max-width: none;
 }
@@ -315,7 +314,7 @@ function previewSnippet(s: string | undefined): string {
 }
 .report__eyebrow {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--accent);

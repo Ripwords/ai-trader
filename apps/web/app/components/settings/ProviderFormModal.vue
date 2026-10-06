@@ -95,8 +95,8 @@ async function onSubmit(): Promise<void> {
       </UForm>
     </template>
     <template #footer>
-      <UButton label="Cancel" color="neutral" variant="outline" @click="emit('close', null)" />
-      <UButton type="submit" form="provider-form" :label="editing ? 'Save' : 'Add provider'" :loading="saving" />
+      <UButton label="cancel" color="neutral" variant="outline" @click="emit('close', null)" />
+      <UButton type="submit" form="provider-form" :label="editing ? 'save' : 'add provider'" :loading="saving" />
     </template>
   </UModal>
 </template>

@@ -16,9 +16,21 @@ import type { ChartMarker, PriceBar } from '../../../types/research'
 
 const props = defineProps<{ bars: PriceBar[], markers: ChartMarker[] }>()
 
-const UP = '#7ec99c'
-const DOWN = '#e07a5f'
-const ACCENT = '#d4a96a'
+// The chart draws on a canvas, which cannot resolve CSS variables, so the
+// design tokens are read once from :root when the chart mounts.
+const palette = { up: '', down: '', accent: '', muted: '', text: '', line: '', lineStrong: '' }
+
+function readPalette() {
+  const css = getComputedStyle(document.documentElement)
+  const token = (name: string) => css.getPropertyValue(name).trim()
+  palette.up = token('--tape-up')
+  palette.down = token('--tape-down')
+  palette.accent = token('--accent')
+  palette.muted = token('--paper-3')
+  palette.text = token('--paper-2')
+  palette.line = token('--ink-line')
+  palette.lineStrong = token('--ink-line-strong')
+}
 
 let chart: IChartApi | undefined
 let candle: ISeriesApi<'Candlestick'> | undefined
@@ -34,14 +46,14 @@ function toUnix(t: string): UTCTimestamp {
 function markerColor(kind: ChartMarker['kind']): string {
   switch (kind) {
     case 'earnings':
-      return ACCENT
+      return palette.accent
     case 'split':
-      return '#9aa0a6'
+      return palette.muted
     case 'guidance':
-      return UP
+      return palette.up
     case 'news':
     default:
-      return DOWN
+      return palette.down
   }
 }
 
@@ -82,7 +94,7 @@ function render() {
     props.bars.map(b => ({
       time: toUnix(b.time),
       value: b.volume,
-      color: b.close >= b.open ? `${UP}44` : `${DOWN}44`,
+      color: b.close >= b.open ? `${palette.up}44` : `${palette.down}44`,
     })),
   )
   chart.timeScale().fitContent()
@@ -110,32 +122,33 @@ function render() {
 
 onMounted(() => {
   if (!el.value) return
+  readPalette()
   chart = createChart(el.value, {
     layout: {
       background: { color: 'transparent' },
-      textColor: '#b6b1a4',
+      textColor: palette.text,
       fontFamily: 'JetBrains Mono, ui-monospace, monospace',
       fontSize: 12,
     },
     grid: {
-      vertLines: { color: 'rgba(255, 245, 230, 0.04)' },
-      horzLines: { color: 'rgba(255, 245, 230, 0.04)' },
+      vertLines: { color: palette.line },
+      horzLines: { color: palette.line },
     },
-    rightPriceScale: { borderColor: 'rgba(255, 245, 230, 0.08)' },
-    timeScale: { borderColor: 'rgba(255, 245, 230, 0.08)' },
+    rightPriceScale: { borderColor: palette.lineStrong },
+    timeScale: { borderColor: palette.lineStrong },
     crosshair: {
-      vertLine: { color: ACCENT, width: 1, style: 2, labelBackgroundColor: ACCENT },
-      horzLine: { color: ACCENT, width: 1, style: 2, labelBackgroundColor: ACCENT },
+      vertLine: { color: palette.accent, width: 1, style: 2, labelBackgroundColor: palette.accent },
+      horzLine: { color: palette.accent, width: 1, style: 2, labelBackgroundColor: palette.accent },
     },
     height: 360,
     autoSize: true,
   })
   candle = chart.addSeries(CandlestickSeries, {
-    upColor: UP,
-    downColor: DOWN,
+    upColor: palette.up,
+    downColor: palette.down,
     borderVisible: false,
-    wickUpColor: UP,
-    wickDownColor: DOWN,
+    wickUpColor: palette.up,
+    wickDownColor: palette.down,
   })
   vol = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: '' })
   vol.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
@@ -159,11 +172,11 @@ watch(() => [props.bars, props.markers], render, { deep: true })
       <div class="eyebrow">12-month price · daily</div>
       <div class="legend">
         <span class="legend-item"><span class="dot" style="background: var(--accent)" />earnings</span>
-        <span class="legend-item"><span class="dot" style="background: #7ec99c" />guidance</span>
-        <span class="legend-item"><span class="dot" style="background: #e07a5f" />news</span>
+        <span class="legend-item"><span class="dot" style="background: var(--tape-up)" />guidance</span>
+        <span class="legend-item"><span class="dot" style="background: var(--tape-down)" />news</span>
       </div>
     </header>
-    <div v-if="bars.length === 0" class="empty">chart unavailable · check moomoo OpenD</div>
+    <div v-if="bars.length === 0" class="empty">chart unavailable. moomoo returned no price history.</div>
     <div v-else ref="el" class="surface" />
   </section>
 </template>
@@ -189,7 +202,7 @@ header {
 }
 .eyebrow {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--paper-3);
@@ -198,7 +211,7 @@ header {
   display: inline-flex;
   gap: 1rem;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.18em;
   color: var(--paper-3);
   text-transform: uppercase;

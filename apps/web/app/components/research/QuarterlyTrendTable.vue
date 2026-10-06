@@ -76,7 +76,7 @@ function fmtMargin(v: number | null): string {
 }
 .eyebrow {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--paper-3);
@@ -89,7 +89,7 @@ function fmtMargin(v: number | null): string {
 }
 table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); }
 th {
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   font-weight: 500;

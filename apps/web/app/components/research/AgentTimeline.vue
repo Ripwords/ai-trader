@@ -204,7 +204,7 @@ const items = computed<RenderItem[]>(() => {
         class="valuation-veto-banner"
         role="alert"
       >
-        <span class="veto-icon">⚠</span>
+        <UIcon name="i-lucide-triangle-alert" class="veto-icon" aria-hidden="true" />
         <span class="veto-text">
           <strong>Valuation veto applied</strong> — rating capped from
           <span class="veto-rating">{{ item.original_rating }}</span> to
@@ -236,22 +236,24 @@ const items = computed<RenderItem[]>(() => {
   align-items: flex-start;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  border-radius: 0.5rem;
-  background-color: #fff3cd;
-  border: 1px solid #ffc107;
-  color: #664d03;
+  border-radius: var(--radius-card);
+  background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--paper-1);
   font-size: 0.9rem;
   line-height: 1.4;
 }
 
 .veto-icon {
   flex-shrink: 0;
-  font-size: 1.1rem;
+  width: 1.1rem;
+  height: 1.1rem;
   margin-top: 0.05rem;
+  color: var(--accent);
 }
 
 .veto-rating {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;

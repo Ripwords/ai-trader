@@ -166,7 +166,7 @@ onBeforeUnmount(() => {
   width: 100%;
   padding: 0.6rem 0.85rem;
   background: var(--ink-2);
-  border: 1px solid var(--hairline, rgba(255,245,230,0.12));
+  border: 1px solid var(--ink-line-strong);
   border-radius: 6px;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.95rem;
@@ -188,7 +188,7 @@ onBeforeUnmount(() => {
   transform: translateY(-50%);
   width: 12px;
   height: 12px;
-  border: 1.5px solid rgba(212, 169, 106, 0.3);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 720ms linear infinite;
@@ -202,9 +202,9 @@ onBeforeUnmount(() => {
   left: 0;
   right: 0;
   background: var(--ink-0);
-  border: 1px solid var(--hairline, rgba(255,245,230,0.14));
+  border: 1px solid var(--ink-line-strong);
   border-radius: 6px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 16px 48px color-mix(in srgb, var(--ink-0) 55%, transparent);
   max-height: 360px;
   display: flex;
   flex-direction: column;
@@ -229,7 +229,7 @@ onBeforeUnmount(() => {
   width: 100%;
   text-align: left;
   padding: 0.65rem 0.85rem;
-  border-bottom: 1px solid var(--hairline, rgba(255,245,230,0.06));
+  border-bottom: 1px solid var(--ink-line);
   background: transparent;
   transition: background-color 120ms ease;
 }
@@ -260,23 +260,23 @@ onBeforeUnmount(() => {
   align-items: flex-end;
   gap: 2px;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 0.6rem;
+  font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--paper-3);
   white-space: nowrap;
 }
-.sym-row-type { opacity: 0.6; font-size: 0.55rem; }
+.sym-row-type { opacity: 0.6; font-size: 11px; }
 
 .sym-foot {
   flex-shrink: 0;
   padding: 0.5rem 0.85rem;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 0.6rem;
+  font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--paper-3);
   background: var(--ink-2);
-  border-top: 1px solid var(--hairline, rgba(255,245,230,0.06));
+  border-top: 1px solid var(--ink-line);
 }
 </style>

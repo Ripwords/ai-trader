@@ -235,13 +235,13 @@ const smaLadder = computed<SmaRow[]>(() => {
 .ta-symbol {
   font-size: 1.15rem;
   font-weight: 600;
-  color: var(--paper-0, #f5f0e8);
+  color: var(--paper-0);
   letter-spacing: 0.06em;
 }
 
 .ta-name {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.68rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -254,22 +254,22 @@ const smaLadder = computed<SmaRow[]>(() => {
 }
 
 .ta-price {
-  color: var(--paper-0, #f5f0e8);
+  color: var(--paper-0);
   font-size: 1rem;
   font-variant-numeric: tabular-nums;
 }
 
 .ta-badge {
-  font-size: 0.6rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   padding: 0.15rem 0.5rem;
   border: 1px solid currentColor;
 }
 
-.trend-up { color: var(--tape-up, #7ec99c); }
-.trend-down { color: var(--tape-down, #e07a5f); }
-.trend-sideways { color: var(--accent, #b09a6e); }
+.trend-up { color: var(--tape-up); }
+.trend-down { color: var(--tape-down); }
+.trend-sideways { color: var(--accent); }
 
 /* Body */
 .ta-body {
@@ -279,8 +279,8 @@ const smaLadder = computed<SmaRow[]>(() => {
 }
 
 .ta-section-title {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.62rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   margin-bottom: 0.5rem;
@@ -304,7 +304,7 @@ const smaLadder = computed<SmaRow[]>(() => {
 }
 
 .ta-sig-badge {
-  font-size: 0.58rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   padding: 0.1rem 0.4rem;
@@ -312,24 +312,24 @@ const smaLadder = computed<SmaRow[]>(() => {
   flex-shrink: 0;
 }
 
-.sig-bullish { color: var(--tape-up, #7ec99c); }
-.sig-bearish { color: var(--tape-down, #e07a5f); }
-.sig-neutral { color: var(--paper-3, #9e9789); }
+.sig-bullish { color: var(--tape-up); }
+.sig-bearish { color: var(--tape-down); }
+.sig-neutral { color: var(--paper-3); }
 
 .ta-sig-indicator {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.62rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .ta-sig-reading {
-  color: var(--paper-1, #e8dfd0);
+  color: var(--paper-1);
 }
 
 .ta-sig-detail {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.65rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
 }
 
 /* Indicator stats grid */
@@ -347,8 +347,8 @@ const smaLadder = computed<SmaRow[]>(() => {
 
 .ta-stat span {
   display: block;
-  color: var(--paper-3, #9e9789);
-  font-size: 0.6rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -356,7 +356,7 @@ const smaLadder = computed<SmaRow[]>(() => {
 .ta-stat strong {
   display: block;
   margin-top: 0.4rem;
-  color: var(--paper-0, #f5f0e8);
+  color: var(--paper-0);
   font-size: 1rem;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
@@ -373,13 +373,13 @@ const smaLadder = computed<SmaRow[]>(() => {
   align-items: baseline;
   gap: 0.75rem;
   font-size: 0.72rem;
-  color: var(--paper-1, #e8dfd0);
+  color: var(--paper-1);
   font-variant-numeric: tabular-nums;
 }
 
 .ta-ladder-label {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.62rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   width: 4.5rem;
@@ -390,20 +390,20 @@ const smaLadder = computed<SmaRow[]>(() => {
 }
 
 .ta-ladder-rel {
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .ta-cross {
   margin-top: 0.5rem;
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
-.pos { color: var(--tape-up, #7ec99c); }
-.neg { color: var(--tape-down, #e07a5f); }
+.pos { color: var(--tape-up); }
+.neg { color: var(--tape-down); }
 
 /* Support / resistance */
 .ta-levels {
@@ -417,13 +417,13 @@ const smaLadder = computed<SmaRow[]>(() => {
   align-items: baseline;
   gap: 0.15rem 0.75rem;
   font-size: 0.72rem;
-  color: var(--paper-1, #e8dfd0);
+  color: var(--paper-1);
   font-variant-numeric: tabular-nums;
 }
 
 .ta-level-kind {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.62rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   width: 1rem;
 }
 
@@ -432,34 +432,34 @@ const smaLadder = computed<SmaRow[]>(() => {
 }
 
 .ta-level-dist {
-  color: var(--paper-3, #9e9789);
+  color: var(--paper-3);
   min-width: 4rem;
 }
 
 .ta-level-time {
-  color: var(--paper-3, #9e9789);
-  font-size: 0.65rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   min-width: 0;
 }
 
 /* Note / meta / error */
 .ta-note {
   margin: 0;
-  color: var(--accent, #b09a6e);
-  font-size: 0.68rem;
+  color: var(--accent);
+  font-size: 0.6875rem;
 }
 
 .ta-meta {
   margin: 0;
-  color: var(--paper-3, #9e9789);
-  font-size: 0.62rem;
+  color: var(--paper-3);
+  font-size: 0.6875rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .ta-error {
   margin: 0;
-  color: var(--tape-down, #e07a5f);
+  color: var(--tape-down);
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.12em;

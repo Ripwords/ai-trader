@@ -79,7 +79,7 @@ const speakerGlyph: Record<RiskSpeaker, string> = {
   align-items: center;
   gap: 0.7rem;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 11px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
 }
@@ -180,7 +180,7 @@ const speakerGlyph: Record<RiskSpeaker, string> = {
 .risk-debate__turn-num {
   margin-left: auto;
   color: var(--paper-3);
-  font-size: 0.6rem;
+  font-size: 11px;
   letter-spacing: 0.18em;
 }
 

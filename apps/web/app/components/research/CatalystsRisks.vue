@@ -6,7 +6,7 @@ defineProps<{ catalysts: string[], risks: string[] }>()
   <section class="cr">
     <div class="col surface-1" data-side="up">
       <header>
-        <span class="arrow">↗</span>
+        <UIcon name="i-lucide-trending-up" class="arrow" aria-hidden="true" />
         <span class="eyebrow">catalysts</span>
         <span class="count" data-mono>{{ catalysts.length }}</span>
       </header>
@@ -17,7 +17,7 @@ defineProps<{ catalysts: string[], risks: string[] }>()
     </div>
     <div class="col surface-1" data-side="down">
       <header>
-        <span class="arrow">↘</span>
+        <UIcon name="i-lucide-trending-down" class="arrow" aria-hidden="true" />
         <span class="eyebrow">risks</span>
         <span class="count" data-mono>{{ risks.length }}</span>
       </header>
@@ -64,9 +64,9 @@ header {
   gap: 0.5rem;
 }
 .arrow {
-  font-family: var(--font-mono);
-  font-size: 0.95rem;
-  line-height: 1;
+  width: 0.95rem;
+  height: 0.95rem;
+  flex-shrink: 0;
 }
 .col[data-side="up"]   .arrow { color: var(--tape-up); }
 .col[data-side="down"] .arrow { color: var(--tape-down); }

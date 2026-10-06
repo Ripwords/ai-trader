@@ -30,41 +30,41 @@ import { tags as t } from '@lezer/highlight'
 // look) — the app uses amber as the only chromatic brand color, paper tones
 // for body copy, and tape-up/tape-down only for finance signals. Three
 // colors carry the syntax highlighting:
-//   amber  (#d4a96a)  — keywords, control flow, decorators
+//   amber  (--accent) — keywords, control flow, decorators
 //   sand   (#c5a47a)  — string/number literals
 //   paper  tones      — everything else (default fg, dim for builtins)
 const algoHighlight = HighlightStyle.define([
   // amber — keywords & flow
-  { tag: [t.keyword, t.controlKeyword ?? t.keyword, t.modifier, t.self, t.null], color: '#d4a96a' },
-  { tag: t.definition(t.keyword), color: '#d4a96a' },
-  { tag: t.operatorKeyword, color: '#d4a96a' },
-  { tag: t.meta, color: '#d4a96a' },                                  // decorators
+  { tag: [t.keyword, t.controlKeyword ?? t.keyword, t.modifier, t.self, t.null], color: 'var(--accent)' },
+  { tag: t.definition(t.keyword), color: 'var(--accent)' },
+  { tag: t.operatorKeyword, color: 'var(--accent)' },
+  { tag: t.meta, color: 'var(--accent)' },                                  // decorators
 
   // muted paper-3 italic — comments
-  { tag: [t.comment, t.lineComment, t.blockComment], color: '#6f6c63', fontStyle: 'italic' },
+  { tag: [t.comment, t.lineComment, t.blockComment], color: 'var(--paper-3)', fontStyle: 'italic' },
 
   // warm sand — literals
   { tag: [t.string, t.special(t.string), t.regexp, t.escape], color: '#c5a47a' },
   { tag: [t.number, t.integer, t.float, t.bool, t.atom, t.literal, t.unit], color: '#c5a47a' },
 
   // paper-1 — declarations / types
-  { tag: [t.className, t.typeName, t.namespace], color: '#e8e3d8' },
+  { tag: [t.className, t.typeName, t.namespace], color: 'var(--paper-1)' },
   { tag: [t.function(t.variableName), t.function(t.propertyName), t.definition(t.variableName)],
-    color: '#e8e3d8' },
+    color: 'var(--paper-1)' },
 
   // paper-2 — built-ins & properties (slightly recessed)
-  { tag: t.standard(t.variableName), color: '#b6b1a4' },              // print, len, range
-  { tag: t.propertyName, color: '#b6b1a4' },
+  { tag: t.standard(t.variableName), color: 'var(--paper-2)' },              // print, len, range
+  { tag: t.propertyName, color: 'var(--paper-2)' },
 
   // paper-2 — punctuation / operators
   { tag: [t.operator, t.punctuation, t.bracket, t.paren, t.brace, t.derefOperator, t.separator],
-    color: '#b6b1a4' },
+    color: 'var(--paper-2)' },
 
   // paper-0 — fallback for variables and content
-  { tag: [t.variableName, t.content], color: '#f7f4ee' },
+  { tag: [t.variableName, t.content], color: 'var(--paper-0)' },
 
   // tape-down (red) for invalid syntax — the only place we use red
-  { tag: t.invalid, color: '#e07a5f' },
+  { tag: t.invalid, color: 'var(--tape-down)' },
 ])
 
 /**
@@ -150,7 +150,7 @@ function buildExtensions(): Extension[] {
         fontFamily: 'JetBrains Mono, ui-monospace, monospace',
         fontSize: '13px',
         borderRadius: '6px',
-        border: '1px solid rgba(255, 245, 230, 0.08)',
+        border: '1px solid var(--ink-line-strong)',
       },
       '&.cm-focused': {
         outline: 'none',
@@ -168,20 +168,20 @@ function buildExtensions(): Extension[] {
       },
       '.cm-gutters': {
         backgroundColor: 'transparent',
-        color: '#6f6c63',
+        color: 'var(--paper-3)',
         border: 'none',
       },
       '.cm-activeLineGutter, .cm-activeLine': {
-        backgroundColor: 'rgba(212, 169, 106, 0.04)',
+        backgroundColor: 'color-mix(in srgb, var(--accent) 4%, transparent)',
       },
       '.cm-selectionBackground, ::selection': {
-        backgroundColor: 'rgba(212, 169, 106, 0.25)',
+        backgroundColor: 'color-mix(in srgb, var(--accent) 25%, transparent)',
       },
       '&.cm-focused .cm-selectionBackground': {
-        backgroundColor: 'rgba(212, 169, 106, 0.30)',
+        backgroundColor: 'color-mix(in srgb, var(--accent) 30%, transparent)',
       },
       '.cm-matchingBracket': {
-        backgroundColor: 'rgba(212, 169, 106, 0.20)',
+        backgroundColor: 'color-mix(in srgb, var(--accent) 20%, transparent)',
         outline: '1px solid var(--accent)',
       },
       '.cm-scroller': {
@@ -275,6 +275,10 @@ async function ensureHighlighter() {
   return highlighter.value
 }
 
+// Pre-rendered shiki HTML keyed by line content. We only highlight unique
+// line strings once per diff to keep this snappy on big patches.
+const highlightedLines = ref<Map<string, string>>(new Map())
+
 // Per-hunk decision state. Resets whenever a fresh diff payload arrives.
 const decisions = ref<Map<string, HunkDecision>>(new Map())
 
@@ -289,10 +293,6 @@ watch([() => props.diff, decisions], () => {
     ? summarise(props.diff.hunks, decisions.value)
     : { accepted: 0, total: 0 }
 }, { immediate: true })
-
-// Pre-rendered shiki HTML keyed by line content. We only highlight unique
-// line strings once per diff to keep this snappy on big patches.
-const highlightedLines = ref<Map<string, string>>(new Map())
 
 async function rerenderDiff() {
   if (!props.diff) {
@@ -392,8 +392,8 @@ function emitDone() {
       aria-label="diff review"
     >
       <!-- Toolbar -->
-      <div class="flex items-center gap-2 px-3 py-2 border-b border-[rgba(255,245,230,0.08)] bg-[rgba(196,151,90,0.06)]">
-        <span class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
+      <div class="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-[var(--ink-line-strong)] bg-[color-mix(in_srgb,var(--accent)_6%,transparent)]">
+        <span class="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">
           review mode
         </span>
         <span class="font-mono text-xs text-[var(--paper-3)]">·</span>
@@ -403,19 +403,19 @@ function emitDone() {
         <div class="flex-1" />
         <button
           type="button"
-          class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 border border-[var(--tape-up)] text-[var(--tape-up)] rounded hover:bg-[var(--tape-up)] hover:text-[#07080a]"
+          class="tap inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider px-3 py-1.5 border border-[var(--tape-up)] text-[var(--tape-up)] rounded hover:bg-[var(--tape-up)] hover:text-[var(--ink-0)]"
           @click="acceptAll"
-        >✓ accept all</button>
+        ><UIcon name="i-lucide-check" class="size-3.5" aria-hidden="true" />accept all</button>
         <button
           type="button"
-          class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 border border-[var(--tape-down)] text-[var(--tape-down)] rounded hover:bg-[var(--tape-down)] hover:text-[#07080a]"
+          class="tap inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider px-3 py-1.5 border border-[var(--tape-down)] text-[var(--tape-down)] rounded hover:bg-[var(--tape-down)] hover:text-[var(--ink-0)]"
           @click="discardAll"
-        >✕ discard all</button>
+        ><UIcon name="i-lucide-x" class="size-3.5" aria-hidden="true" />discard all</button>
         <button
           type="button"
-          class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
+          class="tap inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[var(--ink-0)] rounded hover:bg-[var(--color-brand-600)]"
           @click="done"
-        >✓ done — {{ summary.accepted }} of {{ summary.total }} applied</button>
+        ><UIcon name="i-lucide-check" class="size-3.5" aria-hidden="true" />done · {{ summary.accepted }} of {{ summary.total }} applied</button>
       </div>
 
       <!-- Hunks -->
@@ -426,9 +426,9 @@ function emitDone() {
         <div
           v-for="(h, hi) in diff.hunks"
           :key="h.id"
-          class="border-t border-[rgba(255,245,230,0.06)] first:border-t-0"
+          class="border-t border-[var(--ink-line)] first:border-t-0"
           :class="decisionFor(h.id) === 'accepted'
-            ? 'border-l-2 border-l-[var(--tape-up)] bg-[rgba(126,201,156,0.04)]'
+            ? 'border-l-2 border-l-[var(--tape-up)] bg-[color-mix(in_srgb,var(--tape-up)_4%,transparent)]'
             : decisionFor(h.id) === 'rejected'
               ? 'border-l-2 border-l-[var(--tape-down)] opacity-50'
               : ''"
@@ -447,39 +447,39 @@ function emitDone() {
           </div>
 
           <!-- Hunk header bar with per-hunk controls -->
-          <div class="px-3 py-1 flex items-center gap-2 border-y border-[rgba(255,245,230,0.06)] bg-[rgba(255,245,230,0.02)]">
-            <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)]">
+          <div class="px-3 py-1 flex items-center gap-2 border-y border-[var(--ink-line)] bg-[color-mix(in_srgb,var(--paper-0)_2%,transparent)]">
+            <span class="font-mono text-[11px] uppercase tracking-wider text-[var(--paper-3)]">
               hunk {{ hi + 1 }}
             </span>
-            <span class="font-mono text-[10px] text-[var(--paper-3)]">
+            <span class="font-mono text-[11px] text-[var(--paper-3)]">
               −{{ h.baseLines.length }} +{{ h.proposedLines.length }}
             </span>
             <div class="flex-1" />
             <button
               type="button"
               :aria-label="`accept hunk ${hi + 1}`"
-              class="font-mono text-xs px-2 py-0.5 rounded border transition-colors"
+              class="tap inline-flex items-center px-2 py-0.5 rounded border transition-colors"
               :class="decisionFor(h.id) === 'accepted'
-                ? 'bg-[var(--tape-up)] text-[#07080a] border-[var(--tape-up)]'
-                : 'border-[rgba(255,245,230,0.12)] text-[var(--tape-up)] hover:border-[var(--tape-up)]'"
+                ? 'bg-[var(--tape-up)] text-[var(--ink-0)] border-[var(--tape-up)]'
+                : 'border-[var(--ink-line-strong)] text-[var(--tape-up)] hover:border-[var(--tape-up)]'"
               @click="acceptHunk(h)"
-            >✓</button>
+            ><UIcon name="i-lucide-check" class="size-3.5" aria-hidden="true" /></button>
             <button
               type="button"
               :aria-label="`reject hunk ${hi + 1}`"
-              class="font-mono text-xs px-2 py-0.5 rounded border transition-colors"
+              class="tap inline-flex items-center px-2 py-0.5 rounded border transition-colors"
               :class="decisionFor(h.id) === 'rejected'
-                ? 'bg-[var(--tape-down)] text-[#07080a] border-[var(--tape-down)]'
-                : 'border-[rgba(255,245,230,0.12)] text-[var(--tape-down)] hover:border-[var(--tape-down)]'"
+                ? 'bg-[var(--tape-down)] text-[var(--ink-0)] border-[var(--tape-down)]'
+                : 'border-[var(--ink-line-strong)] text-[var(--tape-down)] hover:border-[var(--tape-down)]'"
               @click="rejectHunk(h)"
-            >✕</button>
+            ><UIcon name="i-lucide-x" class="size-3.5" aria-hidden="true" /></button>
           </div>
 
           <!-- Removed lines -->
           <div
             v-for="(ln, ri) in h.baseLines"
             :key="`${h.id}-r-${ri}`"
-            class="px-3 flex items-start bg-[rgba(224,122,95,0.10)]"
+            class="px-3 flex items-start bg-[color-mix(in_srgb,var(--tape-down)_10%,transparent)]"
             :class="decisionFor(h.id) === 'rejected' ? 'line-through opacity-80' : ''"
           >
             <span class="select-none w-4 shrink-0 text-[var(--tape-down)]">-</span>
@@ -493,7 +493,7 @@ function emitDone() {
           <div
             v-for="(ln, ai) in h.proposedLines"
             :key="`${h.id}-a-${ai}`"
-            class="px-3 flex items-start bg-[rgba(126,201,156,0.10)]"
+            class="px-3 flex items-start bg-[color-mix(in_srgb,var(--tape-up)_10%,transparent)]"
             :class="decisionFor(h.id) === 'rejected' ? 'line-through opacity-80' : ''"
           >
             <span class="select-none w-4 shrink-0 text-[var(--tape-up)]">+</span>

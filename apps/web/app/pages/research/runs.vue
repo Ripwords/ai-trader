@@ -1,5 +1,8 @@
 <script setup lang="ts">
+/* Hallmark · genre: modern-minimal · macrostructure: breadcrumb header, 24h key-figure strip, filterable run table · design-system: design.md · designed-as-app */
 import { computed, ref } from 'vue'
+import { apiErrorMessage } from '~/lib/api-error'
+import { fmtRate, fmtUsd, rateTone, runStats } from '~/utils/research-view'
 
 definePageMeta({ section: 'research' })
 
@@ -19,9 +22,9 @@ interface AgentRunRow {
 
 const symbolFilter = ref('')
 
-const { data, refresh, pending } = useLazyFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs', {
-  default: () => ({ rows: [] }),
-})
+const { data, refresh, status, error } = useLazyFetch<{ rows: AgentRunRow[] }>('/api/research/agent-runs')
+
+const loading = computed(() => status.value === 'pending' && !data.value)
 
 const runs = computed(() => {
   const all = data.value?.rows ?? []
@@ -29,94 +32,110 @@ const runs = computed(() => {
   const filtered = f ? all.filter(r => r.symbol.toUpperCase().includes(f)) : all
   return filtered.map(r => ({
     ...r,
-    costUsd: r.costUsd === null || r.costUsd === undefined ? null : Number(r.costUsd),
+    costUsd: r.costUsd == null ? null : Number(r.costUsd),
   }))
 })
 
-const stats = computed(() => {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000
-  const window = runs.value.filter(r => new Date(r.startedAt).getTime() >= cutoff)
-  if (window.length === 0) return { total: 0, avgCost: 0, completedRate: 0 }
-  const completed = window.filter(r => r.status === 'complete').length
-  const costs = window.map(r => (typeof r.costUsd === 'number' ? r.costUsd : 0))
-  const sumCost = costs.reduce((a, b) => a + b, 0)
-  return {
-    total: window.length,
-    avgCost: sumCost / window.length,
-    completedRate: Math.round((completed / window.length) * 100),
-  }
-})
-
-function fmtCost(n: number): string {
-  return `$${n.toFixed(2)}`
-}
+const stats = computed(() => runStats(runs.value, Date.now()))
 </script>
 
 <template>
   <div class="flex-1 flex flex-col min-w-0">
     <PageHeader>
       <template #lead>
-        <span>research · agent runs</span>
+        <nav class="crumb" aria-label="breadcrumb">
+          <NuxtLink to="/research" class="crumb__link">research</NuxtLink>
+          <span class="crumb__sep" aria-hidden="true">/</span>
+          <span class="crumb__leaf" aria-current="page">agent runs</span>
+        </nav>
       </template>
       <template #actions>
-        <NuxtLink
-          to="/research"
-          class="text-[var(--paper-3)] hover:text-[var(--accent)] transition-colors"
-        >
-          ← research
-        </NuxtLink>
-        <button
-          :disabled="pending"
-          class="px-3 py-2 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--accent)] hover:border-[var(--accent)] rounded transition-colors disabled:opacity-60"
+        <UButton
+          variant="ghost"
+          color="neutral"
+          size="sm"
+          icon="i-lucide-refresh-cw"
+          :loading="status === 'pending'"
           @click="refresh()"
         >
-          {{ pending ? 'refreshing…' : '↻ refresh' }}
-        </button>
+          refresh
+        </UButton>
       </template>
     </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-6xl mx-auto page-pad space-y-8">
-        <section class="grid grid-cols-1 min-[520px]:grid-cols-3 gap-4">
-          <div class="surface-1 p-5">
-            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">runs (24h)</div>
-            <div class="stat-value-lg mt-2 font-medium font-mono">{{ stats.total }}</div>
-          </div>
-          <div class="surface-1 p-5">
-            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">avg cost</div>
-            <div class="stat-value-lg mt-2 font-medium font-mono">{{ fmtCost(stats.avgCost) }}</div>
-          </div>
-          <div class="surface-1 p-5">
-            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">completion rate</div>
-            <div
-              class="stat-value-lg mt-2 font-medium font-mono"
-              :class="stats.completedRate >= 90 ? 'text-[var(--tape-up)]' : stats.completedRate >= 50 ? 'text-[var(--paper-0)]' : 'text-[var(--tape-down)]'"
-            >{{ stats.completedRate }}%</div>
-          </div>
-        </section>
-
-        <section class="flex items-end gap-4">
-          <label class="block flex-1 max-w-xs">
-            <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">filter symbol</span>
-            <input
-              v-model="symbolFilter"
-              placeholder="NVDA"
-              class="runs-filter block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
+      <div class="max-w-6xl mx-auto page-pad space-y-6">
+        <PageState v-if="loading" kind="loading" message="loading agent runs…" />
+        <PageState
+          v-else-if="error"
+          kind="error"
+          :message="apiErrorMessage(error, 'could not load agent runs')"
+          @retry="refresh()"
+        />
+        <template v-else>
+          <section class="grid grid-cols-2 min-[520px]:grid-cols-3 gap-4">
+            <StatTile label="runs (24h)" :value="String(stats.total)" size="lg" />
+            <StatTile label="avg cost (24h)" :value="fmtUsd(stats.avgCost)" size="lg" />
+            <StatTile
+              label="completion rate (24h)"
+              :value="fmtRate(stats.completionRate)"
+              :tone="rateTone(stats.completionRate)"
+              size="lg"
             />
-          </label>
-          <div class="font-mono text-xs text-[var(--paper-3)] pb-2">
-            {{ runs.length }} {{ runs.length === 1 ? 'run' : 'runs' }}
-          </div>
-        </section>
+          </section>
 
-        <RunHistoryTable :rows="runs" />
+          <section class="flex items-end gap-4">
+            <label class="block flex-1 max-w-xs">
+              <span class="label-eyebrow">filter symbol</span>
+              <UInput v-model="symbolFilter" placeholder="NVDA" class="mt-1 w-full" :ui="{ base: 'font-mono' }" />
+            </label>
+            <div class="font-mono text-xs text-[var(--paper-3)] pb-2">
+              {{ runs.length }} {{ runs.length === 1 ? 'run' : 'runs' }}
+            </div>
+          </section>
+
+          <PageState
+            v-if="(data?.rows.length ?? 0) === 0"
+            kind="empty"
+            message="no agent runs yet. open a ticker from research to start one."
+          />
+          <PageState
+            v-else-if="runs.length === 0"
+            kind="empty"
+            :message="`no runs match ${symbolFilter.trim().toUpperCase()}`"
+          />
+          <RunHistoryTable v-else :rows="runs" />
+        </template>
       </div>
     </main>
   </div>
 </template>
 
 <style scoped>
+.crumb {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+}
+.crumb__link {
+  color: var(--paper-3);
+  text-decoration: none;
+  transition: color 140ms ease;
+}
+.crumb__link:hover { color: var(--accent); }
+.crumb__sep { color: var(--paper-3); }
+.crumb__leaf { color: var(--paper-0); }
 @media (pointer: coarse) {
-  .runs-filter { min-height: 44px; }
+  .crumb__link { position: relative; }
+  .crumb__link::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    min-width: 44px;
+    height: 44px;
+  }
 }
 </style>

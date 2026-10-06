@@ -52,7 +52,7 @@ defineProps<{ round: number; bull: string; bear: string }>()
   align-items: center;
   gap: 0.7rem;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 11px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--paper-3);

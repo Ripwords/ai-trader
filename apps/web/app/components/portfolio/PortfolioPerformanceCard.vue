@@ -8,6 +8,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import type { EquityPoint, PerformanceStats } from '../../../server/lib/portfolio-history'
+import { fmtPct, pnlTone } from '../../utils/portfolio-view'
 
 const props = defineProps<{
   series: EquityPoint[]
@@ -100,18 +101,6 @@ watch(() => props.series, render, { deep: false })
 
 const hasHistory = computed(() => props.series.length > 0)
 
-const fmtPct = (n: number | null | undefined, digits = 2) => {
-  if (n == null || !Number.isFinite(n)) return '—'
-  return `${n >= 0 ? '+' : ''}${n.toFixed(digits)}%`
-}
-
-const pnlClass = (n: number | null | undefined) => {
-  if (n == null || !Number.isFinite(n)) return 'text-[var(--paper-2)]'
-  if (n > 0) return 'tape-up'
-  if (n < 0) return 'tape-down'
-  return 'text-[var(--paper-2)]'
-}
-
 const sinceLabel = computed(() => {
   const first = props.stats?.firstAt
   return first ? `since ${first.slice(0, 10)}` : 'vs first snapshot'
@@ -119,10 +108,10 @@ const sinceLabel = computed(() => {
 </script>
 
 <template>
-  <section class="surface-1 p-6">
-    <div class="flex items-baseline justify-between gap-4 mb-5">
-      <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">performance</div>
-      <div class="flex items-baseline gap-4">
+  <section class="surface-1 p-4 sm:p-6">
+    <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 mb-5">
+      <h2 class="label-eyebrow">performance</h2>
+      <div class="flex items-baseline gap-4 whitespace-nowrap">
         <span v-if="stats && stats.count > 0" class="font-mono text-xs text-[var(--paper-3)]">
           {{ stats.count }} snapshot{{ stats.count === 1 ? '' : 's' }}
         </span>
@@ -131,7 +120,7 @@ const sinceLabel = computed(() => {
           :disabled="capturing"
           @click="emit('capture')"
         >
-          {{ capturing ? 'capturing…' : 'capture snapshot' }}
+          {{ capturing ? 'saving…' : 'save snapshot' }}
         </button>
       </div>
     </div>
@@ -147,49 +136,22 @@ const sinceLabel = computed(() => {
     <div v-else-if="!hasHistory" class="py-10 text-center space-y-2">
       <div class="font-mono text-sm text-[var(--paper-2)]">no snapshots yet</div>
       <div class="font-mono text-xs text-[var(--paper-3)]">
-        the equity curve gains a point each day this page is opened — or take the first one now with "capture snapshot".
+        the equity curve gains a point each day this page is opened — or save the first one now.
       </div>
     </div>
 
     <div v-else class="space-y-5">
-      <div class="grid grid-cols-1 min-[380px]:grid-cols-2 md:grid-cols-5 gap-3">
-        <div class="bg-[var(--ink-2)] border hairline p-3">
-          <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">total return</div>
-          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.totalReturnPct)" data-mono>
-            {{ fmtPct(stats?.totalReturnPct) }}
-          </div>
-          <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">{{ sinceLabel }}</div>
-        </div>
-        <div class="bg-[var(--ink-2)] border hairline p-3">
-          <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">max drawdown</div>
-          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.maxDrawdownPct)" data-mono>
-            {{ fmtPct(stats?.maxDrawdownPct) }}
-          </div>
-          <div class="font-mono text-[10px] text-[var(--paper-3)] mt-1">peak to trough</div>
-        </div>
-        <div class="bg-[var(--ink-2)] border hairline p-3">
-          <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">1d</div>
-          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.periodReturns.d1)" data-mono>
-            {{ fmtPct(stats?.periodReturns.d1) }}
-          </div>
-        </div>
-        <div class="bg-[var(--ink-2)] border hairline p-3">
-          <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">7d</div>
-          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.periodReturns.d7)" data-mono>
-            {{ fmtPct(stats?.periodReturns.d7) }}
-          </div>
-        </div>
-        <div class="bg-[var(--ink-2)] border hairline p-3">
-          <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">30d</div>
-          <div class="mt-1 font-mono stat-value" :class="pnlClass(stats?.periodReturns.d30)" data-mono>
-            {{ fmtPct(stats?.periodReturns.d30) }}
-          </div>
-        </div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-x-4 gap-y-5">
+        <StatTile label="total return" :value="fmtPct(stats?.totalReturnPct)" :sub="sinceLabel" :tone="pnlTone(stats?.totalReturnPct)" />
+        <StatTile label="max drawdown" :value="fmtPct(stats?.maxDrawdownPct)" sub="peak to trough" :tone="pnlTone(stats?.maxDrawdownPct)" />
+        <StatTile label="1 day" :value="fmtPct(stats?.periodReturns.d1)" :tone="pnlTone(stats?.periodReturns.d1)" />
+        <StatTile label="7 days" :value="fmtPct(stats?.periodReturns.d7)" :tone="pnlTone(stats?.periodReturns.d7)" />
+        <StatTile label="30 days" :value="fmtPct(stats?.periodReturns.d30)" :tone="pnlTone(stats?.periodReturns.d30)" />
       </div>
 
       <div>
         <div ref="chartEl" class="w-full" />
-        <div class="mt-2 flex items-center gap-5 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">
+        <div class="mt-2 flex items-center gap-5 font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--paper-3)]">
           <span class="flex items-center gap-1.5">
             <span class="inline-block w-3 h-[2px]" :style="{ background: ACCENT }" /> net worth
           </span>
@@ -201,7 +163,7 @@ const sinceLabel = computed(() => {
       </div>
     </div>
 
-    <div v-if="message" class="mt-3 font-mono text-[10px] text-[var(--paper-3)] truncate">
+    <div v-if="message" class="mt-3 font-mono text-[11px] text-[var(--paper-3)] truncate">
       {{ message }}
     </div>
   </section>

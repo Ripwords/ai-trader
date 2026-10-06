@@ -180,7 +180,7 @@ const ringDash = computed(() => {
 }
 .verdict__eyebrow {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.28em;
   text-transform: uppercase;
   color: var(--paper-3);
@@ -280,7 +280,7 @@ const ringDash = computed(() => {
   font-variant-numeric: tabular-nums;
 }
 .verdict__ring-unit {
-  font-size: 0.65rem;
+  font-size: 11px;
   line-height: 1;
   color: var(--paper-3);
   /* Nudge the ``%`` so it baselines with the digits instead of sitting

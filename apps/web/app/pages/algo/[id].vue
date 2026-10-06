@@ -1,16 +1,20 @@
 <script setup lang="ts">
+/* Hallmark · genre: modern-minimal · macrostructure: page header + go-live controls, maturity gate, config form, backtest, signals feed, assistant docked at lg and off-canvas below · design-system: design.md · designed-as-app */
 
 definePageMeta({ section: 'algo' })
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useMagicKeys, whenever } from '@vueuse/core'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { onKeyStroke, useMagicKeys, useMediaQuery, whenever } from '@vueuse/core'
 import type {
   AlgoBacktestResult,
+  AlgoCadence,
   AlgoSignal,
+  AlgoSizingMode,
   AlgoState,
   AlgoStrategy,
 } from '../../../server/llm/http'
 import { assessAlgoMaturity, type AlgoMaturityStatus } from '../../../server/lib/algo-risk'
 import { buildHunks, type DiffPayload } from '../../components/algo/diff-hunks'
+import { SIZING_MODES, foldChecks, sizingMeta } from '../../utils/algo-view'
 
 const route = useRoute()
 const id = computed(() => route.params.id as string)
@@ -113,26 +117,38 @@ function formatApiError(e: unknown): string {
       })
       .join('\n')
   }
-  return (e as Error)?.message ?? 'save failed'
+  return (e as Error)?.message ?? 'request failed'
 }
 
 const backtest = ref<AlgoBacktestResult | null>(null)
 const backtesting = ref(false)
 const bars = ref(200)
 const maturity = computed(() => assessAlgoMaturity(draft.value, backtest.value, signals.value ?? []))
+const checkFold = computed(() => foldChecks(maturity.value.checks))
+const sizing = computed(() => sizingMeta(draft.value.sizing_mode))
+const placedOrders = computed(() => (signals.value ?? []).filter(s => s.order_id))
+
+const CADENCES: AlgoCadence[] = ['1m', '5m', '15m', '1h', '1d']
+const fieldUi = {
+  label: 'label-eyebrow',
+  help: 'mt-1 text-xs leading-snug text-[var(--paper-3)]',
+}
 const canEnableLive = computed(() => strategy.value?.enabled || (!dirty.value && maturity.value.status !== 'block'))
 
+const goLiveBlocker = computed(() => {
+  if (strategy.value?.enabled) return null
+  if (dirty.value) return 'save your changes and run a fresh backtest first'
+  if (maturity.value.status === 'block') return 'run a clean backtest and clear the blocking checks below first'
+  return null
+})
+
 const toggling = ref(false)
+const liveError = ref<string | null>(null)
 async function toggleEnabled() {
-  if (!strategy.value!.enabled) {
-    if (dirty.value) {
-      saveError.value = 'Save changes and run a fresh backtest before enabling live paper ticks.'
-      return
-    }
-    if (maturity.value.status === 'block') {
-      saveError.value = 'Live paper enable blocked by the maturity checklist. Run a successful backtest and resolve blocking checks first.'
-      return
-    }
+  liveError.value = null
+  if (goLiveBlocker.value) {
+    liveError.value = goLiveBlocker.value
+    return
   }
   toggling.value = true
   try {
@@ -142,14 +158,26 @@ async function toggleEnabled() {
     })
     await refresh()
     await refreshState()
+  } catch (e) {
+    liveError.value = `${strategy.value!.enabled ? 'stop' : 'go live'} failed: ${formatApiError(e)}`
   } finally {
     toggling.value = false
   }
 }
 
+const killing = ref(false)
+const killError = ref<string | null>(null)
 async function toggleKill() {
   const path = state.value?.kill_active ? 'unkill' : 'kill'
-  state.value = await $fetch<AlgoState>(`/api/algo/${path}`, { method: 'POST' })
+  killError.value = null
+  killing.value = true
+  try {
+    state.value = await $fetch<AlgoState>(`/api/algo/${path}`, { method: 'POST' })
+  } catch (e) {
+    killError.value = `kill switch: ${formatApiError(e)}`
+  } finally {
+    killing.value = false
+  }
 }
 
 function shortTs(t: string): string {
@@ -166,10 +194,23 @@ function shortTs(t: string): string {
 const activeReview = ref<DiffPayload | null>(null)
 const finishedReview = ref<{ blockKey: string, summary: { accepted: number; total: number } } | null>(null)
 
-// Mobile-only: the chat sidebar is off-canvas by default at narrow widths
-// and revealed via a header toggle. On md+ it stays in the flex layout
-// permanently and `sidebarOpen` is irrelevant.
+// Below lg the assistant is an off-canvas panel; at lg+ it docks beside the
+// editor. It stays mounted (slid off-screen and inert) rather than living in
+// a USlideover, because a slideover unmounts its content on close and the
+// assistant's chat history lives in the component.
+const isDocked = useMediaQuery('(min-width: 1024px)')
 const sidebarOpen = ref(false)
+const chatToggleRef = ref<HTMLButtonElement | null>(null)
+const sidebarRef = ref<HTMLDivElement | null>(null)
+const sidebarInert = computed(() => !isDocked.value && !sidebarOpen.value)
+
+watch(isDocked, (docked) => { if (docked) sidebarOpen.value = false })
+watch(sidebarOpen, async (open, wasOpen) => {
+  await nextTick()
+  if (open) sidebarRef.value?.focus()
+  else if (wasOpen) chatToggleRef.value?.focus()
+})
+onKeyStroke('Escape', () => { if (sidebarOpen.value) sidebarOpen.value = false })
 
 // Ref to the CodeEditor so the global Cmd+S handler can call formatCode()
 // regardless of which element currently has focus. CodeMirror's own keymap
@@ -225,7 +266,7 @@ type ProposedConfig = Partial<{
   initial_capital: number
   commission_bps: number
   slippage_bps: number
-  sizing_mode: 'fixed_qty' | 'pct_equity' | 'fixed_cash'
+  sizing_mode: AlgoSizingMode
   sizing_value: number
   pyramiding_max: number
 }>
@@ -278,229 +319,138 @@ async function runBacktest() {
         <span>algo · edit</span>
       </template>
       <template #actions>
+        <span v-if="killError" role="alert" class="text-[var(--tape-down)] normal-case tracking-normal">{{ killError }}</span>
         <button
           v-if="state"
-          class="px-3 py-2 rounded transition-colors"
+          :disabled="killing"
+          class="px-3 py-2 rounded transition-colors disabled:opacity-60"
           :class="state.kill_active
-            ? 'bg-[var(--tape-down)] text-[#07080a]'
-            : 'border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)]'"
+            ? 'bg-[var(--tape-down)] text-[var(--ink-0)]'
+            : 'border border-[var(--ink-line-strong)] text-[var(--paper-3)] hover:text-[var(--tape-down)] hover:border-[var(--tape-down)]'"
           @click="toggleKill"
-        >{{ state.kill_active ? '◼ kill active — click to release' : '◯ kill switch' }}</button>
-        <NuxtLink to="/algo" class="text-[var(--paper-3)] hover:text-[var(--accent)]">
-          ← strategies
+        >{{ killing ? 'switching…' : state.kill_active ? 'kill active · release' : 'kill switch' }}</button>
+        <NuxtLink to="/algo" class="gap-1.5 text-[var(--paper-3)] hover:text-[var(--accent)]">
+          <UIcon name="i-lucide-arrow-left" class="size-3.5" aria-hidden="true" />strategies
         </NuxtLink>
         <button
-          class="md:hidden px-3 py-2 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] rounded hover:text-[var(--accent)] hover:border-[var(--accent)]"
-          @click="sidebarOpen = !sidebarOpen"
+          ref="chatToggleRef"
+          class="lg:hidden gap-1.5 px-3 py-2 border border-[var(--ink-line-strong)] text-[var(--paper-3)] rounded hover:text-[var(--accent)] hover:border-[var(--accent)]"
           :aria-expanded="sidebarOpen"
           aria-controls="strategy-assistant-sidebar"
-        >{{ sidebarOpen ? '✕ chat' : '💬 chat' }}</button>
+          @click="sidebarOpen = !sidebarOpen"
+        ><UIcon name="i-lucide-message-square" class="size-3.5" aria-hidden="true" />chat</button>
       </template>
     </PageHeader>
 
     <div class="flex-1 min-h-0 flex">
       <main class="flex-1 min-w-0 overflow-y-auto scroll-hidden">
         <div class="max-w-5xl mx-auto page-pad space-y-6">
-        <!-- Header card -->
         <div class="flex flex-wrap items-baseline justify-between gap-3">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight">{{ strategy!.name }}</h1>
-            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mt-1">
-              {{ strategy!.symbol }} · {{ strategy!.cadence }} ·
-              <span :class="strategy!.enabled ? 'text-[var(--tape-up)]' : 'text-[var(--paper-3)]'">
-                {{ strategy!.enabled ? '● live (paper)' : '○ paused' }}
-              </span>
+            <div class="flex flex-wrap items-center gap-x-2 font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)] mt-1">
+              <span>{{ strategy!.symbol }} · {{ strategy!.cadence }} ·</span>
+              <StatusPill :tone="strategy!.enabled ? 'up' : 'neutral'" :label="strategy!.enabled ? 'live (paper)' : 'paused'" />
             </div>
           </div>
-          <div class="flex items-center gap-3">
+          <div class="flex flex-wrap items-center gap-3">
             <button
               :disabled="toggling || !canEnableLive"
-              class="font-mono text-xs uppercase tracking-[0.18em] px-4 py-2 rounded transition-colors disabled:opacity-60"
-              :title="!canEnableLive ? 'Run a clean backtest and resolve blocking maturity checks before enabling.' : undefined"
+              aria-describedby="go-live-note"
+              class="tap font-mono text-xs uppercase tracking-[0.18em] px-4 py-2 rounded transition-colors disabled:opacity-60"
               :class="strategy!.enabled
-                ? 'border border-[var(--tape-up)] text-[var(--tape-up)] hover:bg-[var(--tape-up)] hover:text-[#07080a]'
-                : 'border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] hover:text-[var(--tape-up)] hover:border-[var(--tape-up)]'"
+                ? 'border border-[var(--tape-up)] text-[var(--tape-up)] hover:bg-[var(--tape-up)] hover:text-[var(--ink-0)]'
+                : 'border border-[var(--ink-line-strong)] text-[var(--paper-3)] hover:text-[var(--tape-up)] hover:border-[var(--tape-up)]'"
               @click="toggleEnabled"
             >
-              {{ toggling ? 'switching…' : strategy!.enabled ? '◼ stop live' : '▶ go live (paper)' }}
+              {{ toggling ? 'switching…' : strategy!.enabled ? 'stop live' : 'go live (paper)' }}
             </button>
-            <button
+            <UButton
               v-if="dirty"
+              color="primary"
               :disabled="saving"
-              class="font-mono text-xs uppercase tracking-[0.18em] px-4 py-2 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f] disabled:opacity-60"
+              class="tap font-mono text-xs uppercase tracking-[0.18em] px-4 py-2"
+              :label="saving ? 'saving…' : 'save'"
               @click="save"
-            >
-              {{ saving ? 'saving…' : 'save' }}
-            </button>
+            />
+            <p
+              v-if="liveError || goLiveBlocker"
+              id="go-live-note"
+              :role="liveError ? 'alert' : undefined"
+              class="basis-full font-mono text-xs"
+              :class="liveError ? 'text-[var(--tape-down)]' : 'text-[var(--paper-3)]'"
+            >{{ liveError ?? (goLiveBlocker ? `go live is off: ${goLiveBlocker}` : '') }}</p>
           </div>
         </div>
 
-        <!-- Maturity gate -->
-        <div class="surface-1 p-5 space-y-4">
+        <section class="surface-1 p-4 sm:p-5 space-y-4" aria-labelledby="maturity-title">
           <div class="flex flex-col md:flex-row md:items-baseline md:justify-between gap-2">
             <div>
-              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">paper-live maturity</div>
-              <div class="text-sm text-[var(--paper-2)] mt-1">
+              <h2 id="maturity-title" class="label-eyebrow">paper-live maturity</h2>
+              <p class="text-sm text-[var(--paper-2)] mt-1">
                 enablement uses the latest backtest in this editor session plus recent signal health
-              </div>
+              </p>
             </div>
             <div class="font-mono text-sm uppercase tracking-[0.16em]" :class="maturityClass(maturity.status)" data-mono>
               {{ maturity.status }} · {{ maturity.score }}/100
             </div>
           </div>
-          <div class="grid md:grid-cols-2 gap-3">
-            <div
-              v-for="check in maturity.checks"
-              :key="check.key"
-              class="border hairline bg-[var(--ink-2)] p-3"
-            >
-              <div class="flex items-baseline justify-between gap-3">
-                <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">{{ check.label }}</div>
-                <div class="font-mono text-[10px] uppercase tracking-[0.14em]" :class="maturityClass(check.status)" data-mono>
-                  {{ check.status }}
-                </div>
-              </div>
-              <div class="mt-2 text-xs text-[var(--paper-2)]">
-                {{ check.note }}
-              </div>
+          <ul v-if="checkFold.open.length > 0" class="divide-y divide-[var(--ink-line)]">
+            <AlgoCheckRow v-for="check in checkFold.open" :key="check.key" :check="check" />
+          </ul>
+          <details v-if="checkFold.summary" class="group">
+            <summary class="tap inline-flex items-center gap-1.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden font-mono text-xs uppercase tracking-[0.14em] text-[var(--tape-up)]">
+              <UIcon name="i-lucide-chevron-right" class="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+              {{ checkFold.summary }}
+            </summary>
+            <ul class="mt-3 divide-y divide-[var(--ink-line)]">
+              <AlgoCheckRow v-for="check in checkFold.passed" :key="check.key" :check="check" />
+            </ul>
+          </details>
+        </section>
+
+        <section class="surface-1 p-4 sm:p-5 space-y-5" aria-label="strategy">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <UFormField label="name" :ui="fieldUi" class="sm:col-span-2">
+              <UInput v-model="draft.name" class="w-full" />
+            </UFormField>
+            <UFormField label="symbol" :ui="fieldUi">
+              <UInput v-model="draft.symbol" class="w-full" :ui="{ base: 'font-mono' }" />
+            </UFormField>
+            <UFormField label="cadence" :ui="fieldUi">
+              <USelect v-model="draft.cadence" :items="CADENCES" class="w-full font-mono" />
+            </UFormField>
+          </div>
+
+          <fieldset class="space-y-3">
+            <legend class="label-eyebrow">backtest config</legend>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-5">
+              <UFormField label="capital ($)" help="starting cash for backtests only. $10k–$100k is typical." :ui="fieldUi">
+                <UInput v-model.number="draft.initial_capital" type="number" min="1" step="1000" class="w-full" :ui="{ base: 'font-mono' }" />
+              </UFormField>
+              <UFormField label="commission (bps)" help="per trade. 10 bps = 0.10%. US brokers 0–10, HK 10–25." :ui="fieldUi">
+                <UInput v-model.number="draft.commission_bps" type="number" min="0" max="1000" class="w-full" :ui="{ base: 'font-mono' }" />
+              </UFormField>
+              <UFormField label="slippage (bps)" help="fill drift against the signal price. 5 for liquid names, 20–50 for thin ones." :ui="fieldUi">
+                <UInput v-model.number="draft.slippage_bps" type="number" min="0" max="1000" class="w-full" :ui="{ base: 'font-mono' }" />
+              </UFormField>
+              <UFormField label="sizing" help="how a signal becomes a share count." :ui="fieldUi">
+                <USelect v-model="draft.sizing_mode" :items="SIZING_MODES" class="w-full font-mono" />
+              </UFormField>
+              <UFormField :label="sizing.valueLabel" :help="sizing.valueHelp" :ui="fieldUi">
+                <UInput v-model.number="draft.sizing_value" type="number" min="0.0001" step="0.5" class="w-full" :ui="{ base: 'font-mono' }" />
+              </UFormField>
+              <UFormField label="pyramid max" help="buys allowed before going flat. 1 never stacks; extra buys past the cap are dropped." :ui="fieldUi">
+                <UInput v-model.number="draft.pyramiding_max" type="number" min="1" max="100" class="w-full" :ui="{ base: 'font-mono' }" />
+              </UFormField>
             </div>
-          </div>
-        </div>
+          </fieldset>
 
-        <!-- Editor -->
-        <div class="surface-1 p-5 space-y-4">
-          <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <label class="block md:col-span-2">
-              <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">name</span>
-              <input
-                v-model="draft.name"
-                class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-              />
-            </label>
-            <label class="block">
-              <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">symbol</span>
-              <input
-                v-model="draft.symbol"
-                class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-              />
-            </label>
-            <label class="block">
-              <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">cadence</span>
-              <select
-                v-model="draft.cadence"
-                class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-              >
-                <option value="1m">1m</option>
-                <option value="5m">5m</option>
-                <option value="15m">15m</option>
-                <option value="1h">1h</option>
-                <option value="1d">1d</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="space-y-2">
-            <div class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">backtest config</div>
-            <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
-              <label class="block">
-                <UTooltip
-                  text="Starting cash for backtests. Doesn't affect live trading. Higher capital lets % equity sizing buy more shares per signal but can mask under-capitalised strategies. Typical retail backtest: $10k–$100k."
-                  :delay-duration="200"
-                >
-                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">capital ($)</span>
-                </UTooltip>
-                <input
-                  v-model.number="draft.initial_capital"
-                  type="number"
-                  min="1"
-                  step="1000"
-                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-                />
-              </label>
-              <label class="block">
-                <UTooltip
-                  text="Per-trade commission in basis points. 10 bps = 0.10% = $0.10 per $100 traded. Most retail US brokers are 0–10 bps; HK/Asian brokers 10–25 bps. Higher commission punishes high-frequency strategies."
-                  :delay-duration="200"
-                >
-                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">commission (bps)</span>
-                </UTooltip>
-                <input
-                  v-model.number="draft.commission_bps"
-                  type="number" min="0" max="1000"
-                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-                />
-              </label>
-              <label class="block">
-                <UTooltip
-                  text="Estimated price drift between when a signal fires and when it actually fills. The backtest shifts BUY fills up and SELL fills down by this percentage. 5 bps (0.05%) is typical for liquid stocks; thin names need 20–50+ bps to be honest."
-                  :delay-duration="200"
-                >
-                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">slippage (bps)</span>
-                </UTooltip>
-                <input
-                  v-model.number="draft.slippage_bps"
-                  type="number" min="0" max="1000"
-                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-                />
-              </label>
-              <label class="block">
-                <UTooltip
-                  text="How signals translate into share counts. fixed qty = same N shares every signal. % equity = N% of current equity (winners compound). fixed $ = $N per signal (rotates capital uniformly). Affects what `sizing value` means."
-                  :delay-duration="200"
-                >
-                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">sizing</span>
-                </UTooltip>
-                <select
-                  v-model="draft.sizing_mode"
-                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-                >
-                  <option value="fixed_qty">fixed qty</option>
-                  <option value="pct_equity">% equity</option>
-                  <option value="fixed_cash">fixed $</option>
-                </select>
-              </label>
-              <label class="block">
-                <UTooltip
-                  :text="draft.sizing_mode === 'fixed_qty'
-                    ? 'Shares per signal. Strategy buys exactly this many every time it fires (capped at available cash).'
-                    : draft.sizing_mode === 'pct_equity'
-                      ? 'Percent of current equity per signal. 25 means 25% of (cash + position MTM). Winners compound; losses shrink the next bet.'
-                      : 'Dollars per signal. Strategy commits this many dollars each time, dividing by fill price to get shares.'"
-                  :delay-duration="200"
-                >
-                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">
-                    {{ draft.sizing_mode === 'fixed_qty' ? 'shares' : draft.sizing_mode === 'pct_equity' ? '%' : '$' }}
-                  </span>
-                </UTooltip>
-                <input
-                  v-model.number="draft.sizing_value"
-                  type="number" min="0.0001" step="0.5"
-                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-                />
-              </label>
-              <label class="block">
-                <UTooltip
-                  text="Max consecutive BUYs without going flat. 1 = never stack (must SELL to flat before re-entering). Higher values let you scale into a position. The cap silently rejects extra BUYs once hit."
-                  :delay-duration="200"
-                >
-                  <span class="font-mono text-[10px] uppercase tracking-wider text-[var(--paper-3)] cursor-help underline decoration-dotted decoration-[var(--paper-3)] underline-offset-2">pyramid max</span>
-                </UTooltip>
-                <input
-                  v-model.number="draft.pyramiding_max"
-                  type="number" min="1" max="100"
-                  class="block w-full mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-2 py-1.5 font-mono text-sm text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-                />
-              </label>
-            </div>
-          </div>
-
-          <!-- NOTE: This is intentionally a <div>, not a <label>. A <label>
-               with no `for` attribute dispatches clicks to its first labeled
-               descendant; in diff-review mode the textarea is hidden and the
-               first labeled descendant becomes the toolbar's Accept All
-               button — every click anywhere in the diff view would fire it. -->
-          <div class="block">
-            <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">strategy code</span>
+          <!-- Intentionally a <div>, not a <label>: in diff-review mode the
+               textarea is hidden and a bare <label> would forward every click
+               to the toolbar's accept-all button. -->
+          <div>
+            <span class="label-eyebrow">strategy code</span>
             <CodeEditor
               ref="editorRef"
               v-model="draft.code"
@@ -513,45 +463,36 @@ async function runBacktest() {
             />
           </div>
 
-          <div v-if="saveError" class="font-mono text-sm text-[var(--tape-down)] whitespace-pre-wrap">
+          <div v-if="saveError" role="alert" class="font-mono text-sm text-[var(--tape-down)] whitespace-pre-wrap">
             {{ saveError }}
           </div>
-        </div>
+        </section>
 
-        <!-- Backtest -->
-        <div class="surface-1 p-5 space-y-4">
+        <section class="surface-1 p-4 sm:p-5 space-y-4" aria-labelledby="backtest-title">
           <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
-              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">backtest</div>
-              <div class="text-sm text-[var(--paper-2)] mt-1">
-                Daily bars over the last <span class="text-[var(--paper-0)] font-mono">{{ bars }}</span> sessions.
-                Saved code is what runs — save your edits first.
-              </div>
+              <h2 id="backtest-title" class="label-eyebrow">backtest</h2>
+              <p class="text-sm text-[var(--paper-2)] mt-1">
+                daily bars over the last <span class="text-[var(--paper-0)] font-mono">{{ bars }}</span> sessions.
+                saved code is what runs.
+              </p>
             </div>
             <div class="flex items-end gap-3">
-              <label class="block">
-                <span class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]">bars</span>
-                <input
-                  v-model.number="bars"
-                  type="number"
-                  min="10"
-                  max="2000"
-                  class="block w-24 mt-1 bg-[var(--ink-1)] border border-[rgba(255,245,230,0.08)] rounded px-3 py-2 font-mono text-[var(--paper-0)] focus:outline-none focus:border-[var(--accent)]"
-                />
-              </label>
-              <button
+              <UFormField label="bars" :ui="fieldUi">
+                <UInput v-model.number="bars" type="number" min="10" max="2000" class="w-24" :ui="{ base: 'font-mono' }" />
+              </UFormField>
+              <UButton
+                color="primary"
                 :disabled="backtesting || dirty"
-                class="font-mono text-xs uppercase tracking-[0.18em] px-4 py-2 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f] disabled:opacity-60"
+                class="tap font-mono text-xs uppercase tracking-[0.18em] px-4 py-2"
+                :label="backtesting ? 'running…' : 'run backtest'"
                 @click="runBacktest"
-              >
-                {{ backtesting ? 'running…' : 'run backtest' }}
-              </button>
+              />
             </div>
           </div>
-          <div
-            v-if="dirty"
-            class="font-mono text-xs text-[var(--paper-3)]"
-          >save your edits before backtesting — the backend reads from the saved code.</div>
+          <p v-if="dirty" class="font-mono text-xs text-[var(--paper-3)]">
+            save your edits before backtesting. the backend reads the saved code.
+          </p>
 
           <AlgoCard
             v-if="backtest"
@@ -563,86 +504,96 @@ async function runBacktest() {
             :status="backtest.status"
             :error="backtest.error"
           />
-        </div>
+        </section>
 
-        <!-- Live signals feed -->
-        <div class="surface-1 p-5 space-y-4">
-          <div class="flex items-baseline justify-between">
-            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
-              live signals · last 20
+        <section class="surface-1 p-4 sm:p-5 space-y-4" aria-labelledby="signals-title">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 id="signals-title" class="label-eyebrow">live signals · last 20</h2>
+            <div class="font-mono text-xs text-[var(--paper-3)]">auto-refresh every 10s</div>
+          </div>
+          <PageState
+            v-if="!signals || signals.length === 0"
+            kind="empty"
+            :message="strategy!.enabled ? 'no signals yet' : 'no signals yet. go live (paper) to start ticking on cadence.'"
+          />
+          <template v-else>
+            <div class="table-scroll max-h-72 overflow-y-auto">
+              <table class="w-full font-mono text-xs">
+                <thead class="text-[var(--paper-3)] uppercase tracking-wider">
+                  <tr>
+                    <th class="sticky left-0 bg-[var(--ink-1)] text-left py-1 pr-4">when</th>
+                    <th class="text-left py-1">side</th>
+                    <th class="text-right py-1">qty</th>
+                    <th class="text-right py-1">price</th>
+                    <th class="text-left py-1 pl-4">result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="sig in signals" :key="sig.id" class="border-t border-[var(--ink-line)]">
+                    <td class="sticky left-0 bg-[var(--ink-1)] py-1.5 pr-4 text-[var(--paper-2)] whitespace-nowrap">{{ shortTs(sig.ts) }}</td>
+                    <td
+                      class="py-1.5"
+                      :class="sig.side === 'BUY' ? 'text-[var(--tape-up)]' : sig.side === 'SELL' ? 'text-[var(--tape-down)]' : 'text-[var(--paper-3)]'"
+                    >{{ sig.side }}</td>
+                    <td class="py-1.5 text-right text-[var(--paper-1)]">{{ sig.qty }}</td>
+                    <td class="py-1.5 text-right text-[var(--paper-1)]">
+                      {{ sig.price !== null ? sig.price.toFixed(2) : '—' }}
+                    </td>
+                    <td class="py-1.5 pl-4">
+                      <span v-if="sig.order_id" class="text-[var(--tape-up)]">order placed</span>
+                      <span v-else-if="sig.error" class="block w-64 sm:w-80 whitespace-normal break-words text-[var(--tape-down)]">{{ sig.error }}</span>
+                      <span v-else class="text-[var(--paper-3)]">—</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-            <div class="font-mono text-xs text-[var(--paper-3)]">
-              auto-refresh every 10s
-            </div>
-          </div>
-          <div v-if="!signals || signals.length === 0" class="font-mono text-xs text-[var(--paper-3)] py-4 text-center">
-            no signals yet
-            <span v-if="!strategy!.enabled">— go live (paper) to start ticking on cadence</span>
-          </div>
-          <div v-else class="max-h-72 overflow-y-auto scroll-hidden">
-            <table class="w-full font-mono text-xs">
-              <thead class="text-[var(--paper-3)] uppercase tracking-wider">
-                <tr>
-                  <th class="text-left py-1">when</th>
-                  <th class="text-left py-1">side</th>
-                  <th class="text-right py-1">qty</th>
-                  <th class="text-right py-1">price</th>
-                  <th class="text-left py-1 pl-4">order / error</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="sig in signals" :key="sig.id" class="border-t border-[rgba(255,245,230,0.06)]">
-                  <td class="py-1.5 text-[var(--paper-2)]">{{ shortTs(sig.ts) }}</td>
-                  <td
-                    class="py-1.5"
-                    :class="sig.side === 'BUY' ? 'text-[var(--tape-up)]' : sig.side === 'SELL' ? 'text-[var(--tape-down)]' : 'text-[var(--paper-3)]'"
-                  >{{ sig.side }}</td>
-                  <td class="py-1.5 text-right text-[var(--paper-1)]">{{ sig.qty }}</td>
-                  <td class="py-1.5 text-right text-[var(--paper-1)]">
-                    {{ sig.price !== null ? sig.price.toFixed(2) : '—' }}
-                  </td>
-                  <td class="py-1.5 pl-4">
-                    <span v-if="sig.order_id" class="text-[var(--tape-up)]">▸ {{ sig.order_id }}</span>
-                    <span v-else-if="sig.error" class="text-[var(--tape-down)]">{{ sig.error }}</span>
-                    <span v-else class="text-[var(--paper-3)]">—</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
+            <details v-if="placedOrders.length > 0" class="group">
+              <summary class="tap inline-flex items-center gap-1.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden font-mono text-xs uppercase tracking-[0.14em] text-[var(--paper-3)] hover:text-[var(--paper-1)]">
+                <UIcon name="i-lucide-chevron-right" class="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+                technical details
+              </summary>
+              <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-mono text-xs">
+                <template v-for="sig in placedOrders" :key="sig.id">
+                  <dt class="text-[var(--paper-3)] whitespace-nowrap">{{ shortTs(sig.ts) }} order id</dt>
+                  <dd class="text-[var(--paper-2)] break-all">{{ sig.order_id }}</dd>
+                </template>
+              </dl>
+            </details>
+          </template>
+        </section>
         </div>
       </main>
 
-      <!-- Backdrop for the off-canvas sidebar on mobile only. -->
       <div
         v-if="sidebarOpen"
-        class="md:hidden fixed inset-0 bg-black/40 z-40"
+        class="lg:hidden fixed inset-0 z-40 bg-[color-mix(in_srgb,var(--ink-0)_60%,transparent)]"
+        aria-hidden="true"
         @click="sidebarOpen = false"
       />
-      <!-- Sidebar: in-flow on md+, off-canvas slide-in on mobile. -->
       <div
         id="strategy-assistant-sidebar"
-        class="shrink-0 transition-transform duration-200 md:static md:translate-x-0 md:w-[400px] md:h-auto fixed inset-y-0 right-0 w-[90vw] max-w-[400px] z-50"
-        :class="sidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'"
+        ref="sidebarRef"
+        tabindex="-1"
+        :role="isDocked ? undefined : 'dialog'"
+        :aria-modal="isDocked ? undefined : 'true'"
+        aria-label="strategy assistant"
+        :inert="sidebarInert"
+        class="shrink-0 transition-transform duration-200 lg:static lg:translate-x-0 lg:w-[400px] lg:h-auto fixed inset-y-0 right-0 w-[90vw] max-w-[400px] z-50"
+        :class="sidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'"
       >
-        <div class="relative h-full">
-          <button
-            class="md:hidden absolute top-2 right-2 z-10 font-mono text-xs uppercase tracking-wider px-2 py-1 text-[var(--paper-3)] hover:text-[var(--accent)]"
-            @click="sidebarOpen = false"
-            aria-label="close chat"
-          >✕</button>
-          <StrategyAssistant
-            :current-code="draft.code"
-            :symbol="draft.symbol"
-            :cadence="draft.cadence"
-            :active-review-key="activeReview?.blockKey ?? null"
-            :finished-review="finishedReview"
-            @review="onReview"
-            @apply="(code) => { draft.code = code }"
-            @apply-config="onApplyConfig"
-          />
-        </div>
+        <StrategyAssistant
+          :current-code="draft.code"
+          :symbol="draft.symbol"
+          :cadence="draft.cadence"
+          :active-review-key="activeReview?.blockKey ?? null"
+          :finished-review="finishedReview"
+          :dismissible="!isDocked"
+          @close="sidebarOpen = false"
+          @review="onReview"
+          @apply="(code) => { draft.code = code }"
+          @apply-config="onApplyConfig"
+        />
       </div>
     </div>
   </div>

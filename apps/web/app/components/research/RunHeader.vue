@@ -76,12 +76,12 @@ const activityLine = computed(() => {
   const tool = lastTool.value
   const node = activeNode.value
   if (tool) {
-    const verb = tool.type === 'tool-call' ? '→' : '←'
-    return { node, glyph: verb, tool: tool.tool }
+    const icon = tool.type === 'tool-call' ? 'i-lucide-arrow-right' : 'i-lucide-arrow-left'
+    return { node, icon, tool: tool.tool }
   }
-  if (node) return { node, glyph: '·', tool: 'thinking' }
-  if (props.events.length === 0) return { node: null, glyph: '·', tool: 'spinning up' }
-  return { node, glyph: '·', tool: '—' }
+  if (node) return { node, icon: null, tool: 'thinking' }
+  if (props.events.length === 0) return { node: null, icon: null, tool: 'spinning up' }
+  return { node, icon: null, tool: '—' }
 })
 
 // ─── Stuck hint thresholds ─────────────────────────────────────────
@@ -156,8 +156,9 @@ const statusLabel = computed(() => {
       <span v-if="activityLine.node" class="run-header__activity-node">
         {{ activityLine.node.replace(/_/g, ' ') }}
       </span>
-      <span class="run-header__activity-glyph" data-mono>
-        {{ activityLine.glyph }}
+      <UIcon v-if="activityLine.icon" :name="activityLine.icon" class="run-header__activity-icon" aria-hidden="true" />
+      <span v-else class="run-header__activity-glyph" data-mono>
+        ·
       </span>
       <span class="run-header__activity-tool" data-mono>
         {{ activityLine.tool }}
@@ -202,14 +203,14 @@ const statusLabel = computed(() => {
      it like one. The shadow underneath provides the elevation cue instead. */
   background-color: var(--ink-1);
   background-image:
-    linear-gradient(180deg, transparent 0%, rgba(212, 169, 106, 0.015) 50%, transparent 100%),
+    linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--accent) 1.5%, transparent) 50%, transparent 100%),
     repeating-linear-gradient(
       0deg,
       transparent 0px, transparent 3px,
-      rgba(255, 245, 230, 0.012) 3px, rgba(255, 245, 230, 0.012) 4px
+      color-mix(in srgb, var(--paper-0) 1.2%, transparent) 3px, color-mix(in srgb, var(--paper-0) 1.2%, transparent) 4px
     );
   border-bottom: 1px solid var(--ink-line-strong);
-  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--ink-0) 50%, transparent);
   padding: 0.9rem 1.5rem 0.7rem;
   display: flex;
   flex-direction: column;
@@ -249,7 +250,7 @@ const statusLabel = computed(() => {
 }
 .run-header__status {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.22em;
   color: var(--paper-3);
   display: inline-flex;
@@ -270,9 +271,9 @@ const statusLabel = computed(() => {
   animation: beacon 1.4s ease-out infinite;
 }
 @keyframes beacon {
-  0%   { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0.55); }
-  70%  { box-shadow: 0 0 0 7px rgba(212, 169, 106, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(212, 169, 106, 0); }
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
 }
 
 .run-header__symbol {
@@ -302,7 +303,7 @@ const statusLabel = computed(() => {
 }
 .run-header__elapsed-unit {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: 11px;
   letter-spacing: 0.24em;
   text-transform: uppercase;
   color: var(--paper-3);
@@ -345,7 +346,7 @@ const statusLabel = computed(() => {
 }
 @keyframes urgent-flash {
   0%, 100% { background: transparent; }
-  50% { background: rgba(224, 122, 95, 0.08); }
+  50% { background: color-mix(in srgb, var(--tape-down) 8%, transparent); }
 }
 
 .run-header__activity {
@@ -366,6 +367,7 @@ const statusLabel = computed(() => {
   font-weight: 500;
 }
 .run-header[data-status="running"] .run-header__activity-node { color: var(--accent); }
+.run-header__activity-icon { width: 0.8rem; height: 0.8rem; color: var(--paper-3); flex-shrink: 0; }
 .run-header__activity-glyph {
   color: var(--paper-3);
   font-size: 0.85rem;
@@ -390,14 +392,14 @@ const statusLabel = computed(() => {
   line-height: 1.5;
   color: var(--paper-2);
   padding: 0.5rem 0.7rem;
-  border-left: 2px solid var(--accent);
-  background: rgba(212, 169, 106, 0.04);
-  border-radius: 0 3px 3px 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  border-radius: var(--radius-sm);
 }
 .run-header__stuck[data-level="hard"] {
   color: var(--paper-1);
-  border-left-color: var(--tape-down);
-  background: rgba(224, 122, 95, 0.06);
+  border-color: color-mix(in srgb, var(--tape-down) 35%, transparent);
+  background: color-mix(in srgb, var(--tape-down) 6%, transparent);
 }
 
 @media (max-width: 720px) {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/* Hallmark · genre: modern-minimal · macrostructure: page header, model providers list with modal editor, per-role model selection · design-system: design.md · designed-as-app */
 import ConfirmModal from '~/components/settings/ConfirmModal.vue'
 import ProviderFormModal from '~/components/settings/ProviderFormModal.vue'
 import { settingsErrorMessage } from '../../composables/providerForm'
@@ -84,15 +85,15 @@ async function openProviderForm(provider?: LlmProviderView): Promise<void> {
   delete testOutcomes[saved.id]
   await refreshProviders()
   if (ROLES.some(({ role }) => draft[role].providerId === saved.id)) void runTest(saved).catch(() => {})
-  toast.add({ title: provider ? 'Provider saved' : 'Provider added', color: 'success' })
+  toast.add({ title: provider ? 'provider saved' : 'provider added', color: 'success' })
 }
 
 async function removeProvider(provider: LlmProviderView): Promise<void> {
   const modal = overlay.create(ConfirmModal, { destroyOnClose: true })
   const confirmed = await modal.open({
-    title: `Remove ${provider.label}?`,
-    description: 'Its stored API key is deleted with it.',
-    confirmLabel: 'Remove',
+    title: `remove ${provider.label}?`,
+    description: 'its stored API key is deleted with it.',
+    confirmLabel: 'remove',
   }).result
   if (!confirmed) return
   try {
@@ -102,7 +103,7 @@ async function removeProvider(provider: LlmProviderView): Promise<void> {
     await refreshProviders()
   }
   catch (err) {
-    toast.add({ title: 'Could not remove provider', description: (err as { statusMessage?: string }).statusMessage, color: 'error' })
+    toast.add({ title: 'could not remove provider', description: (err as { statusMessage?: string }).statusMessage, color: 'error' })
   }
 }
 
@@ -117,10 +118,10 @@ async function saveSelection(): Promise<void> {
       body: { chat: { ...draft.chat }, quick: { ...draft.quick } },
     })
     await refreshNuxtData('llm-selection')
-    toast.add({ title: 'Models saved', color: 'success' })
+    toast.add({ title: 'models saved', color: 'success' })
   }
   catch (err) {
-    toast.add({ title: 'Could not save models', description: (err as { statusMessage?: string }).statusMessage, color: 'error' })
+    toast.add({ title: 'could not save models', description: (err as { statusMessage?: string }).statusMessage, color: 'error' })
   }
   finally {
     saving.value = false
@@ -142,20 +143,20 @@ async function saveSelection(): Promise<void> {
           <div class="flex items-end justify-between gap-4">
             <div>
               <h2 class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">model providers</h2>
-              <p class="text-sm text-[var(--paper-2)] mt-1">API keys are encrypted with ENCRYPTION_KEY and never shown again.</p>
+              <p class="text-sm text-[var(--paper-2)] mt-1">API keys are encrypted with your server's encryption key and never shown again.</p>
             </div>
-            <UButton icon="i-lucide-plus" label="Add provider" @click="openProviderForm()" />
+            <UButton icon="i-lucide-plus" label="add provider" class="tap shrink-0" @click="openProviderForm()" />
           </div>
 
-          <div v-if="pending && !providerData" class="font-mono text-sm text-[var(--paper-3)] py-8 text-center">loading…</div>
-          <UAlert v-else-if="error" color="error" variant="subtle" :description="`Failed to load providers: ${error.message}`" />
+          <PageState v-if="pending && !providerData" kind="loading" message="loading providers…" />
+          <PageState v-else-if="error" kind="error" :message="`providers failed to load: ${error.message}`" @retry="refreshProviders()" />
           <div v-else-if="providers.length === 0" class="surface-1 p-6 text-sm text-[var(--paper-2)]">
             No provider yet. Add one to start chatting and running research.
           </div>
 
           <ul v-else class="space-y-3">
             <li v-for="provider in providers" :key="provider.id" class="surface-1 p-4 space-y-3">
-              <div class="flex items-start justify-between gap-3">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div class="min-w-0 flex-1">
                   <div class="text-[var(--paper-0)]">{{ provider.label }}</div>
                   <div class="font-mono text-xs text-[var(--paper-3)] mt-1 break-words">
@@ -164,17 +165,18 @@ async function saveSelection(): Promise<void> {
                     · <span class="whitespace-nowrap">key {{ provider.apiKeyHint }}</span>
                   </div>
                 </div>
-                <div class="flex shrink-0 items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2 sm:shrink-0">
                   <UButton
-                    label="Test connection"
+                    label="test connection"
                     color="neutral"
                     variant="outline"
                     size="sm"
+                    class="tap"
                     :loading="testing[provider.id]"
                     @click="testProvider(provider)"
                   />
-                  <UButton icon="i-lucide-pencil" color="neutral" variant="ghost" size="sm" aria-label="Edit" @click="openProviderForm(provider)" />
-                  <UButton icon="i-lucide-trash-2" color="error" variant="ghost" size="sm" aria-label="Remove" @click="removeProvider(provider)" />
+                  <UButton icon="i-lucide-pencil" color="neutral" variant="ghost" class="tap" :aria-label="`edit ${provider.label}`" @click="openProviderForm(provider)" />
+                  <UButton icon="i-lucide-trash-2" color="error" variant="ghost" class="tap" :aria-label="`remove ${provider.label}`" @click="removeProvider(provider)" />
                 </div>
               </div>
               <p
@@ -221,7 +223,7 @@ async function saveSelection(): Promise<void> {
               </div>
             </div>
             <div class="flex justify-end">
-              <UButton label="Save models" :disabled="!canSave" :loading="saving" @click="saveSelection" />
+              <UButton label="save models" class="tap" :disabled="!canSave" :loading="saving" @click="saveSelection" />
             </div>
           </section>
         </ClientOnly>

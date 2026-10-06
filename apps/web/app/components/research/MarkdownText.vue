@@ -152,8 +152,7 @@ const html = computed(() => marked.parse(props.content || '', { async: false }) 
   line-height: 1.55;
   background: var(--ink-2);
   border: 1px solid var(--ink-line);
-  border-left: 2px solid var(--accent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.7rem 0.9rem;
   margin: 0.8rem 0;
   overflow-x: auto;
@@ -184,7 +183,7 @@ const html = computed(() => marked.parse(props.content || '', { async: false }) 
 }
 .md :deep(thead th) {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   text-align: left;
@@ -197,7 +196,7 @@ const html = computed(() => marked.parse(props.content || '', { async: false }) 
   border-bottom: 1px solid var(--ink-line);
   vertical-align: top;
 }
-.md :deep(tbody tr:hover td) { background: rgba(255, 245, 230, 0.015); }
+.md :deep(tbody tr:hover td) { background: color-mix(in srgb, var(--paper-0) 1.5%, transparent); }
 
 /* ─── Links ─── */
 .md :deep(a) {

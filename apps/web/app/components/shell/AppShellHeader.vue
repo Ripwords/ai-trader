@@ -1,6 +1,8 @@
+<!-- Hallmark · component: shell · genre: modern-minimal · design-system: design.md -->
 <script setup lang="ts">
 import { activeSectionKey } from '~/lib/sections'
 import { useOpendStatus } from '~/composables/useOpendStatus'
+import { opendIndicator } from '~/utils/opend-indicator'
 import type { LlmSettings } from '../../../types/llm'
 
 interface Props {
@@ -26,20 +28,8 @@ const llmModel = computed(() => llmSelection.value?.selection?.chat.modelId ?? '
 const clock = ref<Date | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 
-// The status strip reflects the real OpenD state instead of a static
-// green dot: down, quote-only, or live.
 const { status: opend } = useOpendStatus()
-const opendLabel = computed(() => {
-  if (opend.value === null) return 'opend · checking'
-  if (!opend.value.reachable) return 'opend · down'
-  if (!opend.value.qot_logined) return 'opend · no quotes'
-  return 'live · paper'
-})
-const opendTone = computed(() => {
-  if (opend.value === null) return 'pending'
-  if (!opend.value.reachable || !opend.value.qot_logined) return 'down'
-  return 'up'
-})
+const broker = computed(() => opendIndicator(opend.value))
 
 onMounted(() => {
   clock.value = new Date()
@@ -82,6 +72,10 @@ async function logout(): Promise<void> {
         <span class="brand-mark"><span>ai</span><span class="brand-trader">·trader</span></span>
         <span class="brand-section">{{ activeKey }}</span>
       </NuxtLink>
+      <span class="brand-status" :title="broker.label">
+        <span class="brand-status-dot" :data-tone="broker.tone" aria-hidden="true" />
+        <span class="sr-only">{{ broker.label }}</span>
+      </span>
     </div>
 
     <div class="middle">
@@ -89,10 +83,7 @@ async function logout(): Promise<void> {
     </div>
 
     <div class="right">
-      <div class="status-strip" data-mono :title="opendLabel">
-        <span class="status-dot" :data-tone="opendTone" />
-        <span>{{ opendLabel }}</span>
-      </div>
+      <StatusPill class="status-strip" :tone="broker.tone" :label="broker.label" />
       <div class="clock" data-mono>{{ clockText }}</div>
       <button class="signout" aria-label="Sign out" title="Sign out" @click="logout">
         <UIcon name="i-lucide-log-out" class="signout-icon" />
@@ -116,7 +107,7 @@ async function logout(): Promise<void> {
   align-items: center;
   height: calc(56px + env(safe-area-inset-top));
   padding: env(safe-area-inset-top) var(--page-x) 0;
-  border-bottom: 1px solid var(--hairline, rgba(255,255,255,0.06));
+  border-bottom: 1px solid var(--ink-line);
   background: var(--ink-0);
   flex-shrink: 0;
   z-index: 30;
@@ -170,7 +161,7 @@ async function logout(): Promise<void> {
   flex-wrap: wrap;
 }
 .brand-mark {
-  font-family: var(--font-display, ui-serif, Georgia, serif);
+  font-family: var(--font-sans);
   font-size: 1.15rem;
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -181,16 +172,34 @@ async function logout(): Promise<void> {
 
 .brand-section {
   display: none;
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.7rem;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--paper-3);
   padding-left: 0.85rem;
-  border-left: 1px solid var(--hairline, rgba(255,255,255,0.08));
+  border-left: 1px solid var(--ink-line);
 }
 @media (min-width: 640px) {
   .brand-section { display: inline; }
+}
+
+/* Compact broker readout for every width the full status strip is hidden at. */
+.brand-status {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.brand-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--paper-3);
+}
+.brand-status-dot[data-tone="up"] { background: var(--tape-up); }
+.brand-status-dot[data-tone="down"] { background: var(--tape-down); }
+@media (min-width: 1280px) {
+  .brand-status { display: none; }
 }
 
 /* ---------------- middle: section nav --------------------- */
@@ -206,39 +215,13 @@ async function logout(): Promise<void> {
 /* ---------------- right: status / clock / signout -------- */
 .right { display: flex; align-items: center; gap: 1rem; }
 
-.status-strip {
+.right .status-strip {
   display: none;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.65rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--paper-3);
   padding-right: 1rem;
-  border-right: 1px solid var(--hairline, rgba(255,255,255,0.08));
+  border-right: 1px solid var(--ink-line);
 }
 @media (min-width: 1280px) {
-  .status-strip { display: flex; }
-}
-.status-dot {
-  width: 6px; height: 6px;
-  border-radius: 999px;
-  background: #5fbf73;
-  box-shadow: 0 0 8px rgba(95, 191, 115, 0.55);
-  animation: pulse 2.4s ease-in-out infinite;
-}
-.status-dot[data-tone="down"] {
-  background: var(--tape-down);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--tape-down) 55%, transparent);
-  animation: none;
-}
-.status-dot[data-tone="pending"] {
-  background: var(--paper-3);
-  box-shadow: none;
-}
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
+  .right .status-strip { display: inline-flex; }
 }
 
 .clock {
@@ -257,7 +240,7 @@ async function logout(): Promise<void> {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.7rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -285,7 +268,7 @@ async function logout(): Promise<void> {
   display: none;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.55rem;
+  font-size: 11px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--paper-3);

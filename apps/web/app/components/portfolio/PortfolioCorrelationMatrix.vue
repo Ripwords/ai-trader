@@ -147,7 +147,7 @@ function cellStyle(value: number | null) {
     <div class="flex flex-col md:flex-row md:items-baseline md:justify-between gap-2 mb-5">
       <div>
         <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">modern portfolio theory</div>
-        <div class="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--paper-3)]">
+        <div class="mt-1 font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--paper-3)]">
           expected return w^T mu / risk w^T Sigma w
         </div>
       </div>
@@ -253,7 +253,7 @@ function cellStyle(value: number | null) {
       </div>
 
       <div>
-        <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">correlation matrix</div>
+        <div class="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--paper-3)] mb-3">correlation matrix</div>
       <div v-if="hasMatrix" class="matrix-scroll pb-1">
         <div class="correlation-grid min-w-max" :style="matrixStyle" role="table" aria-label="Portfolio correlation matrix">
           <div class="corner sticky-corner" role="columnheader" />
@@ -289,7 +289,7 @@ function cellStyle(value: number | null) {
       </div>
       </div>
 
-      <p v-if="footnote" class="font-mono text-[10px] leading-relaxed text-[var(--paper-3)]">
+      <p v-if="footnote" class="font-mono text-[11px] leading-relaxed text-[var(--paper-3)]">
         {{ footnote }}
       </p>
     </div>

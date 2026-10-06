@@ -83,7 +83,7 @@ defineProps<{ title: string, pillar: RiskPillar }>()
   padding: 0.7rem 0.75rem;
   border: 1px solid var(--ink-line);
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.18);
+  background: color-mix(in srgb, var(--ink-0) 18%, transparent);
 }
 .card-head {
   display: inline-flex;

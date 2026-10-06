@@ -6,12 +6,14 @@ import type { Highlighter } from 'shiki'
 import { isPartStreaming } from '@nuxt/ui/utils/ai'
 import ConfirmModal from '~/components/settings/ConfirmModal.vue'
 import { askConfirm } from '~/lib/confirm'
+import type { AlgoSizingMode } from '../../../server/llm/http'
+import { SIZING_MODES } from '../../utils/algo-view'
 
 interface ProposedConfig {
   initial_capital?: number
   commission_bps?: number
   slippage_bps?: number
-  sizing_mode?: 'fixed_qty' | 'pct_equity' | 'fixed_cash'
+  sizing_mode?: AlgoSizingMode
   sizing_value?: number
   pyramiding_max?: number
 }
@@ -26,6 +28,8 @@ const props = defineProps<{
   /** Page tells us a review just resolved so we can flip the matching
    *  block's status to applied/discarded with its summary. */
   finishedReview: { blockKey: string, summary: { accepted: number; total: number } } | null
+  /** Off-canvas mode: render a close button in the header. */
+  dismissible?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -38,6 +42,7 @@ const emit = defineEmits<{
   // the proposed fields into draft.* without saving — user clicks the
   // existing Save button (or Cmd+S) to persist.
   (e: 'apply-config', config: ProposedConfig): void
+  (e: 'close'): void
 }>()
 
 const input = ref('')
@@ -103,7 +108,7 @@ function fmtCfgValue(field: keyof ProposedConfig, v: unknown): string {
   if (v === undefined || v === null) return ''
   if (field === 'initial_capital') return `$${Number(v).toLocaleString()}`
   if (field === 'commission_bps' || field === 'slippage_bps') return `${v} bps`
-  if (field === 'sizing_value') return String(v)
+  if (field === 'sizing_mode') return SIZING_MODES.find(m => m.value === v)?.label ?? String(v)
   return String(v)
 }
 
@@ -193,9 +198,9 @@ async function review(key: string, code: string) {
     const ok = await askConfirm(
       p => overlay.create(ConfirmModal, { destroyOnClose: true }).open(p),
       {
-        title: 'Your draft has changed since this suggestion',
-        description: 'Reviewing will diff against the snapshot from when this message arrived.',
-        confirmLabel: 'Review anyway',
+        title: 'your draft has changed since this suggestion',
+        description: 'reviewing will diff against the snapshot from when this message arrived.',
+        confirmLabel: 'review anyway',
       },
     )
     if (!ok) return
@@ -207,12 +212,12 @@ async function review(key: string, code: string) {
 
 function statusPillText(s: BlockState): string {
   if (s.status === 'applied') {
-    if (!s.summary) return '✓ applied'
-    if (s.summary.accepted === 0) return '✕ discarded'
-    if (s.summary.accepted === s.summary.total) return '✓ applied'
-    return `✓ applied ${s.summary.accepted} of ${s.summary.total}`
+    if (!s.summary) return 'applied'
+    if (s.summary.accepted === 0) return 'discarded'
+    if (s.summary.accepted === s.summary.total) return 'applied'
+    return `applied ${s.summary.accepted} of ${s.summary.total}`
   }
-  return '✕ discarded'
+  return 'discarded'
 }
 
 watch(() => props.finishedReview, (fr) => {
@@ -340,10 +345,19 @@ watch(
       <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
         strategy assistant
       </div>
-      <button
-        class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)] hover:text-[var(--accent)]"
-        @click="reset"
-      >clear</button>
+      <div class="flex items-center gap-1">
+        <button
+          class="tap px-2 py-1.5 font-mono text-xs uppercase tracking-wider text-[var(--paper-3)] hover:text-[var(--accent)]"
+          @click="reset"
+        >clear</button>
+        <button
+          v-if="dismissible"
+          type="button"
+          aria-label="close assistant"
+          class="inline-flex items-center justify-center size-10 rounded text-[var(--paper-3)] hover:text-[var(--accent)]"
+          @click="emit('close')"
+        ><UIcon name="i-lucide-x" class="size-4" aria-hidden="true" /></button>
+      </div>
     </div>
 
     <!-- Empty state -->
@@ -384,8 +398,8 @@ watch(
           <template
             v-else-if="isToolUIPart(part) && getToolName(part) === 'propose_config'"
           >
-            <div class="rounded border border-[var(--accent)] bg-[rgba(196,151,90,0.06)] p-3 space-y-2">
-              <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
+            <div class="rounded border border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_6%,transparent)] p-3 space-y-2">
+              <div class="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">
                 proposed backtest config
               </div>
               <ul class="font-mono text-xs space-y-1">
@@ -403,22 +417,22 @@ watch(
                 class="flex items-center gap-2 pt-1"
               >
                 <button
-                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f]"
+                  class="tap inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[var(--ink-0)] rounded hover:bg-[var(--color-brand-600)]"
                   @click="applyConfigProposal(
                     toolKey(message.id, idx),
                     (part as { output?: { proposed?: ProposedConfig } }).output?.proposed ?? {},
                   )"
-                >✓ apply</button>
+                ><UIcon name="i-lucide-check" class="size-3.5" aria-hidden="true" />apply</button>
                 <button
-                  class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 border border-[rgba(255,245,230,0.12)] text-[var(--paper-3)] rounded hover:text-[var(--paper-0)] hover:border-[var(--paper-2)]"
+                  class="tap inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider px-3 py-1.5 border border-[var(--ink-line-strong)] text-[var(--paper-3)] rounded hover:text-[var(--paper-0)] hover:border-[var(--paper-2)]"
                   @click="discardConfigProposal(toolKey(message.id, idx))"
-                >✕ discard</button>
+                ><UIcon name="i-lucide-x" class="size-3.5" aria-hidden="true" />discard</button>
               </div>
               <div
                 v-else
                 class="font-mono text-xs uppercase tracking-wider text-[var(--paper-3)]"
               >
-                {{ toolStatus(toolKey(message.id, idx)) === 'applied' ? '✓ applied — save to persist' : '✕ discarded' }}
+                {{ toolStatus(toolKey(message.id, idx)) === 'applied' ? 'applied · save to persist' : 'discarded' }}
               </div>
             </div>
           </template>
@@ -440,7 +454,7 @@ watch(
                 />
                 <div v-else-if="seg.kind === 'code'" class="space-y-1.5">
                   <div
-                    class="rounded border border-[rgba(255,245,230,0.08)] overflow-hidden bg-[var(--ink-1)] text-xs leading-relaxed font-mono [&_pre.shiki]:!bg-transparent [&_pre.shiki]:m-0 [&_pre.shiki]:p-3"
+                    class="rounded border border-[var(--ink-line-strong)] overflow-hidden bg-[var(--ink-1)] text-xs leading-relaxed font-mono [&_pre.shiki]:!bg-transparent [&_pre.shiki]:m-0 [&_pre.shiki]:p-3"
                     v-html="codeHtmlFor(blockKey(message.id, seg.codeIndex), seg.text)"
                   />
                   <!-- Block controls: review button + active pill + stale warning,
@@ -450,11 +464,11 @@ watch(
                   >
                     <div class="flex items-center gap-2">
                       <button
-                        class="font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[#07080a] rounded hover:bg-[#b88a4f] disabled:opacity-50 disabled:cursor-not-allowed"
+                        class="tap inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider px-3 py-1.5 bg-[var(--accent)] text-[var(--ink-0)] rounded hover:bg-[var(--color-brand-600)] disabled:opacity-50 disabled:cursor-not-allowed"
                         :disabled="activeReviewKey !== null && activeReviewKey !== blockKey(message.id, seg.codeIndex)"
                         :title="activeReviewKey !== null && activeReviewKey !== blockKey(message.id, seg.codeIndex) ? 'finish current review first' : ''"
                         @click="review(blockKey(message.id, seg.codeIndex), seg.text)"
-                      >→ review in editor</button>
+                      ><UIcon name="i-lucide-arrow-right" class="size-3.5" aria-hidden="true" />review in editor</button>
                       <span
                         v-if="activeReviewKey === blockKey(message.id, seg.codeIndex)"
                         class="font-mono text-xs text-[var(--accent)]"
@@ -497,7 +511,7 @@ watch(
           color="neutral"
           variant="solid"
           :ui="{
-            base: '!absolute !bottom-0 !end-0 !size-8 !p-0 !rounded-md !bg-[#d4a96a] hover:!bg-[#b88a4f] !text-[#07080a] !inline-flex !items-center !justify-center',
+            base: '!absolute !bottom-0 !end-0 !size-8 !p-0 !rounded-md !bg-[var(--accent)] hover:!bg-[var(--color-brand-600)] !text-[var(--ink-0)] !inline-flex !items-center !justify-center',
             leadingIcon: '!size-4',
             trailingIcon: '!size-4',
           }"
