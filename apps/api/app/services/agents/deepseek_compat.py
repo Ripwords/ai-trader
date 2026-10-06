@@ -31,6 +31,19 @@ them echoed back, and dropping them loses nothing the next turn needs. We strip
 them on the way out rather than at the graph level because TradingAgents builds
 its own chat models internally, so this is the one chokepoint every
 litellm-routed request passes through.
+
+The block list also breaks the run on the way in. TradingAgents writes
+``result.content`` straight into string state fields (``market_report``,
+``investment_plan``, ``final_trade_decision`` ...), so a block list fails
+``AgentState`` validation as soon as an analyst produces its report::
+
+    1 validation error for AgentState
+    market_report
+      Input should be a valid string [type=string_type, input_value=[{'type':
+      'thinking', ...
+
+So the reasoning is also kept out of ``content`` when the response is
+converted. It stays available in ``additional_kwargs["reasoning_content"]``.
 """
 from __future__ import annotations
 
@@ -70,7 +83,8 @@ def strip_reasoning_blocks(content: Any) -> Any:
 
 
 def install_litellm_thinking_patch() -> None:
-    """Wrap ``langchain_litellm``'s message converter to strip reasoning blocks.
+    """Wrap ``langchain_litellm``'s message converters to keep reasoning out
+    of ``content``, in both directions.
 
     Idempotent — safe to call from every graph build. A no-op (logged) if
     langchain_litellm is absent or its internals have moved, so a non-DeepSeek
@@ -82,6 +96,11 @@ def install_litellm_thinking_patch() -> None:
         logger.debug("langchain_litellm not installed; skipping thinking-block patch")
         return
 
+    _patch_outgoing(_litellm_chat)
+    _patch_incoming(_litellm_chat)
+
+
+def _patch_outgoing(_litellm_chat: Any) -> None:
     original = getattr(_litellm_chat, "_convert_message_to_dict", None)
     if original is None:  # pragma: no cover - upstream rename
         logger.warning(
@@ -103,3 +122,26 @@ def install_litellm_thinking_patch() -> None:
     _convert_message_to_dict.__doc__ = original.__doc__
     _litellm_chat._convert_message_to_dict = _convert_message_to_dict
     logger.info("Installed langchain_litellm reasoning-block strip patch")
+
+
+def _patch_incoming(_litellm_chat: Any) -> None:
+    # Both response converters (whole message and streamed delta) build the
+    # block list through this one helper.
+    original = getattr(_litellm_chat, "_inject_reasoning_content_into_content", None)
+    if original is None:  # pragma: no cover - upstream rename
+        logger.warning(
+            "langchain_litellm._inject_reasoning_content_into_content is "
+            "missing; DeepSeek responses may carry thinking blocks in their "
+            "content and fail AgentState validation. Upstream internals "
+            "likely changed."
+        )
+        return
+    if getattr(original, _PATCH_FLAG, False):
+        return
+
+    def _inject_reasoning_content_into_content(content: Any, reasoning_content: str) -> Any:
+        return strip_reasoning_blocks(content) or ""
+
+    setattr(_inject_reasoning_content_into_content, _PATCH_FLAG, True)
+    _litellm_chat._inject_reasoning_content_into_content = _inject_reasoning_content_into_content
+    logger.info("Installed langchain_litellm reasoning-content injection patch")
