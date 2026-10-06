@@ -344,3 +344,47 @@ async def test_get_news_renders_partial_data_with_error_note(monkeypatch):
     assert "News for NVDA" in result
     assert "partially failed" in result and "angle LLM failed" in result
     assert "News search not configured" not in result
+
+
+class _SyntheticOpend:
+    async def get_kline(self, symbol, ktype, num):
+        return [
+            {"time": f"2026-01-{(i % 28) + 1:02d}",
+             "open": 100 + i * 0.1, "high": 101 + i * 0.1,
+             "low": 99 + i * 0.1, "close": 100 + i * 0.1,
+             "volume": 1_000_000}
+            for i in range(200)
+        ]
+
+
+@pytest.mark.asyncio
+async def test_get_indicators_accepts_json_array_string():
+    """Models sometimes send the list as its JSON text
+    (``'["close_50_sma", "rsi"]'``). Splitting that on commas handed
+    stockstats ``["close_50_sma"``, which raised and failed the whole run."""
+    toolkit = build_toolkit(opend_client=_SyntheticOpend())
+    result = await toolkit.get_indicators.ainvoke({
+        "symbol": "AAPL",
+        "indicator": '["close_50_sma", "rsi"]',
+        "curr_date": "2026-05-10",
+        "look_back_days": 60,
+    })
+    assert "CLOSE_50_SMA:" in result
+    assert "RSI:" in result
+    assert "unsupported" not in result
+
+
+@pytest.mark.asyncio
+async def test_get_indicators_reports_unparseable_name_instead_of_raising():
+    """stockstats raises ``UserWarning`` for a name it cannot parse. One bad
+    name from the model must come back as an ``unsupported`` line so the
+    analyst can correct itself, with the other indicators still computed."""
+    toolkit = build_toolkit(opend_client=_SyntheticOpend())
+    result = await toolkit.get_indicators.ainvoke({
+        "symbol": "AAPL",
+        "indicator": ["not_a_real_indicator_name", "rsi"],
+        "curr_date": "2026-05-10",
+        "look_back_days": 60,
+    })
+    assert "NOT_A_REAL_INDICATOR_NAME: unsupported" in result
+    assert "RSI:" in result

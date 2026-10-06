@@ -648,12 +648,13 @@ def build_toolkit(
         Mirrors TradingAgents' bundled ``get_indicators`` signature so analyst
         prompts that request multiple indicators in one call (``"macd,rsi"``
         or ``["macd", "rsi"]``) hit the right path. ``indicator`` accepts a
-        single name, a list, or a comma-separated string.
+        single name, a list, or a comma-separated string. A name stockstats
+        cannot compute is reported as ``unsupported`` next to the others.
         """
-        if isinstance(indicator, list):
-            indicators = [str(s).strip() for s in indicator if str(s).strip()]
-        else:
-            indicators = [s.strip() for s in str(indicator).split(",") if s.strip()]
+        # Models also send the list as its JSON text ('["macd", "rsi"]'), so
+        # brackets and quotes are stripped from each name after splitting.
+        raw = indicator if isinstance(indicator, list) else str(indicator).split(",")
+        indicators = [name for name in (str(s).strip(" \t\n[]\"'") for s in raw) if name]
         if not indicators:
             return "No indicators requested."
 
@@ -671,7 +672,10 @@ def build_toolkit(
         for ind in indicators:
             try:
                 series = sdf[ind]
-            except (KeyError, ValueError) as e:
+            except Exception as e:  # noqa: BLE001
+                # stockstats raises a bare UserWarning (among others) for a
+                # name it cannot parse; the name comes from the model, so
+                # report it back rather than failing the run.
                 sections.append(f"{ind.upper()}: unsupported ({e})")
                 continue
             if isinstance(series, pd.Series):
