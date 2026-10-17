@@ -95,4 +95,25 @@ describe('AgentRunTee', () => {
     expect(kinds).toEqual(['error'])
     expect(fake.updates.filter(u => u.set.status).map(u => u.set)).toMatchObject([{ status: 'failed', error: 'boom' }])
   })
+  it('enqueues one research-finished notification when it writes the terminal status', async () => {
+    fake = createFakeDb(
+      table => table === 'agent_decisions' ? [{ rating: 'BUY', confidence: 72, rationale: 'Strong quarter' }] : [],
+      { updateReturning: u => u.set.status ? [{ id: 'run-1', symbol: 'US.AAPL', status: u.set.status, error: u.set.error }] : [] },
+    )
+    const tee = new AgentRunTee('run-1', 'user-1')
+    tee.push({ type: 'run-end', run_id: 'run-1', tokens_in: 1, tokens_out: 1, cost_usd: 0 })
+    await tee.end('unused')
+
+    const queued = fake.inserts.filter(i => i.table === 'notifications')
+    expect(queued).toHaveLength(1)
+    expect(queued[0]!.values).toMatchObject({ kind: 'research_run', dedupeKey: 'run:run-1', url: '/research/US.AAPL?run=run-1' })
+    expect(String(queued[0]!.values.subject)).toContain('BUY')
+  })
+
+  it('enqueues nothing when another writer already finished the run', async () => {
+    const tee = new AgentRunTee('run-1', 'user-1')
+    tee.push({ type: 'run-end', run_id: 'run-1', tokens_in: 1, tokens_out: 1, cost_usd: 0 })
+    await tee.end('unused')
+    expect(fake.inserts.filter(i => i.table === 'notifications')).toEqual([])
+  })
 })

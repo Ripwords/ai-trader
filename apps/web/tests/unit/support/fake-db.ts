@@ -14,14 +14,23 @@ export interface FakeDbOptions {
   updateReturning?: (update: RecordedUpdate) => unknown[]
 }
 
-/** A promise that also offers drizzle's `.returning()`. */
-function returnable(run: () => unknown[]) {
-  return {
+/** A promise that also offers drizzle's `.returning()` and `.onConflict*()`. */
+interface Returnable {
+  then<R>(resolve: (v: undefined) => R, reject?: (e: unknown) => R): Promise<R>
+  returning(): Promise<unknown[]>
+  onConflictDoNothing(): Returnable
+  onConflictDoUpdate(): Returnable
+}
+function returnable(run: () => unknown[]): Returnable {
+  const r: Returnable = {
     then<R>(resolve: (v: undefined) => R, reject?: (e: unknown) => R) {
       return Promise.resolve().then(() => { run() }).then(() => resolve(undefined), reject)
     },
     returning() { return Promise.resolve().then(run) },
+    onConflictDoNothing() { return r },
+    onConflictDoUpdate() { return r },
   }
+  return r
 }
 
 /** Records drizzle writes; `selectRows` answers every select chain. */
@@ -41,7 +50,7 @@ export function createFakeDb(selectRows: (table: string) => unknown[] = () => []
     return chain
   }
 
-  const db = {
+  const base = {
     insert(t: Table) {
       return {
         values(values: Record<string, unknown>) {
@@ -67,5 +76,7 @@ export function createFakeDb(selectRows: (table: string) => unknown[] = () => []
     },
     select() { return selectChain() },
   }
+  // Runs the callback against the same recorder; no rollback.
+  const db = Object.assign(base, { transaction: <T>(fn: (tx: typeof base) => Promise<T>): Promise<T> => fn(base) })
   return { db, inserts, updates }
 }

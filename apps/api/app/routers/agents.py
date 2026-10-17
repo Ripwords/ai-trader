@@ -33,6 +33,7 @@ from app.services.agents import backtest as backtest_mod
 from app.services.agents import graph as graph_mod
 from app.services.agents import llm_config
 from app.services.agents import pricing as pricing_mod
+from app.services.agents import prompts as prompts_mod
 from app.services.agents import toolkit as toolkit_mod
 from app.services.agents.cost_cap import DailyCapExceeded, assert_under_daily_cap
 from app.services.agents.heartbeat import HEARTBEAT, with_heartbeats
@@ -102,6 +103,16 @@ def _check_bearer(authorization: str | None) -> None:
     settings = get_settings()
     if authorization != f"Bearer {settings.INTERNAL_BEARER}":
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@router.get("/prompts/defaults")
+async def prompt_defaults(
+    authorization: str | None = Header(default=None),
+) -> dict[str, prompts_mod.PromptDefault]:
+    """The debate prompts' default text and ``{placeholders}``, for Settings →
+    Prompts. Node prompts are the raw ``.md`` without the language line."""
+    _check_bearer(authorization)
+    return prompts_mod.prompt_defaults()
 
 
 @router.post("/run")

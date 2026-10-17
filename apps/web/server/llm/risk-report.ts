@@ -10,6 +10,7 @@
 import { generateObject } from 'ai'
 import { z } from 'zod'
 import { recordUsageSafely } from '../lib/llm-cost'
+import { getPrompt } from '../lib/prompts'
 import type { EarningsInfo, FinancialMetrics, NewsItem } from '../lib/yahoo'
 import { resolveModel } from './model'
 import type { ChartMarker, PriceBar, RiskCardTone, RiskRating } from '../../types/research'
@@ -73,43 +74,6 @@ export interface RiskReportLLMInput {
   }
 }
 
-const SYSTEM_PROMPT = `You are a sell-side equity analyst writing a concise risk-score report.
-
-Score each pillar 0-100 where:
-  - higher = more attractive / lower risk
-  - 50 = neutral / inline with peers
-  - <30 = serious concern
-  - >75 = strong positive signal
-
-Pillars:
-  - valuation: P/E, P/B, P/S, FCF yield, EV/EBITDA vs peers
-  - health: balance sheet quality, leverage, FCF generation, cash buffer, ROE/ROA
-  - growth: revenue growth, earnings growth, margin trajectory, recent surprise
-
-For each pillar emit 1-3 cards. Each card has:
-  - label: a short metric name ("P/E vs sector", "FCF margin", "Rev growth YoY")
-  - value: the formatted figure ("32.4x", "18%", "+24% YoY")
-  - tone: 'beat' (clearly positive), 'miss' (clearly negative), 'caution' (mixed/elevated)
-  - note: one short clause explaining the tone
-
-KPIs (top strip): 4 numeric quick-look metrics. Use the same formatting rules.
-
-Markers: pick up to 8 events from the supplied earnings_dates that land on or
-near a weekly_close timestamp. Use kind='earnings' for earnings dates.
-Optionally add 'guidance' or 'news' markers if a specific date in the news
-feed clearly drove a price move.
-
-Catalysts and risks: 3-6 bullets each, written as short phrases (not full
-sentences).
-
-Bottom line: 2-3 sentences. State the call.
-
-Rating: pick the rating that reflects your blended view across the three
-pillars and the price context.
-
-Return JSON matching the schema. Do not include the final risk_score — it is
-computed deterministically from your three pillar scores.`
-
 export async function generateRiskReport(input: RiskReportLLMInput): Promise<{
   llm: RiskReportLLM
   bars_marker_filtered: ChartMarker[]
@@ -135,7 +99,7 @@ export async function generateRiskReport(input: RiskReportLLMInput): Promise<{
   const { object, usage } = await generateObject({
     model: resolved.model,
     schema: RiskReportLLMSchema,
-    system: SYSTEM_PROMPT,
+    system: await getPrompt('research.risk_report'),
     prompt,
   })
 

@@ -17,6 +17,7 @@ from app.deps import get_opend  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.settings import get_settings  # noqa: E402
 from app.services.agents import llm_config  # noqa: E402
+from app.services.agents import prompts as agents_prompts  # noqa: E402
 from tests.test_quote import FakeAdapter  # noqa: E402
 
 
@@ -37,6 +38,12 @@ def _web_llm_config(monkeypatch: pytest.MonkeyPatch) -> None:
         llm_config,
         "_transport",
         httpx.MockTransport(lambda _request: httpx.Response(200, json=llm_config_wire())),
+    )
+    # ... and no prompt overrides saved.
+    monkeypatch.setattr(
+        agents_prompts,
+        "_transport",
+        httpx.MockTransport(lambda _request: httpx.Response(200, json={"overrides": {}})),
     )
 
 

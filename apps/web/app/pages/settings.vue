@@ -1,8 +1,9 @@
 <script setup lang="ts">
-/* Hallmark · genre: modern-minimal · macrostructure: page header, model providers list with modal editor, per-role model selection · design-system: design.md · designed-as-app */
+/* Hallmark · genre: modern-minimal · macrostructure: page header, tabs (models: providers list with modal editor + per-role model selection; notifications; prompts: grouped editable prompts) · design-system: design.md · designed-as-app */
 import ConfirmModal from '~/components/settings/ConfirmModal.vue'
 import ProviderFormModal from '~/components/settings/ProviderFormModal.vue'
 import { settingsErrorMessage } from '../../composables/providerForm'
+import { SETTINGS_TABS, parseSettingsTab, type SettingsTab } from '../utils/settings-view'
 import { summarizeTests, useModelSelectionDraft } from '../../composables/useModelSelectionDraft'
 import {
   PROVIDER_KIND_META,
@@ -14,6 +15,16 @@ import {
 
 const overlay = useOverlay()
 const toast = useToast()
+const route = useRoute()
+const router = useRouter()
+
+const tab = computed<SettingsTab>({
+  get: () => parseSettingsTab(route.query.tab),
+  set: (value) => {
+    void router.replace({ query: { ...route.query, tab: value === 'models' ? undefined : value } })
+  },
+})
+const tabItems = SETTINGS_TABS.map(t => ({ label: t.label, value: t.value }))
 
 const { data: providerData, pending, error, refresh: refreshProviders } = useFetch<{ providers: LlmProviderView[] }>(
   '/api/settings/llm/providers',
@@ -138,95 +149,102 @@ async function saveSelection(): Promise<void> {
     </PageHeader>
 
     <main class="flex-1 min-h-0 overflow-y-auto scroll-hidden">
-      <div class="max-w-3xl mx-auto page-pad space-y-10">
-        <section class="space-y-4">
-          <div class="flex items-end justify-between gap-4">
-            <div>
-              <h2 class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">model providers</h2>
-              <p class="text-sm text-[var(--paper-2)] mt-1">API keys are encrypted with your server's encryption key and never shown again.</p>
+      <div class="max-w-3xl mx-auto page-pad space-y-8">
+        <UTabs v-model="tab" :items="tabItems" :content="false" variant="link" />
+
+        <div v-if="tab === 'models'" class="space-y-10">
+          <section class="space-y-4">
+            <div class="flex items-end justify-between gap-4">
+              <div>
+                <h2 class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">model providers</h2>
+                <p class="text-sm text-[var(--paper-2)] mt-1">API keys are encrypted with your server's encryption key and never shown again.</p>
+              </div>
+              <UButton icon="i-lucide-plus" label="add provider" class="tap shrink-0" @click="openProviderForm()" />
             </div>
-            <UButton icon="i-lucide-plus" label="add provider" class="tap shrink-0" @click="openProviderForm()" />
-          </div>
 
-          <PageState v-if="pending && !providerData" kind="loading" message="loading providers…" />
-          <PageState v-else-if="error" kind="error" :message="`providers failed to load: ${error.message}`" @retry="refreshProviders()" />
-          <div v-else-if="providers.length === 0" class="surface-1 p-6 text-sm text-[var(--paper-2)]">
-            No provider yet. Add one to start chatting and running research.
-          </div>
+            <PageState v-if="pending && !providerData" kind="loading" message="loading providers…" />
+            <PageState v-else-if="error" kind="error" :message="`providers failed to load: ${error.message}`" @retry="refreshProviders()" />
+            <div v-else-if="providers.length === 0" class="surface-1 p-6 text-sm text-[var(--paper-2)]">
+              No provider yet. Add one to start chatting and running research.
+            </div>
 
-          <ul v-else class="space-y-3">
-            <li v-for="provider in providers" :key="provider.id" class="surface-1 p-4 space-y-3">
-              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div class="min-w-0 flex-1">
-                  <div class="text-[var(--paper-0)]">{{ provider.label }}</div>
-                  <div class="font-mono text-xs text-[var(--paper-3)] mt-1 break-words">
-                    {{ PROVIDER_KIND_META[provider.kind].label }}
-                    <template v-if="provider.baseUrl"> · {{ provider.baseUrl }}</template>
-                    · <span class="whitespace-nowrap">key {{ provider.apiKeyHint }}</span>
+            <ul v-else class="space-y-3">
+              <li v-for="provider in providers" :key="provider.id" class="surface-1 p-4 space-y-3">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[var(--paper-0)]">{{ provider.label }}</div>
+                    <div class="font-mono text-xs text-[var(--paper-3)] mt-1 break-words">
+                      {{ PROVIDER_KIND_META[provider.kind].label }}
+                      <template v-if="provider.baseUrl"> · {{ provider.baseUrl }}</template>
+                      · <span class="whitespace-nowrap">key {{ provider.apiKeyHint }}</span>
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2 sm:shrink-0">
+                    <UButton
+                      label="test connection"
+                      color="neutral"
+                      variant="outline"
+                      size="sm"
+                      class="tap"
+                      :loading="testing[provider.id]"
+                      @click="testProvider(provider)"
+                    />
+                    <UButton icon="i-lucide-pencil" color="neutral" variant="ghost" class="tap" :aria-label="`edit ${provider.label}`" @click="openProviderForm(provider)" />
+                    <UButton icon="i-lucide-trash-2" color="error" variant="ghost" class="tap" :aria-label="`remove ${provider.label}`" @click="removeProvider(provider)" />
                   </div>
                 </div>
-                <div class="flex flex-wrap items-center gap-2 sm:shrink-0">
-                  <UButton
-                    label="test connection"
-                    color="neutral"
-                    variant="outline"
-                    size="sm"
-                    class="tap"
-                    :loading="testing[provider.id]"
-                    @click="testProvider(provider)"
-                  />
-                  <UButton icon="i-lucide-pencil" color="neutral" variant="ghost" class="tap" :aria-label="`edit ${provider.label}`" @click="openProviderForm(provider)" />
-                  <UButton icon="i-lucide-trash-2" color="error" variant="ghost" class="tap" :aria-label="`remove ${provider.label}`" @click="removeProvider(provider)" />
+                <p
+                  v-if="testOutcomes[provider.id] && !testing[provider.id]"
+                  class="font-mono text-xs break-words"
+                  :class="testOutcomes[provider.id]!.ok ? 'text-[var(--tape-up)]' : 'text-[var(--tape-down)]'"
+                >
+                  {{ testOutcomes[provider.id]!.message }}
+                </p>
+              </li>
+            </ul>
+          </section>
+
+          <!-- Reka's SelectValue renders empty on the server, so the selectors mount client-side. -->
+          <ClientOnly>
+            <section v-if="providers.length > 0" class="space-y-4">
+              <h2 class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">models</h2>
+              <div v-for="{ role, label, description } in ROLES" :key="role" class="surface-1 p-4 space-y-3">
+                <div>
+                  <div class="text-[var(--paper-0)]">{{ label }}</div>
+                  <p class="text-sm text-[var(--paper-2)] mt-1">{{ description }}</p>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <UFormField label="Provider">
+                    <USelect
+                      v-if="providers.length > 1"
+                      :model-value="draft[role].providerId"
+                      :items="providerItems"
+                      class="w-full"
+                      @update:model-value="selectProvider(role, $event)"
+                    />
+                    <div v-else class="text-sm text-[var(--paper-1)] py-1.5">{{ providerLabel(draft[role].providerId) }}</div>
+                  </UFormField>
+                  <UFormField label="Model" help="Pick from the list or type any model id.">
+                    <UInputMenu
+                      v-model="draft[role].modelId"
+                      :items="modelLists[draft[role].providerId] ?? []"
+                      create-item
+                      placeholder="e.g. claude-sonnet-4-6"
+                      class="w-full"
+                      @create="onCreateModel(role, $event)"
+                    />
+                  </UFormField>
                 </div>
               </div>
-              <p
-                v-if="testOutcomes[provider.id] && !testing[provider.id]"
-                class="font-mono text-xs break-words"
-                :class="testOutcomes[provider.id]!.ok ? 'text-[var(--tape-up)]' : 'text-[var(--tape-down)]'"
-              >
-                {{ testOutcomes[provider.id]!.message }}
-              </p>
-            </li>
-          </ul>
-        </section>
+              <div class="flex justify-end">
+                <UButton label="save models" class="tap" :disabled="!canSave" :loading="saving" @click="saveSelection" />
+              </div>
+            </section>
+          </ClientOnly>
+        </div>
 
-        <!-- Reka's SelectValue renders empty on the server, so the selectors mount client-side. -->
-        <ClientOnly>
-          <section v-if="providers.length > 0" class="space-y-4">
-            <h2 class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">models</h2>
-            <div v-for="{ role, label, description } in ROLES" :key="role" class="surface-1 p-4 space-y-3">
-              <div>
-                <div class="text-[var(--paper-0)]">{{ label }}</div>
-                <p class="text-sm text-[var(--paper-2)] mt-1">{{ description }}</p>
-              </div>
-              <div class="grid gap-3 sm:grid-cols-2">
-                <UFormField label="Provider">
-                  <USelect
-                    v-if="providers.length > 1"
-                    :model-value="draft[role].providerId"
-                    :items="providerItems"
-                    class="w-full"
-                    @update:model-value="selectProvider(role, $event)"
-                  />
-                  <div v-else class="text-sm text-[var(--paper-1)] py-1.5">{{ providerLabel(draft[role].providerId) }}</div>
-                </UFormField>
-                <UFormField label="Model" help="Pick from the list or type any model id.">
-                  <UInputMenu
-                    v-model="draft[role].modelId"
-                    :items="modelLists[draft[role].providerId] ?? []"
-                    create-item
-                    placeholder="e.g. claude-sonnet-4-6"
-                    class="w-full"
-                    @create="onCreateModel(role, $event)"
-                  />
-                </UFormField>
-              </div>
-            </div>
-            <div class="flex justify-end">
-              <UButton label="save models" class="tap" :disabled="!canSave" :loading="saving" @click="saveSelection" />
-            </div>
-          </section>
-        </ClientOnly>
+        <NotificationsSettings v-else-if="tab === 'notifications'" />
+        <PromptsSettings v-else />
       </div>
     </main>
   </div>

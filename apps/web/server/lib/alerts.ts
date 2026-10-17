@@ -7,6 +7,9 @@ import {
   type AlertStatus,
   type PriceAlert,
 } from './alerts-core'
+import { getNotificationSettings } from './notification-settings'
+import { appPublicUrl, enqueueNotification } from './notifications'
+import { priceAlertMessage, type PriceAlertContext } from './price-alert-message'
 
 export type { AlertKind, AlertStatus, PriceAlert }
 
@@ -67,17 +70,26 @@ export async function loadActiveAlerts(): Promise<PriceAlert[]> {
 }
 
 /**
- * Flip an active alert to triggered. Guarded on status='active' so a
- * cancel racing the evaluation loop wins and the alert never re-fires.
+ * Flip an active alert to triggered and enqueue its notification in one
+ * transaction, so an alert never ends up triggered with nobody told.
+ * Guarded on status='active': a cancel racing the evaluation wins, the alert
+ * never re-fires, and the call returns null with nothing enqueued.
+ * `context` only enriches the email; without it the message is the basic one.
  */
-export async function markAlertTriggered(id: string, price: number, at = new Date()): Promise<PriceAlert | null> {
-  const db = getDb()
-  const updated = await db
-    .update(priceAlerts)
-    .set({ status: 'triggered', triggeredAt: at, triggeredPrice: String(price) })
-    .where(and(eq(priceAlerts.id, id), eq(priceAlerts.status, 'active')))
-    .returning()
-  return updated[0] ? shapeAlertRow(updated[0]) : null
+export async function triggerAlert(id: string, price: number, context?: PriceAlertContext, at = new Date()): Promise<PriceAlert | null> {
+  const appUrl = appPublicUrl()
+  const timeZone = await getNotificationSettings().then(s => s.timezone, () => 'UTC')
+  return getDb().transaction(async (tx) => {
+    const updated = await tx
+      .update(priceAlerts)
+      .set({ status: 'triggered', triggeredAt: at, triggeredPrice: String(price) })
+      .where(and(eq(priceAlerts.id, id), eq(priceAlerts.status, 'active')))
+      .returning()
+    if (!updated[0]) return null
+    const alert = shapeAlertRow(updated[0])
+    await enqueueNotification(priceAlertMessage(alert, appUrl, context, timeZone), tx)
+    return alert
+  })
 }
 
 export interface TriggeredAlertsResponse {

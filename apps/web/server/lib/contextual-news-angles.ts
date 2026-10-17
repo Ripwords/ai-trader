@@ -2,6 +2,7 @@ import { generateObject } from 'ai'
 import { z } from 'zod'
 import { resolveModel } from '../llm/model'
 import { recordUsageSafely } from './llm-cost'
+import { getPrompt } from './prompts'
 
 export interface DeriveAnglesArgs {
   symbol: string
@@ -12,15 +13,6 @@ export interface DeriveAnglesArgs {
 const AnglesSchema = z.object({
   queries: z.array(z.string()).max(8),
 })
-
-const SYSTEM_PROMPT = [
-  'You generate short web-search queries that surface the MACRO, SECTOR,',
-  'and PEER/GEOPOLITICAL news that could explain why a given stock moved.',
-  'Do NOT include the company itself — ticker-specific news is fetched',
-  'separately. Focus on: the sector and close competitors, supply-chain',
-  'or regulatory exposure, and commodities/geopolitics relevant to this',
-  'company. Return 2-4 concise queries (3-7 words each).',
-].join(' ')
 
 export interface DeriveAnglesResult {
   queries: string[]
@@ -36,7 +28,7 @@ export async function deriveAngles(args: DeriveAnglesArgs): Promise<DeriveAngles
     const { object, usage } = await generateObject({
       model: resolved.model,
       schema: AnglesSchema,
-      system: SYSTEM_PROMPT,
+      system: await getPrompt('news.contextual_angles'),
       prompt: `Company: ${who}\nReturn macro/sector/peer search queries.`,
     })
     if (usage) {

@@ -13,7 +13,7 @@ import type { ApiClient } from '../../server/llm/http'
 
 const TOOL_PREFIXES = [
   'market', 'watchlist', 'search', 'news', 'trade', 'portfolio', 'value', 'technical', 'algo',
-  'research', 'investment', 'thesis', 'dyp', 'agents', 'holdings', 'convert', 'usage', 'alert',
+  'research', 'investment', 'thesis', 'dyp', 'agents', 'holdings', 'convert', 'usage', 'alert', 'reminder',
 ]
 
 /** Snake-case identifiers in the prompt that share a tool prefix but are data fields. */

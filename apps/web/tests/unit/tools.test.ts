@@ -114,6 +114,38 @@ vi.mock('../../server/lib/yahoo', () => ({
   getDailyBars: yahooBarsMock.getDailyBars,
 }))
 
+const remindersMock = vi.hoisted(() => ({
+  createReminder: vi.fn(async (input: { dueAt: Date; message: string; symbol: string | null }) => ({
+    id: 'rem-1',
+    createdAt: '2026-10-17T00:00:00.000Z',
+    dueAt: input.dueAt.toISOString(),
+    message: input.message,
+    symbol: input.symbol,
+    status: 'scheduled',
+    sentAt: null,
+  })),
+  listReminders: vi.fn(async () => [{
+    id: 'rem-1', createdAt: '2026-10-17T00:00:00.000Z', dueAt: '2099-10-17T01:00:00.000Z', message: 'm', symbol: null, status: 'scheduled', sentAt: null,
+  }]),
+  cancelReminder: vi.fn(async (): Promise<null> => null),
+  settings: { email: null as string | null, timezone: 'Asia/Kuala_Lumpur', priceAlerts: true, reminders: true, researchRuns: true },
+  countPushSubscriptions: vi.fn(async () => 2),
+}))
+
+vi.mock('../../server/lib/reminders', () => ({
+  createReminder: remindersMock.createReminder,
+  listReminders: remindersMock.listReminders,
+  cancelReminder: remindersMock.cancelReminder,
+}))
+
+vi.mock('../../server/lib/notification-settings', () => ({
+  getNotificationSettings: async () => remindersMock.settings,
+}))
+
+vi.mock('../../server/lib/push/subscriptions', () => ({
+  countPushSubscriptions: remindersMock.countPushSubscriptions,
+}))
+
 // Stand-in for ApiClient — only the methods our tools call.
 function fakeClient() {
   return {
@@ -171,6 +203,9 @@ describe('tool catalogue', () => {
       'news_pulse',
       'portfolio_mpt_analysis',
       'portfolio_performance',
+      'reminder_cancel',
+      'reminder_create',
+      'reminder_list',
       'research_get',
       'research_start',
       'research_status',
@@ -546,5 +581,50 @@ describe('tool catalogue', () => {
       .execute({ id: 'nope' })
     expect(alertsMock.cancelAlert).toHaveBeenCalledWith('nope')
     expect(out).toMatchObject({ error: 'alert not found', id: 'nope' })
+  })
+  it('reminder_create stores the due time in UTC and reports it back in the settings timezone', async () => {
+    remindersMock.createReminder.mockClear()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2099-10-16T00:00:00.000Z'))
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['reminder_create'] as { execute: (args: { due_at: string; message: string; symbol?: string }) => Promise<unknown> })
+      .execute({ due_at: '2099-10-17T09:00:00+08:00', message: 'Check NVDA earnings', symbol: 'NVDA' })
+      .finally(() => vi.useRealTimers())
+
+    expect(remindersMock.createReminder).toHaveBeenCalledWith({
+      dueAt: new Date('2099-10-17T01:00:00.000Z'),
+      message: 'Check NVDA earnings',
+      symbol: 'US.NVDA',
+    })
+    expect(out).toMatchObject({
+      reminder: { id: 'rem-1', status: 'scheduled' },
+      timezone: 'Asia/Kuala_Lumpur',
+      delivery: { email: false, pushDevices: 2 },
+    })
+    expect((out as { dueAtLocal: string }).dueAtLocal).toContain('09:00')
+  })
+
+  it('reminder_create refuses a past due time or a time without an offset', async () => {
+    remindersMock.createReminder.mockClear()
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const create = tools['reminder_create'] as { execute: (args: { due_at: string; message: string }) => Promise<unknown> }
+    expect(await create.execute({ due_at: '2020-01-01T09:00:00+08:00', message: 'late' })).toMatchObject({ error: expect.stringContaining('past') })
+    expect(await create.execute({ due_at: '2099-01-01 09:00', message: 'no offset' })).toMatchObject({ error: expect.any(String) })
+    expect(remindersMock.createReminder).not.toHaveBeenCalled()
+  })
+
+  it('reminder_list shows due times in the settings timezone', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['reminder_list'] as { execute: (args: { status: 'scheduled' }) => Promise<unknown> })
+      .execute({ status: 'scheduled' })
+    expect(remindersMock.listReminders).toHaveBeenCalledWith({ status: 'scheduled' })
+    expect(out).toMatchObject({ timezone: 'Asia/Kuala_Lumpur', reminders: [{ id: 'rem-1', dueAtLocal: expect.stringContaining('09:00') }] })
+  })
+
+  it('reminder_cancel reports a missing reminder as an error', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['reminder_cancel'] as { execute: (args: { id: string }) => Promise<unknown> })
+      .execute({ id: 'nope' })
+    expect(out).toMatchObject({ error: expect.stringContaining('not found'), id: 'nope' })
   })
 })

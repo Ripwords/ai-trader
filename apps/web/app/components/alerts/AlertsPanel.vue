@@ -2,8 +2,9 @@
 import { computed, ref } from 'vue'
 import type { PriceAlert, AlertKind } from '../../../server/lib/alerts-core'
 
-// Server list is capped at 100; show newest-first. The evaluation loop runs
-// server-side every 60s — this panel is just CRUD over /api/alerts.
+// Server list is capped at 100; show newest-first. The alerts:evaluate task
+// runs server-side every minute and notifies by email/push — this panel is
+// CRUD over /api/alerts plus that task's heartbeat.
 const { data, pending, error, refresh } = useLazyFetch<{ alerts: PriceAlert[] }>('/api/alerts', {
   server: true,
   query: { status: 'all' },
@@ -96,8 +97,8 @@ const statusClass = (status: PriceAlert['status']) => {
   <section class="surface-1 p-6 space-y-5">
     <div class="flex items-baseline justify-between gap-4">
       <div class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--paper-3)]">price alerts</div>
-      <div class="font-mono text-xs text-[var(--paper-3)]">
-        {{ activeAlerts.length }} armed · checked every 60s
+      <div class="font-mono text-xs text-[var(--paper-3)] text-right">
+        {{ activeAlerts.length }} armed · <SchedulerHeartbeat task="alerts:evaluate" />
       </div>
     </div>
 

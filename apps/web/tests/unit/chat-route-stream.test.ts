@@ -66,6 +66,7 @@ vi.mock('../../server/llm/mcp', () => ({
 }))
 vi.mock('../../server/llm/chat-context', () => ({ buildSystemPrompt: (s: string, r: string) => deps.buildSystemPrompt(s, r) }))
 vi.mock('../../server/llm/tools', () => ({ makeTools: () => deps.makeTools() }))
+vi.mock('../../server/lib/prompts/chat-runtime', () => ({ loadChatPromptInputs: async () => ({}) }))
 vi.mock('../../server/llm/recall', () => ({ buildRecallContext: async () => '' }))
 vi.mock('../../server/lib/llm-cost', () => ({ recordUsageSafely: vi.fn(async () => {}) }))
 vi.mock('../../server/llm/model', () => ({

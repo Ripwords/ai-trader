@@ -16,6 +16,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   drizzle-migrate:
     build:
@@ -66,6 +67,7 @@ services:
         condition: service_healthy
       drizzle-migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   web:
     build: ./apps/web
@@ -102,6 +104,20 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       NUXT_API_BASE_URL: http://api:8000
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Notifications (alerts, reminders, finished research). The scheduled
+      # tasks run inside this container every minute; see README
+      # "Notifications & reminders". Email via Resend: sender is
+      # alerts@RESEND_DOMAIN, which must be verified in Resend.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_DOMAIN: ${RESEND_DOMAIN:-}
+      # Absolute base for links in emails, e.g. https://trader.example.com.
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-}
+      # Web Push keys: `npx web-push generate-vapid-keys`.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      # 1 stops the price-alert check (reminders and sending keep running).
+      PRICE_ALERTS_DISABLED: ${PRICE_ALERTS_DISABLED:-}
     ports:
       - "${WEB_PORT:-3000}:3000"
     # See api service: pin external DNS off the flaky Tailscale resolver so
@@ -114,6 +130,9 @@ services:
         condition: service_started
       drizzle-migrate:
         condition: service_completed_successfully
+    # The scheduler lives in this process: if it dies, alerts and reminders
+    # stop until it is back, so let Docker bring it back.
+    restart: unless-stopped
 
 volumes:
   pgdata:

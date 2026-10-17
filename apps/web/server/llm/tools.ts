@@ -883,11 +883,11 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
-    // --- Price alerts (server-side 60s evaluation loop) --------------------
+    // --- Price alerts (the alerts:evaluate scheduled task, every minute) -----
 
     'alert_create': tool({
       description:
-        'Create a price alert the server watches for the user — "notify me when NVDA hits 150" → alert_create(symbol NVDA, kind price_above, threshold 150); "tell me if TSLA drops below 200" → price_below; "ping me if AAPL moves more than 3% today" → pct_move_day with threshold 3. The alert fires a browser notification once when the condition crosses. The symbol is resolved to canonical form first; if resolution fails, relay the candidates to the user instead of guessing.',
+        'Create a price alert the server watches for the user — "notify me when NVDA hits 150" → alert_create(symbol NVDA, kind price_above, threshold 150); "tell me if TSLA drops below 200" → price_below; "ping me if AAPL moves more than 3% today" → pct_move_day with threshold 3. The alert fires once when the condition crosses: an email (if a recipient is set in Settings → Notifications) and a push to every subscribed device. The symbol is resolved to canonical form first; if resolution fails, relay the candidates to the user instead of guessing.',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker, e.g. NVDA, US.NVDA, HK.00700'),
         kind: z.enum(['price_above', 'price_below', 'pct_move_day']).describe('price_above: last >= threshold; price_below: last <= threshold; pct_move_day: abs day move % >= threshold'),
@@ -905,7 +905,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         }
         const { createAlert } = await import('../lib/alerts')
         const alert = await createAlert({ symbol: resolution.symbol, kind, threshold, note: note ?? null })
-        return { alert, message: `Alert armed: ${alert.symbol} ${alert.kind} ${alert.threshold}. The server checks every minute; the user gets a browser notification when it triggers.` }
+        return { alert, message: `Alert armed: ${alert.symbol} ${alert.kind} ${alert.threshold}. The server checks every minute; when it triggers the user is emailed (if a recipient is set in Settings → Notifications) and pushed to subscribed devices.` }
       },
     }),
 
@@ -933,6 +933,84 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const alert = await cancelAlert(id)
         if (!alert) return { error: 'alert not found', id }
         return { alert }
+      },
+    }),
+
+    // --- Time-based reminders (the reminders:dispatch task, every minute) --
+
+    'reminder_create': tool({
+      description:
+        'Schedule a one-off reminder — "remind me to check NVDA earnings on Friday 9am" → reminder_create(due_at "2026-10-23T09:00:00+08:00", message "Check NVDA earnings", symbol NVDA). due_at MUST be ISO 8601 with an explicit UTC offset; read relative or bare times ("tomorrow 9am") in the user\'s timezone (call reminder_list first if you don\'t know it — it returns the timezone). At the due minute the user is emailed (if a recipient is set in Settings → Notifications) and pushed to subscribed devices. Confirm back using dueAtLocal, and if delivery shows no email and no devices, tell the user to set one up in Settings → Notifications.',
+      inputSchema: z.object({
+        due_at: z.string().describe('ISO 8601 with offset, e.g. 2026-10-23T09:00:00+08:00'),
+        message: z.string().describe('What to remind the user about, up to 500 characters'),
+        symbol: z.string().optional().describe('Optional ticker the reminder is about; links the notification to its research page'),
+      }),
+      execute: async ({ due_at, message, symbol }) => {
+        const { reminderCreateSchema, dueAtProblem } = await import('../lib/reminders-core')
+        const parsed = reminderCreateSchema.safeParse({ dueAt: due_at, message, symbol })
+        if (!parsed.success) {
+          return { error: `invalid reminder: ${parsed.error.issues.map(i => `${i.path.join('.') || 'input'} ${i.message}`).join('; ')}. due_at needs an explicit offset, e.g. 2026-10-23T09:00:00+08:00.` }
+        }
+        const dueAt = new Date(parsed.data.dueAt)
+        const problem = dueAtProblem(dueAt, new Date())
+        if (problem) return { error: problem, due_at }
+
+        let canonical: string | null = null
+        if (parsed.data.symbol) {
+          // A reminder is still useful when the ticker doesn't resolve; keep what the user said.
+          const { resolveSymbol } = await import('../lib/yahoo')
+          const resolution = await resolveSymbol(parsed.data.symbol).catch(() => null)
+          canonical = resolution?.status === 'resolved' ? resolution.symbol : parsed.data.symbol.toUpperCase()
+        }
+
+        const [{ createReminder }, { getNotificationSettings }, { countPushSubscriptions }, { formatInZone }] = await Promise.all([
+          import('../lib/reminders'),
+          import('../lib/notification-settings'),
+          import('../lib/push/subscriptions'),
+          import('../../types/zoned-time'),
+        ])
+        const reminder = await createReminder({ dueAt, message: parsed.data.message, symbol: canonical })
+        const settings = await getNotificationSettings()
+        const pushDevices = await countPushSubscriptions()
+        return {
+          reminder,
+          dueAtLocal: formatInZone(reminder.dueAt, settings.timezone),
+          timezone: settings.timezone,
+          delivery: { email: settings.email !== null && settings.reminders, pushDevices: settings.reminders ? pushDevices : 0, remindersEnabled: settings.reminders },
+        }
+      },
+    }),
+
+    'reminder_list': tool({
+      description:
+        'List the user\'s reminders with due times in their timezone (dueAtLocal) and the timezone itself. Defaults to scheduled (upcoming); pass sent, cancelled or all. Use for "what reminders do I have", or to find an id before reminder_cancel.',
+      inputSchema: z.object({
+        status: z.enum(['scheduled', 'sent', 'cancelled', 'all']).default('scheduled'),
+      }),
+      execute: async ({ status }) => {
+        const [{ listReminders }, { getNotificationSettings }, { formatInZone }] = await Promise.all([
+          import('../lib/reminders'),
+          import('../lib/notification-settings'),
+          import('../../types/zoned-time'),
+        ])
+        const { timezone } = await getNotificationSettings()
+        const reminders = await listReminders({ status: status === 'all' ? undefined : status })
+        return { timezone, reminders: reminders.map(r => ({ ...r, dueAtLocal: formatInZone(r.dueAt, timezone) })) }
+      },
+    }),
+
+    'reminder_cancel': tool({
+      description:
+        'Cancel a scheduled reminder by id (call reminder_list first if you only know what it was about). Reminders that already fired cannot be cancelled.',
+      inputSchema: z.object({
+        id: z.string().describe('Reminder id from reminder_list or reminder_create'),
+      }),
+      execute: async ({ id }) => {
+        const { cancelReminder } = await import('../lib/reminders')
+        const reminder = await cancelReminder(id)
+        if (!reminder) return { error: 'reminder not found or not scheduled', id }
+        return { reminder }
       },
     }),
   }

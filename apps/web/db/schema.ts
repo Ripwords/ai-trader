@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import { bigserial, boolean, date, index, integer, jsonb, numeric, pgEnum, pgTable, primaryKey, serial, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core'
 import { PROVIDER_KINDS } from '../types/llm'
 import { encryptedText } from './encrypted-text'
+import type { EmailAttachment } from '../server/lib/email/resend'
 
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -286,8 +287,8 @@ export const paperOrders = pgTable('paper_orders', {
   bySymbol: index('paper_orders_symbol_idx').on(t.symbol, t.createdAt),
 }))
 
-// Price alerts evaluated server-side by the Nitro polling plugin
-// (server/plugins/price-alerts.ts). `symbol` is canonical moomoo form
+// Price alerts evaluated server-side by the Nitro scheduled task
+// (server/tasks/alerts/evaluate.ts). `symbol` is canonical moomoo form
 // (e.g. US.NVDA) — creation goes through resolveSymbol. `kind` ∈
 // {'price_above','price_below','pct_move_day'}; for pct_move_day the
 // threshold is a day-move percentage (abs). `status` ∈
@@ -334,3 +335,63 @@ export const valuationSnapshots = pgTable('valuation_snapshots', {
   // Latest snapshot for a symbol at/before a point in time.
   bySymbolCreated: index('valuation_snapshots_symbol_created_idx').on(t.symbol, t.createdAt),
 }))
+
+// Outbox for everything the server tells the user about: price alerts that
+// fired, reminders that came due, research runs that finished. Producers
+// insert with ON CONFLICT DO NOTHING on `dedupe_key` (`alert:<id>`,
+// `reminder:<id>`, `run:<id>`), so a restart or a race never enqueues twice.
+// The `notify:send` task drains `pending` rows. Each channel keeps its own
+// status, so a failing push never resends an email that already went out.
+// `status` ∈ {'pending','sent','failed','skipped'} is the roll-up of the two
+// channel statuses; `next_attempt_at` is both the retry backoff and the
+// sender's lease on a row it is working on.
+export const notifications = pgTable('notifications', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  kind: varchar('kind', { length: 16 }).notNull(),
+  dedupeKey: varchar('dedupe_key', { length: 128 }).notNull().unique(),
+  subject: text('subject').notNull(),
+  bodyText: text('body_text').notNull(),
+  bodyHtml: text('body_html').notNull(),
+  // App path the push notification and email link open, e.g. /research/US.AAPL.
+  url: text('url'),
+  // Inline images (base64 PNG) the HTML body references by cid:. Rendered at enqueue.
+  attachments: jsonb('attachments').$type<EmailAttachment[]>(),
+  status: varchar('status', { length: 16 }).notNull().default('pending'),
+  emailStatus: varchar('email_status', { length: 16 }).notNull().default('pending'),
+  pushStatus: varchar('push_status', { length: 16 }).notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+  lastError: text('last_error'),
+  sentAt: timestamp('sent_at', { withTimezone: true }),
+}, t => ({
+  pendingDue: index('notifications_pending_idx').on(t.nextAttemptAt).where(sql`status = 'pending'`),
+}))
+
+// One-shot time-based reminders. `reminders:dispatch` flips due rows to
+// 'sent' and enqueues their notification in one transaction. `status` ∈
+// {'scheduled','sent','cancelled'}. Single-user app — no user_id.
+export const reminders = pgTable('reminders', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  dueAt: timestamp('due_at', { withTimezone: true }).notNull(),
+  message: text('message').notNull(),
+  symbol: varchar('symbol', { length: 32 }),
+  status: varchar('status', { length: 16 }).notNull().default('scheduled'),
+  sentAt: timestamp('sent_at', { withTimezone: true }),
+}, t => ({
+  scheduledDue: index('reminders_scheduled_due_idx').on(t.dueAt).where(sql`status = 'scheduled'`),
+}))
+
+// Web Push subscriptions, one per browser/device that tapped "Enable push".
+// A push service answering 404/410 means the subscription is gone; the
+// sender deletes the row.
+export const pushSubscriptions = pgTable('push_subscriptions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  endpoint: text('endpoint').notNull().unique(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  userAgent: text('user_agent'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
+})

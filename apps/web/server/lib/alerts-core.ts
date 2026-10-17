@@ -1,7 +1,7 @@
 /**
  * Price alerts — pure core. No DB, no fetch; unit-testable evaluation and
- * shaping only. The DB-touching half lives in ./alerts.ts and the polling
- * timer in server/plugins/price-alerts.ts.
+ * shaping only. The DB-touching half lives in ./alerts.ts, the pass in
+ * ./alerts-evaluate.ts and its schedule in server/tasks/alerts/evaluate.ts.
  */
 
 export type AlertKind = 'price_above' | 'price_below' | 'pct_move_day'

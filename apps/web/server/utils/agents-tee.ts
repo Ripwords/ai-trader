@@ -3,6 +3,8 @@ import { getDb } from '../../db/client'
 import { agentRuns, agentMessages, agentDecisions } from '../../db/schema'
 import type { AgentEvent } from '../../types/agents'
 import { notifyRun } from '../lib/agents/run-signal'
+import { appPublicUrl, enqueueNotificationSafely } from '../lib/notifications'
+import { researchRunMessage } from '../lib/notifications-messages'
 
 const QUEUE_CAP = 100
 
@@ -63,13 +65,35 @@ export class AgentRunTee {
     // The api reports a cancelled task as this exact error.
     const status = msg === null ? 'complete' : msg === 'cancelled' ? 'cancelled' : 'failed'
     try {
-      await getDb()
+      const finished = await getDb()
         .update(agentRuns)
         .set({ status, finishedAt: new Date(), error: msg })
         .where(and(eq(agentRuns.id, this.runId), eq(agentRuns.status, 'running')))
+        .returning({ symbol: agentRuns.symbol })
+      // Only the writer that flipped the status notifies, so a run is
+      // announced once even when end() and run-end race.
+      if (finished[0]) await this.enqueueFinished(finished[0].symbol, status, msg)
     }
     finally {
       notifyRun(this.runId, { final: true })
+    }
+  }
+
+  /** "Research finished" outbox row. Never throws into the tee. */
+  private async enqueueFinished(symbol: string, status: 'complete' | 'failed' | 'cancelled', error: string | null) {
+    try {
+      const rows = await getDb()
+        .select({ rating: agentDecisions.rating, confidence: agentDecisions.confidence, rationale: agentDecisions.rationale })
+        .from(agentDecisions)
+        .where(eq(agentDecisions.runId, this.runId))
+        .limit(1)
+      await enqueueNotificationSafely(researchRunMessage(
+        { runId: this.runId, symbol, status, error, decision: rows[0] ?? null },
+        appPublicUrl(),
+      ))
+    }
+    catch (e: unknown) {
+      console.error('[agents-tee] research notification failed', (e as Error)?.message)
     }
   }
 

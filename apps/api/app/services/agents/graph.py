@@ -78,6 +78,7 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from .confidence import judge_confidence
 from .deepseek_compat import install_litellm_thinking_patch
 from . import llm_config
+from . import prompts as prompts_mod
 from .llm_config import LlmRuntimeConfig
 from .toolkit import AgentToolkit, OpenDClient, build_toolkit
 from app.services.valuation.compose import apply_veto, value
@@ -94,6 +95,9 @@ from app.services.valuation.summary import format_valuation_for_agents
 # critical section (``_install_toolkit`` -> ``TradingAgentsGraph(...)`` ->
 # accessing ``ta.graph``) is always single-threaded.
 _build_lock = asyncio.Lock()
+
+# Every node module reads its prompt through the override-aware loader.
+prompts_mod.install_prompt_overrides()
 
 Judge = Callable[[dict, str], Awaitable[int | None]]
 
@@ -243,7 +247,12 @@ async def build_graph_locked(
     # losing the lock semantics they're trying to verify.
     import sys
 
-    models = await llm_config.fetch_llm_config()
+    models, overrides = await asyncio.gather(
+        llm_config.fetch_llm_config(), prompts_mod.fetch_prompt_overrides()
+    )
+    # Set here, not inside the gathered task, so it lands in the caller's
+    # context: the run streams from this task or from one it spawns next.
+    prompts_mod.set_run_overrides(overrides)
     async with _build_lock:
         target = getattr(sys.modules[__name__], "build_graph")
         return await asyncio.to_thread(

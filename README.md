@@ -13,6 +13,7 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 - Ask `any news on NVDA?` → Tavily-powered news cards.
 - Ask `show me my portfolio` → real positions + cash from your paper or live moomoo account; Ghostfolio MCP can add tracker/reconciliation context when configured.
 - Ask for a full ticker analysis → TradingAgents runs analysts, bull/bear debate, risk review, and a portfolio-manager verdict.
+- Ask `notify me when NVDA hits 150` or `remind me to check NVDA earnings on Friday 9am` → an email and a push notification when it fires (see [Notifications & reminders](#notifications--reminders)).
 - Manage paper algo strategies from `/algo`; scheduler order placement is paper-only. **go live (paper)** stays disabled until the strategy is saved and its latest backtest clears the blocking checks, and the reason is printed under the button. A failed go-live, stop, or kill-switch request shows its error next to the control. Passing checks fold into one "all N checks passed" line. Below 1024px the strategy assistant opens from the **chat** button as a side panel (Esc closes it); order ids sit under **technical details** in the signals table.
 
 ## Prereqs
@@ -35,6 +36,7 @@ cp .env.example .env
 #   the `change-me…` example value or shorter than 32 characters.
 #   TAVILY_API_KEY     — tvly-… key for news/web search (optional)
 #   POSTGRES_PORT      — host port for postgres (default 5432; override if 5432 is taken)
+#   RESEND_*, VAPID_*  — email and push for alerts/reminders (optional; see Notifications & reminders)
 
 docker compose up -d --build
 open http://localhost:3000
@@ -59,6 +61,59 @@ Settings (`/settings`, also reachable from the `model · …` badge in the heade
 - **Cost.** `/usage` prices calls for models in the built-in price table. Other models show as unpriced. Costs show to the cent; a cost under a cent shows two significant digits (e.g. `$0.0042`) so it doesn't read as free.
 
 Behind a reverse proxy, long chat and research streams can sit quiet between tokens. nginx drops a proxied response after 60 s of silence by default. Raising `proxy_read_timeout` (for example to `600s`) on the location that serves the web app is optional but avoids cut-off replies.
+
+Settings has three tabs: **models** (the providers and models above), **notifications**, and **prompts**. The open tab is kept in the URL (`/settings?tab=prompts`).
+
+## Editable prompts
+
+Settings → **prompts** lists the instructions each model gets, grouped as Chat, Research, News, Algo and Agents debate. Click a row to open its text. A **modified** badge marks a prompt you have edited.
+
+- **What you can edit.** Chat: the chat system prompt and the moomoo rules. Research: the risk report. News: the search angles. Algo: the strategy assistant. Agents debate: the 13 TradingAgents node prompts (the four analysts, bull and bear researchers, research manager, trader system and request, the three risk analysts, risk manager) and the confidence judge.
+- **When edits apply.** The next chat message, report or debate run uses the saved text. A run already in progress keeps the text it started with.
+- **Defaults.** A prompt you have not edited follows the built-in default, so it picks up future changes to it. Saving text identical to the default clears the override. **reset to default** (shown only on a modified prompt) asks for confirmation, then deletes your text.
+- **What the chat prompt does not include.** The server appends a runtime block to the chat prompt on every turn, after your text: the current date and time in the timezone set under Settings → Notifications, the Ghostfolio status, recent research runs for the tickers you mention, and the slash-command directive. That block is not editable.
+- **Placeholders (agents debate only).** Debate prompts are Python format templates. The editor shows the `{placeholders}` the default uses as chips; your text may use any of them and no others. Any other literal brace must be doubled (`{{` or `}}`). Unknown placeholders and stray braces are rejected when you save, with the reason shown under the text.
+- **Contract lines.** The risk manager's output must contain `FINAL TRANSACTION PROPOSAL` and the confidence judge's must ask for a `CONFIDENCE:` line, because the debate parses them. Removing that wording shows a warning but does not block the save; the run may then fail to read a decision or a confidence score.
+- **Limits.** A prompt cannot be empty or longer than 50,000 characters.
+- **If the api is down.** The debate prompts' defaults come from the api service. While it is unreachable, the Agents debate group shows an error with a retry and its rows cannot be opened; the other groups still work. If a debate run cannot read the overrides, it logs a warning and uses the defaults.
+
+## Notifications & reminders
+
+Price alerts, reminders and finished research runs are delivered by **email** (Resend) and **Web Push** to every subscribed device. While an app tab is open, a triggered price alert also shows a browser notification (the tab polls for alerts fired in the last 10 minutes).
+
+- **Price alerts.** Arm one under the holdings tab of `/portfolio` or in chat (`notify me when NVDA hits 150`). The server checks armed alerts every minute and fires each one once.
+  - The alert email shows the name and symbol, the last price with the day change, and which condition fired and when you set the alert.
+  - It has a price chart of today's session in 5-minute bars (or the last 3 months of daily closes when there is no session data). The chart marks the alert threshold (amber dashed line) and the previous close (grey dotted line). A line is left out when its level is too far from the price to fit without flattening the chart.
+  - Below the chart: open, previous close, day range, 52-week range, volume and the distance from the threshold.
+  - When you hold the stock in your moomoo live account, a **Your position** block shows quantity, average cost, market value and unrealized P&L.
+  - Your note is included, and the **Open research** and **Manage alerts** buttons appear when `APP_PUBLIC_URL` is set.
+  - This data is fetched when the alert fires, with an 8-second limit per piece. A piece that fails or times out is left out of the email, and the alert still fires.
+  - The push notification reads like `343.46 (+1.20% today) · crossed above 340.00`.
+- **Reminders.** Schedule one under the holdings tab of `/portfolio` (when, message, optional symbol) or in chat (`remind me to check NVDA earnings on Friday 9am`). Times are entered and shown in the timezone set in Settings → **notifications**, not the device's. A due time can be at most a year ahead. **cancel** asks for confirmation; a reminder that already fired cannot be cancelled.
+- **Research runs.** When an agents debate finishes, fails or is cancelled you get its rating and confidence, with a link to the run.
+
+**Settings → notifications**
+
+- **Recipient email.** Blank (the default) means nothing is emailed. **send test email** sends one email to the saved address straight away and shows the result.
+- **Timezone** for reminders, and on/off switches for each category (price alerts, reminders, research runs). A switched-off category is still recorded but not sent.
+- **Push devices.** **enable push on this device** asks the browser for permission (only when you click it) and subscribes that browser. Every subscribed device is listed with when it last received something; the bin icon removes it after a confirmation. **send test push** pushes to all of them. A device the push service reports as gone is removed automatically.
+- **iPhone / iPad.** Push works only from the Home Screen app: in Safari tap Share → **Add to Home Screen**, open ai·trader from the Home Screen, then enable push there. The page shows this hint when it is opened in the browser on iOS.
+- **Scheduler.** When each check (price alerts, reminders, email/push sender) last ran. A check that has not run for 3 minutes shows **not running** in red, here and on the alerts and reminders panels.
+
+**How sending works.** Three Nitro scheduled tasks run every minute inside the web container: `alerts:evaluate`, `reminders:dispatch` and `notify:send`. A triggered alert, a due reminder or a finished run writes one row to the `notifications` outbox in the same transaction that changes its status, keyed so the same event can never be queued twice. The producing task then starts the sender at once, so a trigger goes out within seconds; `notify:send` also sweeps the outbox every minute. It delivers each row by email and push and records each channel as `sent`, `failed` or `skipped`. A channel is **skipped**, not failed, when its category is off, there is no recipient, its keys are unset, or no device is subscribed. A temporary failure is retried with backoff (1, 4, 16, 64 minutes) up to 5 attempts; a rejected address or key fails at once. Emails carry a Resend idempotency key, so a retry after a crash does not send twice. The alert chart is rendered to a PNG when the alert fires (by `@resvg/resvg-js`) and stored with the outbox row. It is attached as an inline image, so every retry sends the same image. The web, api and postgres containers restart on their own (`restart: unless-stopped`); after a restart the tasks pick up where they left off.
+
+**Setup** (`.env`, then `docker compose up -d --build web`):
+
+| Variable | What it does |
+|---|---|
+| `RESEND_API_KEY` | Resend API key. Unset: email is skipped. |
+| `RESEND_DOMAIN` | A domain verified in Resend. Mail comes from `ai-trader <alerts@RESEND_DOMAIN>`. |
+| `APP_PUBLIC_URL` | Public base URL for links in emails (`https://trader.example.com`). Unset: emails have no links. |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Web Push keys, from `npx web-push generate-vapid-keys`. Changing them unsubscribes every device. Unset: push is skipped. |
+| `VAPID_SUBJECT` | Contact for the push services, e.g. `mailto:you@example.com`. |
+| `PRICE_ALERTS_DISABLED` | `1` stops the price-alert check; reminders and sending keep running. (`PRICE_ALERTS_INTERVAL_MS` is gone: every check runs once a minute.) |
+
+Push needs the app served over HTTPS (or `localhost`). `/sw.js`, `/manifest.webmanifest` and the app icons are served without a login so the browser and the Home Screen can fetch them.
 
 ## Stop / clean up
 
@@ -123,7 +178,7 @@ Ghostfolio mirrors the moomoo account, so the two sources overlap on purpose:
 | Tab | What it shows |
 |---|---|
 | **overview** | A "needs attention" list (rebalance actions, a position over the concentration limit, goals that are behind) and the performance card with total return, max drawdown and 1/7/30-day change. |
-| **holdings** | One sortable positions table. When more than one source is connected, a switch picks all accounts, moomoo live or moomoo paper. Closed positions and empty accounts are folded behind a "show N" toggle. Below 640px the table becomes a card list with a sort picker. Price alerts sit underneath. |
+| **holdings** | One sortable positions table. When more than one source is connected, a switch picks all accounts, moomoo live or moomoo paper. Closed positions and empty accounts are folded behind a "show N" toggle. Below 640px the table becomes a card list with a sort picker. Price alerts and reminders sit underneath, each with when the server last ran its check. |
 | **plan** | Adjusted net worth, liabilities, monthly surplus, savings rate; allocation against target with the buy/sell amount per bucket; goals; the last five monthly snapshots and a "save today" button. |
 | **risk** | Largest position and its weight, positions over 20% / 10%, and the correlation matrix. |
 
@@ -142,7 +197,7 @@ Tools are defined in `apps/web/server/llm/tools.ts` and the routing rules in `ap
 | portfolio | `investment_portfolio`, `investment_performance`, `holdings_context`, `portfolio_performance`, `portfolio_mpt_analysis`, `convert_fx` |
 | research | `agents_debate`, `research_start`, `research_status`, `research_get`, `investment_research`, `thesis_tracker`, `dyp_ask`, `value_stock`, `value_screen`, `technical_analysis` |
 | algo (paper only) | `algo_list`, `algo_backtest`, `algo_recent_signals`, `algo_state`, `algo_kill`, `algo_unkill` |
-| alerts / usage | `alert_create`, `alert_list`, `alert_cancel`, `usage_summary` |
+| alerts / reminders / usage | `alert_create`, `alert_list`, `alert_cancel`, `reminder_create`, `reminder_list`, `reminder_cancel`, `usage_summary` |
 
 ### Safety rails
 

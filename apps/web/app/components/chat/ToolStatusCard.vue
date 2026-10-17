@@ -50,6 +50,9 @@ const labels: Record<string, string> = {
   alert_create: 'Arming price alert',
   alert_list: 'Loading price alerts',
   alert_cancel: 'Cancelling price alert',
+  reminder_create: 'Scheduling reminder',
+  reminder_list: 'Loading reminders',
+  reminder_cancel: 'Cancelling reminder',
 }
 
 const label = computed(() => labels[props.toolName] ?? `Running ${props.toolName}`)

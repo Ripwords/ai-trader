@@ -32,10 +32,18 @@ export default defineNuxtConfig({
         // anything but 0 on notched phones; interactive-widget keeps the chat
         // composer above the soft keyboard instead of behind it.
         { name: 'viewport', content: 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content' },
+        // Installable web app: iOS only delivers Web Push to a site added to
+        // the Home Screen, which these tags make open standalone.
+        { name: 'apple-mobile-web-app-capable', content: 'yes' },
+        { name: 'mobile-web-app-capable', content: 'yes' },
+        { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
+        { name: 'apple-mobile-web-app-title', content: 'ai·trader' },
       ],
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
         { rel: 'mask-icon', href: '/icon-mark.svg', color: '#d4a96a' },
+        { rel: 'apple-touch-icon', sizes: '180x180', href: '/icon-180.png' },
+        { rel: 'manifest', href: '/manifest.webmanifest' },
       ],
     },
   },
@@ -48,5 +56,13 @@ export default defineNuxtConfig({
     // Search keys are read directly from process.env in the chat layer;
     // model providers and their keys live in the database (Settings).
   },
-  nitro: { experimental: { websocket: true } },
+  nitro: {
+    experimental: { websocket: true, tasks: true },
+    // Background jobs (server/tasks/**). Nitro's node server runs these on
+    // croner inside the server process and never starts a task that is still
+    // running; each job also records a heartbeat Settings shows.
+    scheduledTasks: {
+      '* * * * *': ['alerts:evaluate', 'reminders:dispatch', 'notify:send'],
+    },
+  },
 })

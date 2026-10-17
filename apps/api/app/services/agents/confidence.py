@@ -12,6 +12,8 @@ import logging
 import re
 from typing import Any, Protocol
 
+from .prompts import JUDGE_PROMPT, get_override
+
 logger = logging.getLogger(__name__)
 
 HORIZON_DAYS = 7
@@ -31,6 +33,24 @@ class _Llm(Protocol):
     async def ainvoke(self, input: str, config: Any = None) -> Any: ...
 
 
+# Placeholders: {rating} {horizon_days} {correct_if} {transcript}. Editable in
+# Settings → Prompts; the reply must keep the ``CONFIDENCE:`` line parsed above.
+JUDGE_PROMPT_TEMPLATE = (
+    "You are auditing a trading committee's decision. You did not take part in it.\n"
+    "The committee's final rating is {rating}. Over the next {horizon_days} "
+    "trading days, that rating counts as correct if {correct_if}.\n\n"
+    "Estimate the probability, from 0 to 100, that the rating turns out correct. "
+    "Weigh how strong the winning evidence is, how well the losing side was answered, "
+    "and how much a week of noise could swamp the thesis. A coin-flip call is 50; "
+    "do not drift toward 50 to sound cautious, and do not round to a multiple of 5 "
+    "or 10 unless that is your actual estimate.\n\n"
+    "Reply with exactly two lines and nothing else:\n"
+    "CONFIDENCE: <integer 0-100>\n"
+    "REASON: <one sentence>\n\n"
+    "{transcript}"
+)
+
+
 def build_judge_prompt(state: dict, rating: str, horizon_days: int = HORIZON_DAYS) -> str:
     inv = state.get("investment_debate_state") or {}
     risk = state.get("risk_debate_state") or {}
@@ -44,21 +64,19 @@ def build_judge_prompt(state: dict, rating: str, horizon_days: int = HORIZON_DAY
         ("Neutral risk analyst", risk.get("neutral_history")),
         ("Final decision", state.get("final_trade_decision")),
     ]
-    body = "\n\n".join(f"## {title}\n{text}" for title, text in sections if text)
-    return (
-        "You are auditing a trading committee's decision. You did not take part in it.\n"
-        f"The committee's final rating is {rating.upper()}. Over the next {horizon_days} "
-        f"trading days, that rating counts as correct if {_CORRECT_IF.get(rating, _CORRECT_IF['hold'])}.\n\n"
-        "Estimate the probability, from 0 to 100, that the rating turns out correct. "
-        "Weigh how strong the winning evidence is, how well the losing side was answered, "
-        "and how much a week of noise could swamp the thesis. A coin-flip call is 50; "
-        "do not drift toward 50 to sound cautious, and do not round to a multiple of 5 "
-        "or 10 unless that is your actual estimate.\n\n"
-        "Reply with exactly two lines and nothing else:\n"
-        "CONFIDENCE: <integer 0-100>\n"
-        "REASON: <one sentence>\n\n"
-        f"{body}"
-    )
+    values = {
+        "rating": rating.upper(),
+        "horizon_days": horizon_days,
+        "correct_if": _CORRECT_IF.get(rating, _CORRECT_IF["hold"]),
+        "transcript": "\n\n".join(f"## {title}\n{text}" for title, text in sections if text),
+    }
+    override = get_override(JUDGE_PROMPT)
+    if override is not None:
+        try:
+            return override.format(**values)
+        except (KeyError, IndexError, ValueError) as e:
+            logger.warning("confidence_judge override does not format (%s); using the default", e)
+    return JUDGE_PROMPT_TEMPLATE.format(**values)
 
 
 def parse_judge_reply(text: str) -> int | None:

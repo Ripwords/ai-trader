@@ -206,6 +206,7 @@ async function savePlanningSettings(draft: PlanningSettings) {
             <PageState v-if="nothingHeld" kind="empty" message="no positions in any connected account" />
             <PortfolioHoldings v-else :portfolio="data" />
             <AlertsPanel />
+            <RemindersPanel />
           </div>
 
           <div v-else-if="tab === 'plan'">

@@ -11,6 +11,7 @@ import {
 import { getApiClient } from '../llm/http'
 import { getGhostfolioStatus, getGhostfolioTools, type GhostfolioStatus } from '../llm/mcp'
 import { buildSystemPrompt } from '../llm/chat-context'
+import { loadChatPromptInputs, type ChatPromptInputs } from '../lib/prompts/chat-runtime'
 import { resolveModel, supportsForcedToolChoice } from '../llm/model'
 import { makeTools } from '../llm/tools'
 import { settleStoppedParts, stopOnAbort } from '../llm/chat-stop'
@@ -91,13 +92,15 @@ export default defineEventHandler(async (event) => {
         }
         if (stoppedEarly()) return
         const client = getApiClient()
-        const [[ghostfolioTools, ghostfolioStatus], recallContext] = await Promise.all([
+        const [[ghostfolioTools, ghostfolioStatus], recallContext, promptParts] = await Promise.all([
           within(
             Promise.all([getGhostfolioTools(), getGhostfolioStatus()]),
             MCP_PREP_MS,
             [{}, 'failing'] as [Awaited<ReturnType<typeof getGhostfolioTools>>, GhostfolioStatus],
           ),
           buildRecall(client, ownerId, newestUserText),
+          // Missing parts fall back to the default text, without the current time.
+          within<Partial<ChatPromptInputs>>(loadChatPromptInputs(), PROMPT_PREP_MS, {}),
         ])
         const tools = stopOnAbort({ ...makeTools(client, { event, latestUserText: newestUserText }), ...ghostfolioTools })
 
@@ -110,9 +113,8 @@ export default defineEventHandler(async (event) => {
 
         const { slashDispatch, stepToolChoice } = await import('../llm/research/dispatch')
         const dispatch = slashDispatch(newestUserText)
-        const systemPrompt = dispatch
-          ? `${buildSystemPrompt(ghostfolioStatus, recallContext)}\n\n${dispatch.directive}`
-          : buildSystemPrompt(ghostfolioStatus, recallContext)
+        const basePrompt = buildSystemPrompt(ghostfolioStatus, recallContext, promptParts)
+        const systemPrompt = dispatch ? `${basePrompt}\n\n${dispatch.directive}` : basePrompt
 
         const maxSteps = resolveMaxSteps(body.maxSteps)
         const result = streamText({
@@ -179,6 +181,7 @@ export default defineEventHandler(async (event) => {
 const MCP_PREP_MS = 3_000
 const WATCHLIST_MS = 2_000
 const RECALL_MS = 800
+const PROMPT_PREP_MS = 2_000
 
 // Surface recent research runs for tickers in the user's latest message so the
 // model references the agents' prior assessment. Best-effort.
