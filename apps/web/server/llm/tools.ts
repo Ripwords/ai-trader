@@ -732,7 +732,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
             'content-type': 'application/json',
             ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}),
           },
-          body: JSON.stringify(args),
+          body: JSON.stringify({ ...args, origin: 'chat' }),
         })
         let runId: string
         if (res.status === 409) {

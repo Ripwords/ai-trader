@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  KIND_CHANNELS,
   MAX_ATTEMPTS,
+  NOTIFICATION_KINDS,
   backoffMs,
   categoryEnabled,
   planDelivery,
@@ -28,11 +30,29 @@ describe('categoryEnabled', () => {
     expect(categoryEnabled(s, 'price_alert')).toBe(false)
     expect(categoryEnabled(s, 'reminder')).toBe(true)
     expect(categoryEnabled({ ...s, researchRuns: false }, 'research_run')).toBe(false)
+    expect(categoryEnabled(s, 'chat_reply')).toBe(true)
+    expect(categoryEnabled({ ...s, chatReplies: false }, 'chat_reply')).toBe(false)
   })
 
   it('always lets a test notification through', () => {
-    const s = { ...DEFAULT_NOTIFICATION_SETTINGS, priceAlerts: false, reminders: false, researchRuns: false }
+    const s = { ...DEFAULT_NOTIFICATION_SETTINGS, priceAlerts: false, reminders: false, researchRuns: false, chatReplies: false }
     expect(categoryEnabled(s, 'test')).toBe(true)
+  })
+})
+
+describe('KIND_CHANNELS', () => {
+  it('gives every kind at least one channel', () => {
+    for (const kind of NOTIFICATION_KINDS) expect(KIND_CHANNELS[kind].length).toBeGreaterThan(0)
+  })
+
+  it('sends price alerts, reminders and tests by email and push, the rest by push only', () => {
+    expect(KIND_CHANNELS).toEqual({
+      price_alert: ['email', 'push'],
+      reminder: ['email', 'push'],
+      test: ['email', 'push'],
+      research_run: ['push'],
+      chat_reply: ['push'],
+    })
   })
 })
 
@@ -83,6 +103,20 @@ describe('planDelivery', () => {
   it('skips push with no VAPID keys or no subscribed device', () => {
     expect(planDelivery(pendingRow, ctx({ pushConfigured: false })).push).toMatchObject({ action: 'skip', reason: expect.stringMatching(/VAPID/) })
     expect(planDelivery(pendingRow, ctx({ subscriptionCount: 0 })).push).toMatchObject({ action: 'skip', reason: expect.stringMatching(/device/) })
+  })
+
+  it('skips email as push-only for research runs and chat replies', () => {
+    for (const kind of ['research_run', 'chat_reply'] as const) {
+      expect(planDelivery({ ...pendingRow, kind }, ctx())).toEqual({
+        email: { action: 'skip', reason: 'push-only notification' },
+        push: { action: 'send' },
+      })
+    }
+  })
+
+  it('reports the push-only reason even when email is not configured', () => {
+    expect(planDelivery({ ...pendingRow, kind: 'chat_reply' }, ctx({ emailConfigured: false })).email)
+      .toEqual({ action: 'skip', reason: 'push-only notification' })
   })
 
   it('leaves a channel that already settled alone', () => {

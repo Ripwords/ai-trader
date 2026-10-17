@@ -101,6 +101,15 @@ describe('agents_debate tool catalogue', () => {
     expect(headers.cookie).toBe('session=abc123')
   })
 
+  it('marks the run as chat-started, so only the chat reply notifies', async () => {
+    const tools = makeTools({} as unknown as ApiClient)
+    const fetchSpy = startResponse()
+    tailFrames = [{ kind: 'end', status: 'complete', error: null }]
+    await drain(tools.agents_debate.execute(args, {} as unknown))
+    const body = JSON.parse(String((fetchSpy.mock.calls[0]?.[1] as RequestInit).body))
+    expect(body).toMatchObject({ origin: 'chat' })
+  })
+
   it('omits the cookie header when no event is given', async () => {
     const tools = makeTools({} as unknown as ApiClient)
     const fetchSpy = startResponse()

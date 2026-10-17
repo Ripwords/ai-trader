@@ -4,7 +4,7 @@ import { getDb } from '../../../db/client'
 import { agentRuns, RUNNING_PER_SYMBOL_UQ } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
 import { resolveSymbol } from '../../lib/yahoo'
-import { AgentRunTee } from '../../utils/agents-tee'
+import { AgentRunTee, type RunOrigin } from '../../utils/agents-tee'
 import { splitNdjson } from '../../utils/ndjson'
 
 export interface AgentsRunBody {
@@ -16,6 +16,8 @@ export interface AgentsRunBody {
   response_language?: 'en-US' | 'zh-TW' | 'zh-CN' | 'ja-JP' | 'ko-KR' | 'de-DE'
   selected_analysts?: string[]
   trade_date?: string
+  /** 'chat' from the chat's agents_debate tool; anything else is a research-page run. */
+  origin?: string
 }
 
 export interface StartedRun {
@@ -173,10 +175,10 @@ export async function drainIntoTee(
   upstream: Response,
   runId: string,
   userId: string,
-  opts: { idleTimeoutMs?: number; startSeq?: number } = {},
+  opts: { idleTimeoutMs?: number; startSeq?: number; origin?: RunOrigin } = {},
 ): Promise<void> {
   const idleTimeoutMs = opts.idleTimeoutMs ?? UPSTREAM_IDLE_TIMEOUT_MS
-  const tee = new AgentRunTee(runId, userId, opts.startSeq)
+  const tee = new AgentRunTee(runId, userId, { startSeq: opts.startSeq, origin: opts.origin })
   const reader = upstream.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''

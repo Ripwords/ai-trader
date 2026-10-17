@@ -5,7 +5,7 @@ import { dueAtProblem, reminderCreateSchema, shapeReminderRow } from '../../serv
 let fake = createFakeDb()
 vi.mock('../../db/client', () => ({ getDb: () => fake.db }))
 vi.mock('../../server/lib/notification-settings', () => ({
-  getNotificationSettings: async () => ({ email: null, timezone: 'Asia/Kuala_Lumpur', priceAlerts: true, reminders: true, researchRuns: true }),
+  getNotificationSettings: async () => ({ email: null, timezone: 'Asia/Kuala_Lumpur', priceAlerts: true, reminders: true, researchRuns: true, chatReplies: true }),
 }))
 
 const { dispatchDueReminders } = await import('../../server/lib/reminders')

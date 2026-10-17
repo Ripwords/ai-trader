@@ -5,7 +5,7 @@
  */
 import type { NotificationSettings } from '../../types/notifications'
 
-export const NOTIFICATION_KINDS = ['price_alert', 'reminder', 'research_run', 'test'] as const
+export const NOTIFICATION_KINDS = ['price_alert', 'reminder', 'research_run', 'chat_reply', 'test'] as const
 export type NotificationKind = typeof NOTIFICATION_KINDS[number]
 
 export const DELIVERY_STATUSES = ['pending', 'sent', 'failed', 'skipped'] as const
@@ -14,21 +14,35 @@ export type DeliveryStatus = typeof DELIVERY_STATUSES[number]
 export type Channel = 'email' | 'push'
 export const CHANNELS: readonly Channel[] = ['email', 'push']
 
+/** Channels each kind may go out on. A channel outside the list is skipped as push-only. */
+export const KIND_CHANNELS: Record<NotificationKind, readonly Channel[]> = {
+  price_alert: ['email', 'push'],
+  reminder: ['email', 'push'],
+  research_run: ['push'],
+  chat_reply: ['push'],
+  test: ['email', 'push'],
+}
+
 /** Total delivery attempts per row before its still-pending channels become failed. */
 export const MAX_ATTEMPTS = 5
 
 const BACKOFF_BASE_MS = 60_000
 const BACKOFF_CAP_MS = 6 * 60 * 60_000
 
-/** Toggles live in Settings → Notifications; a test notification ignores them. */
-export function categoryEnabled(
-  settings: Pick<NotificationSettings, 'priceAlerts' | 'reminders' | 'researchRuns'>,
-  kind: NotificationKind,
-): boolean {
-  if (kind === 'price_alert') return settings.priceAlerts
-  if (kind === 'reminder') return settings.reminders
-  if (kind === 'research_run') return settings.researchRuns
-  return true
+type CategoryToggle = 'priceAlerts' | 'reminders' | 'researchRuns' | 'chatReplies'
+
+/** The Settings → Notifications toggle that gates each kind; a test notification ignores them. */
+const KIND_TOGGLE: Record<NotificationKind, CategoryToggle | null> = {
+  price_alert: 'priceAlerts',
+  reminder: 'reminders',
+  research_run: 'researchRuns',
+  chat_reply: 'chatReplies',
+  test: null,
+}
+
+export function categoryEnabled(settings: Pick<NotificationSettings, CategoryToggle>, kind: NotificationKind): boolean {
+  const toggle = KIND_TOGGLE[kind]
+  return toggle === null || settings[toggle]
 }
 
 /** Wait before the next try after `attempts` tries: 1, 4, 16, 64 min…, capped at 6 h. */
@@ -66,20 +80,24 @@ export function planDelivery(
   ctx: DeliveryContext,
 ): Record<Channel, ChannelPlan> {
   const enabled = categoryEnabled(ctx.settings, row.kind)
-  const plan = (status: DeliveryStatus, blocker: string | null): ChannelPlan => {
+  const allowed = KIND_CHANNELS[row.kind]
+  const plan = (channel: Channel, status: DeliveryStatus, blocker: string | null): ChannelPlan => {
     if (status !== 'pending') return { action: 'none' }
+    if (!allowed.includes(channel)) return { action: 'skip', reason: 'push-only notification' }
     if (!enabled) return { action: 'skip', reason: 'category turned off in Settings' }
     if (blocker) return { action: 'skip', reason: blocker }
     return { action: 'send' }
   }
   return {
     email: plan(
+      'email',
       row.emailStatus,
       !ctx.emailConfigured ? 'RESEND_API_KEY or RESEND_DOMAIN not set'
         : !ctx.settings.email ? 'no recipient set in Settings'
           : null,
     ),
     push: plan(
+      'push',
       row.pushStatus,
       !ctx.pushConfigured ? 'VAPID keys not set'
         : ctx.subscriptionCount === 0 ? 'no device subscribed'

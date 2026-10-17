@@ -15,6 +15,18 @@ vi.mock('../../db/client', () => ({
   }),
 }))
 
+const drainSpy = vi.hoisted(() => vi.fn())
+vi.mock('../../server/lib/agents/start-run', async (orig) => {
+  const actual = await orig<typeof import('../../server/lib/agents/start-run')>()
+  return {
+    ...actual,
+    drainIntoTee: (...args: Parameters<typeof actual.drainIntoTee>) => {
+      drainSpy(...args)
+      return actual.drainIntoTee(...args)
+    },
+  }
+})
+
 vi.mock('../../server/db/repo', () => ({
   getOwnerId: vi.fn().mockResolvedValue('owner-id'),
 }))
@@ -143,5 +155,13 @@ describe('POST /api/research/agents-run', () => {
       symbol: '0097.KL',
       company_name: 'ViTrox Corporation Berhad',
     })
+  })
+
+  it('forwards a chat origin to the drain and treats anything else as a research-page run', async () => {
+    drainSpy.mockClear()
+    await handler(makeEvent({ symbol: 'NVDA', origin: 'chat' }))
+    await handler(makeEvent({ symbol: 'NVDA', origin: 'bogus' }))
+    await handler(makeEvent({ symbol: 'NVDA' }))
+    expect(drainSpy.mock.calls.map(c => c[3])).toEqual([{ origin: 'chat' }, { origin: 'research' }, { origin: 'research' }])
   })
 })

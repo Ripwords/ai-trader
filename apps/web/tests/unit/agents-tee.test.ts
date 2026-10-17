@@ -110,6 +110,19 @@ describe('AgentRunTee', () => {
     expect(String(queued[0]!.values.subject)).toContain('BUY')
   })
 
+  it('enqueues nothing for a debate the chat started, whose reply notifies instead', async () => {
+    fake = createFakeDb(
+      () => [],
+      { updateReturning: u => u.set.status ? [{ id: 'run-1', symbol: 'US.AAPL', status: u.set.status, error: u.set.error }] : [] },
+    )
+    const tee = new AgentRunTee('run-1', 'user-1', { origin: 'chat' })
+    tee.push({ type: 'run-end', run_id: 'run-1', tokens_in: 1, tokens_out: 1, cost_usd: 0 })
+    await tee.end('unused')
+
+    expect(fake.updates.filter(u => u.set.status).map(u => u.set.status)).toEqual(['complete'])
+    expect(fake.inserts.filter(i => i.table === 'notifications')).toEqual([])
+  })
+
   it('enqueues nothing when another writer already finished the run', async () => {
     const tee = new AgentRunTee('run-1', 'user-1')
     tee.push({ type: 'run-end', run_id: 'run-1', tokens_in: 1, tokens_out: 1, cost_usd: 0 })

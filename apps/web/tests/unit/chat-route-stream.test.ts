@@ -8,7 +8,7 @@ import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 const repo = vi.hoisted(() => ({
   appendMessages: vi.fn(async () => {}),
   createThread: vi.fn(async () => 'th-new'),
-  getThread: vi.fn(async (_u: string, id: string) => (id === 'th-1' ? { id } : null)),
+  getThread: vi.fn(async (_u: string, id: string) => (id === 'th-1' ? { id, title: 'Earnings chat' } : null)),
   lastMessageId: vi.fn(async (_thread: string): Promise<string | null> => null),
 }))
 
@@ -73,6 +73,11 @@ vi.mock('../../server/llm/model', () => ({
   resolveModel: async () => ({ model: makeModel(), spec: 'mock/model', providerKind: 'openai', modelId: 'model' }),
   supportsForcedToolChoice: () => false,
 }))
+const notify = vi.hoisted(() => ({
+  enqueueNotificationSafely: vi.fn(async (_m: { kind: string; dedupeKey: string; subject: string; bodyText: string; url: string | null }) => {}),
+  kickNotifications: vi.fn(),
+}))
+vi.mock('../../server/lib/notifications', () => ({ ...notify, appPublicUrl: () => null }))
 vi.mock('h3', async (orig) => {
   const actual = await orig<typeof import('h3')>()
   return {
@@ -83,6 +88,7 @@ vi.mock('h3', async (orig) => {
 })
 
 const { chatStreams } = await import('../../server/lib/chat-streams')
+const { chatPresence } = await import('../../server/lib/chat-presence')
 const post = (await import('../../server/api/chat.post')).default as (e: H3Event) => Promise<Response>
 const resume = (await import('../../server/api/chat/[id]/stream.get')).default as (e: H3Event) => Promise<Response | null>
 const stop = (await import('../../server/api/chat/[id]/stop.post')).default as (e: H3Event) => Promise<unknown>
@@ -104,6 +110,8 @@ function assistantSaves() {
 }
 
 beforeEach(() => {
+  notify.enqueueNotificationSafely.mockClear()
+  notify.kickNotifications.mockClear()
   repo.appendMessages.mockClear()
   repo.createThread.mockClear()
   feeder = undefined
@@ -298,6 +306,68 @@ describe('GET /api/chat/:id/stream', () => {
     expect(body).toContain('"delta":"early "')
     expect(body).toContain('"delta":"late"')
     expect(body).toContain('"type":"finish"')
+  })
+})
+
+describe('chat reply notification', () => {
+  const queued = () => notify.enqueueNotificationSafely.mock.calls.map(c => c[0])
+
+  it('pushes a finished reply when nobody is looking at the chat', async () => {
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    feed.enqueue({ type: 'text-delta', id: 'x', delta: '**Hello** there' })
+    finish()
+    await until(() => notify.kickNotifications.mock.calls.length > 0)
+
+    const [saved] = assistantSaves() as Array<{ id?: string }>
+    expect(queued()).toHaveLength(1)
+    expect(queued()[0]).toMatchObject({
+      kind: 'chat_reply',
+      dedupeKey: `chat:${saved!.id}`,
+      subject: 'Earnings chat',
+      url: '/?c=th-1',
+      bodyText: 'Hello there',
+    })
+  })
+
+  it('stays quiet while a client is looking at the chat', async () => {
+    chatPresence.report('tab-test', { threadId: 'th-1', away: false }, new Date())
+    try {
+      await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+      await until(() => feeder !== undefined)
+      feed.enqueue({ type: 'text-delta', id: 'x', delta: 'Hello' })
+      finish()
+      await until(() => !chatStreams.isActive('th-1'))
+      await new Promise(r => setTimeout(r, 20))
+      expect(assistantSaves()).toHaveLength(1)
+      expect(queued()).toEqual([])
+    }
+    finally {
+      chatPresence.report('tab-test', { threadId: 'th-1', away: true }, new Date())
+    }
+  })
+
+  it('says the reply failed', async () => {
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    feed.enqueue({ type: 'error', error: new Error('context window exceeded') })
+    feed.close()
+    await until(() => notify.kickNotifications.mock.calls.length > 0)
+
+    expect(queued()[0]?.bodyText).toBe('Reply failed. The assistant stopped early: context window exceeded')
+  })
+
+  it('does not push a reply the user stopped', async () => {
+    await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => chatStreams.isActive('th-1') && feeder !== undefined)
+    feed.enqueue({ type: 'text-delta', id: 'x', delta: 'partial' })
+    await new Promise(r => setTimeout(r, 10))
+    await stop(event(undefined, { id: 'th-1' }))
+    await until(() => !chatStreams.isActive('th-1'))
+    await new Promise(r => setTimeout(r, 20))
+
+    expect(assistantSaves()).toHaveLength(1)
+    expect(queued()).toEqual([])
   })
 })
 

@@ -19,6 +19,9 @@ import { resolveMaxSteps } from '../llm/chat-steps'
 import { watchReplyEnding } from '../llm/chat-ending'
 import { ChatStreamBusyError, chatSseResponse, chatStreams } from '../lib/chat-streams'
 import { within } from '../lib/within'
+import { chatPresence } from '../lib/chat-presence'
+import { appPublicUrl, enqueueNotificationSafely, kickNotifications } from '../lib/notifications'
+import { chatReplyMessage } from '../lib/notifications-messages'
 
 interface ChatBody {
   messages?: Array<{ id?: string; role: string; parts?: unknown[]; [k: string]: unknown }>
@@ -161,6 +164,7 @@ export default defineEventHandler(async (event) => {
         // A reply that failed or was stopped before its first chunk is saved
         // with no parts, so a reload shows why instead of an unanswered question.
         if (ending || saved.parts.length > 0) await appendMessages(thread, [saved])
+        if (!isAborted && chatPresence.shouldNotify(thread, new Date())) await notifyReply(ownerId, thread, saved)
       },
     }), { requestId: typeof body.requestId === 'string' ? body.requestId : undefined })
   } catch (err) {
@@ -174,6 +178,37 @@ export default defineEventHandler(async (event) => {
     headers: { 'X-Chat-Id': thread, 'Access-Control-Expose-Headers': 'X-Chat-Id' },
   })
 })
+
+/** Push-only "reply ready" for a chat nobody is looking at. Never throws into the save. */
+async function notifyReply(ownerId: string, threadId: string, reply: { id: string; parts: ReadonlyArray<unknown>; metadata?: unknown }) {
+  try {
+    const title = (await getThread(ownerId, threadId))?.title ?? null
+    const meta = reply.metadata && typeof reply.metadata === 'object' ? reply.metadata as { error?: unknown } : {}
+    await enqueueNotificationSafely(chatReplyMessage({
+      threadId,
+      messageId: reply.id,
+      title,
+      text: lastText(reply.parts),
+      error: typeof meta.error === 'string' ? meta.error : null,
+    }, appPublicUrl()))
+    kickNotifications()
+  }
+  catch (err) {
+    console.error('[chat] reply notification failed', err instanceof Error ? err.message : err)
+  }
+}
+
+/** The answer is the last text part; earlier ones are narration between tool calls. */
+function lastText(parts: ReadonlyArray<unknown>): string {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
+    if (p && typeof p === 'object' && (p as { type?: string }).type === 'text') {
+      const text = String((p as { text?: string }).text ?? '').trim()
+      if (text) return text
+    }
+  }
+  return ''
+}
 
 // A slow Ghostfolio or watchlist must not hold up the reply. mcp.ts bounds the
 // connect; this also covers listing tools on a server that accepted the

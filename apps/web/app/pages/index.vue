@@ -13,6 +13,7 @@ import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
 import { useMediaQuery } from '@vueuse/core'
 import { BorderBeam } from 'vue-border-beam'
 import { requestRunNotificationPermission } from '../lib/notify'
+import { useChatPresence } from '../composables/useChatPresence'
 import { afterRequest, endedWithoutFinish, followRunningReply, interruptionOf, reattach, recoverReply, replyEnding } from '../lib/chat-recovery'
 import { createChatFetch } from '../lib/chat-transport'
 import { buildMirrorStyle, cycleIndex, filterCommandPalette, splitSlashHighlight, type PaletteItem } from '../lib/slash'
@@ -187,6 +188,7 @@ onMounted(() => {
 })
 
 const chatId = ref<string | null>(typeof route.query.c === 'string' ? route.query.c : null)
+useChatPresence(chatId)
 const conversationsList = ref<{ refresh: () => Promise<void> } | null>(null)
 
 // The watchlist and conversation rail lives in the left column on desktop and

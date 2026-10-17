@@ -8,6 +8,9 @@ import { researchRunMessage } from '../lib/notifications-messages'
 
 const QUEUE_CAP = 100
 
+/** Who started the run. The chat waits on its own debates and pushes when the reply finishes, so those runs don't announce themselves. */
+export type RunOrigin = 'chat' | 'research'
+
 /** Events that change agent_runs.status or its terminal payload. Dropping
  *  one leaves the run "running" forever, which 409s every later run on the
  *  same symbol, so they bypass the queue cap. */
@@ -21,9 +24,12 @@ export class AgentRunTee {
   private errorMessage: string | null = null
   private ended = false
 
+  private origin: RunOrigin
+
   /** `startSeq` continues a resumed run's timeline after its existing rows. */
-  constructor(public runId: string, public userId: string, startSeq = 0) {
-    this.seq = startSeq
+  constructor(public runId: string, public userId: string, opts: { startSeq?: number; origin?: RunOrigin } = {}) {
+    this.seq = opts.startSeq ?? 0
+    this.origin = opts.origin ?? 'research'
   }
 
   push(ev: AgentEvent) {
@@ -72,7 +78,7 @@ export class AgentRunTee {
         .returning({ symbol: agentRuns.symbol })
       // Only the writer that flipped the status notifies, so a run is
       // announced once even when end() and run-end race.
-      if (finished[0]) await this.enqueueFinished(finished[0].symbol, status, msg)
+      if (finished[0] && this.origin === 'research') await this.enqueueFinished(finished[0].symbol, status, msg)
     }
     finally {
       notifyRun(this.runId, { final: true })

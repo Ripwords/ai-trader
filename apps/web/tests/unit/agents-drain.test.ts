@@ -61,6 +61,20 @@ describe('drainIntoTee', () => {
     expect(failed?.params).toContain('running')
   })
 
+  it('announces a finished run unless the chat started it', async () => {
+    const runEnd = '{"type":"run-end","run_id":"run-1","tokens_in":0,"tokens_out":0,"cost_usd":0}'
+    const finishing = () => createFakeDb(() => [], {
+      updateReturning: u => u.set.status ? [{ symbol: 'NVDA' }] : [],
+    })
+    fake = finishing()
+    await drainIntoTee(upstream([runStart, runEnd]), 'run-1', 'user-1')
+    expect(fake.inserts.filter(i => i.table === 'notifications').map(i => i.values.kind)).toEqual(['research_run'])
+
+    fake = finishing()
+    await drainIntoTee(upstream([runStart, runEnd]), 'run-1', 'user-1', { origin: 'chat' })
+    expect(fake.inserts.filter(i => i.table === 'notifications')).toEqual([])
+  })
+
   it('records an error event when the upstream read throws', async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {

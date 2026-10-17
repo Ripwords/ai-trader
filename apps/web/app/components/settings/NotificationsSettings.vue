@@ -6,6 +6,7 @@ import { apiErrorMessage } from '~/lib/api-error'
 import { currentEndpoint, disablePush, enablePush, isIos, isStandalone, pushSupported } from '~/lib/push'
 import { isValidTimeZone, type NotificationSettings } from '../../../types/notifications'
 import type { PushDevice } from '../../../server/lib/push/subscriptions'
+import { KIND_CHANNELS } from '../../../server/lib/notifications-core'
 
 interface SettingsResponse {
   settings: NotificationSettings
@@ -18,7 +19,7 @@ const { data: deviceData, refresh: refreshDevices } = useLazyFetch<{ devices: Pu
 
 const overlay = useOverlay()
 
-const draft = reactive({ email: '', timezone: '', priceAlerts: true, reminders: true, researchRuns: true })
+const draft = reactive({ email: '', timezone: '', priceAlerts: true, reminders: true, researchRuns: true, chatReplies: true })
 watch(data, (d) => {
   if (!d) return
   draft.email = d.settings.email ?? ''
@@ -26,13 +27,18 @@ watch(data, (d) => {
   draft.priceAlerts = d.settings.priceAlerts
   draft.reminders = d.settings.reminders
   draft.researchRuns = d.settings.researchRuns
+  draft.chatReplies = d.settings.chatReplies
 }, { immediate: true })
 
 const CATEGORIES = [
-  { key: 'priceAlerts', label: 'Price alerts', description: 'When an armed alert crosses its threshold.' },
-  { key: 'reminders', label: 'Reminders', description: 'At the time you set, from the portfolio page or the copilot.' },
-  { key: 'researchRuns', label: 'Research runs', description: 'When an agents debate finishes, fails or is cancelled.' },
+  { key: 'priceAlerts', kind: 'price_alert', label: 'Price alerts', description: 'When an armed alert crosses its threshold.' },
+  { key: 'reminders', kind: 'reminder', label: 'Reminders', description: 'At the time you set, from the portfolio page or the copilot.' },
+  { key: 'researchRuns', kind: 'research_run', label: 'Research runs', description: 'When an agents debate started from the research page or in the background finishes, fails or is cancelled.' },
+  { key: 'chatReplies', kind: 'chat_reply', label: 'Chat replies', description: 'When a copilot reply finishes while you are not looking at that chat. Covers debates the chat runs inline.' },
 ] as const
+
+const channelLabel = (kind: typeof CATEGORIES[number]['kind']) =>
+  KIND_CHANNELS[kind].includes('email') ? 'email + push' : 'push only'
 
 const timezones = computed(() => {
   const list = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : []
@@ -48,6 +54,7 @@ const dirty = computed(() => {
     || draft.priceAlerts !== s.priceAlerts
     || draft.reminders !== s.reminders
     || draft.researchRuns !== s.researchRuns
+    || draft.chatReplies !== s.chatReplies
 })
 const canSave = computed(() => dirty.value && emailValid.value && isValidTimeZone(draft.timezone))
 
@@ -178,8 +185,8 @@ const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : 
 <template>
   <div class="space-y-10">
     <p class="text-sm text-[var(--paper-2)]">
-      Price alerts, reminders and finished research runs are sent by email and as push notifications to the devices below.
-      Nothing is emailed until a recipient is saved.
+      Price alerts and reminders are sent by email and as push notifications to the devices below.
+      Finished research runs and chat replies are push only. Nothing is emailed until a recipient is saved.
     </p>
 
     <PageState v-if="pending && !data" kind="loading" message="loading notification settings…" />
@@ -213,7 +220,10 @@ const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : 
         <ul class="surface-1 divide-y divide-[var(--ink-line)]">
           <li v-for="c in CATEGORIES" :key="c.key" class="p-4 flex items-start justify-between gap-4">
             <div class="min-w-0">
-              <div class="text-[var(--paper-0)]">{{ c.label }}</div>
+              <div class="flex flex-wrap items-baseline gap-x-2">
+                <span class="text-[var(--paper-0)]">{{ c.label }}</span>
+                <span class="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--paper-3)]">{{ channelLabel(c.kind) }}</span>
+              </div>
               <p class="text-sm text-[var(--paper-2)] mt-1">{{ c.description }}</p>
             </div>
             <USwitch v-model="draft[c.key]" :aria-label="c.label" class="shrink-0 mt-1" />

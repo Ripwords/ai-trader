@@ -128,7 +128,7 @@ const remindersMock = vi.hoisted(() => ({
     id: 'rem-1', createdAt: '2026-10-17T00:00:00.000Z', dueAt: '2099-10-17T01:00:00.000Z', message: 'm', symbol: null, status: 'scheduled', sentAt: null,
   }]),
   cancelReminder: vi.fn(async (): Promise<null> => null),
-  settings: { email: null as string | null, timezone: 'Asia/Kuala_Lumpur', priceAlerts: true, reminders: true, researchRuns: true },
+  settings: { email: null as string | null, timezone: 'Asia/Kuala_Lumpur', priceAlerts: true, reminders: true, researchRuns: true, chatReplies: true },
   countPushSubscriptions: vi.fn(async () => 2),
 }))
 

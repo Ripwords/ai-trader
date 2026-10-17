@@ -8,6 +8,7 @@ export const notificationSettingsSchema = z.object({
   priceAlerts: z.boolean(),
   reminders: z.boolean(),
   researchRuns: z.boolean(),
+  chatReplies: z.boolean(),
 })
 
 export type NotificationSettings = z.infer<typeof notificationSettingsSchema>
@@ -18,6 +19,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   priceAlerts: true,
   reminders: true,
   researchRuns: true,
+  chatReplies: true,
 }
 
 export function isValidTimeZone(tz: string): boolean {

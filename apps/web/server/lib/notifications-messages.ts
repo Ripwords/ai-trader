@@ -139,6 +139,25 @@ export function researchRunMessage(run: FinishedRunSummary, appUrl: string | nul
   return build('research_run', `run:${run.runId}`, subject, paragraphs, url, appUrl, 'open the run')
 }
 
+export interface FinishedChatReply {
+  threadId: string
+  messageId: string
+  title: string | null
+  /** The reply's answer text, as markdown. */
+  text: string
+  /** Why the reply ended early, when it did. */
+  error: string | null
+}
+
+/** Push-only: the reply finished while nobody was looking at the chat. */
+export function chatReplyMessage(reply: FinishedChatReply, appUrl: string | null): NotificationMessage {
+  const subject = clip(reply.title?.trim() || 'ai·trader', 90)
+  const body = reply.error
+    ? clip(`Reply failed. ${reply.error}`, 140)
+    : clip(stripMarkdown(reply.text), 140) || 'Reply ready'
+  return build('chat_reply', `chat:${reply.messageId}`, subject, [body], `/?c=${encodeURIComponent(reply.threadId)}`, appUrl, 'open the chat')
+}
+
 /** Settings → "Send test …". A fresh dedupe key so every click sends. */
 export function testMessage(appUrl: string | null): NotificationMessage {
   return build(

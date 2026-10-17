@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  chatReplyMessage,
   emailShell,
   escapeHtml,
   pushPayload,
@@ -73,6 +74,39 @@ describe('researchRunMessage', () => {
       .toBe('US.AAPL research failed')
     expect(researchRunMessage({ runId: 'r', symbol: 'US.AAPL', status: 'cancelled', error: 'cancelled', decision: null }, null).subject)
       .toBe('US.AAPL research cancelled')
+  })
+})
+
+describe('chatReplyMessage', () => {
+  const reply = { threadId: 'th-1', messageId: 'msg-9', title: 'NVDA earnings', text: 'Hi there', error: null }
+
+  it('titles the push with the thread and opens that chat', () => {
+    const m = chatReplyMessage(reply, null)
+    expect(m).toMatchObject({ kind: 'chat_reply', dedupeKey: 'chat:msg-9', subject: 'NVDA earnings', url: '/?c=th-1' })
+    expect(pushPayload(m)).toMatchObject({ title: 'NVDA earnings', body: 'Hi there', url: '/?c=th-1' })
+  })
+
+  it('falls back to the app name when the thread has no title', () => {
+    expect(chatReplyMessage({ ...reply, title: null }, null).subject).toBe('ai·trader')
+    expect(chatReplyMessage({ ...reply, title: '  ' }, null).subject).toBe('ai·trader')
+  })
+
+  it('excerpts the reply as plain text of about 140 characters', () => {
+    const text = '## Verdict\n\n**NVDA** looks [cheap](https://x.example) on `forward PE`. '.repeat(10)
+    const body = pushPayload(chatReplyMessage({ ...reply, text }, null)).body
+    expect(body.startsWith('Verdict NVDA looks cheap on forward PE.')).toBe(true)
+    expect(body).not.toMatch(/[#*`[\]]/)
+    expect(body.length).toBeLessThanOrEqual(140)
+    expect(body.endsWith('…')).toBe(true)
+  })
+
+  it('says the reply is ready when it has no text', () => {
+    expect(pushPayload(chatReplyMessage({ ...reply, text: '' }, null)).body).toBe('Reply ready')
+  })
+
+  it('says the reply failed, with the reason', () => {
+    const m = chatReplyMessage({ ...reply, text: 'partial', error: 'The assistant stopped early: 401 invalid api key' }, null)
+    expect(pushPayload(m).body).toBe('Reply failed. The assistant stopped early: 401 invalid api key')
   })
 })
 

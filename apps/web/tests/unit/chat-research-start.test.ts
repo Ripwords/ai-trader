@@ -37,6 +37,8 @@ describe('research_start tool', () => {
     expect(url).toMatch(/\/api\/research\/agents-run$/)
     const init = (fetchSpy.mock.calls[0]?.[1] ?? {}) as RequestInit
     expect((init.headers as Record<string, string>).cookie).toBe('session=abc')
+    // A background run keeps its own "research done" push: the chat reply ends long before it.
+    expect(JSON.parse(String(init.body)).origin).toBeUndefined()
     expect(out).toMatchObject({ runId: 'run-9', status: 'running', symbol: 'NVDA' })
     expect(String(out.message)).toMatch(/notif/i)
   })

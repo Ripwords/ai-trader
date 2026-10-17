@@ -9,6 +9,6 @@ import { startAgentRun, drainIntoTee, type AgentsRunBody } from '../../lib/agent
 export default defineEventHandler(async (event) => {
   const body = await readBody<AgentsRunBody>(event)
   const { run, userId, upstream } = await startAgentRun(body)
-  void drainIntoTee(upstream, run.id, userId)
+  void drainIntoTee(upstream, run.id, userId, { origin: body.origin === 'chat' ? 'chat' : 'research' })
   return { runId: run.id, status: 'running' as const, symbol: run.symbol }
 })
