@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { Comark } from '@comark/vue'
 import type { AgentEvent, Rating } from '~~/types/agents'
 
 // Driven by the `agents_debate` chat tool's async-generator execute (see
@@ -71,12 +73,14 @@ const latestNode = computed(() => nodeStarts.value[nodeStarts.value.length - 1] 
       <span class="size-2 rounded-full bg-[var(--accent)] dot-pulse shrink-0" />
     </div>
 
-    <div v-if="verdict" class="px-5 py-4 flex items-baseline gap-3">
-      <span :class="['inline-flex items-center px-2 py-1 rounded font-mono text-xs uppercase tracking-[0.15em]', ratingClass[verdict.rating]]">
-        {{ verdict.rating }}
-      </span>
-      <span v-if="verdict.confidence !== null" class="font-mono text-xs text-[var(--paper-3)]">conf {{ verdict.confidence }}</span>
-      <p class="text-sm text-[var(--paper-1)] flex-1">{{ verdict.rationale }}</p>
+    <div v-if="verdict" class="px-5 py-4 space-y-3">
+      <div class="flex items-baseline gap-3">
+        <span :class="['inline-flex items-center px-2 py-1 rounded font-mono text-xs uppercase tracking-[0.15em]', ratingClass[verdict.rating]]">
+          {{ verdict.rating }}
+        </span>
+        <span v-if="verdict.confidence !== null" class="font-mono text-xs text-[var(--paper-3)]">conf {{ verdict.confidence }}</span>
+      </div>
+      <Comark :markdown="verdict.rationale" class="text-sm text-[var(--paper-1)] *:first:mt-0 *:last:mb-0 prose-invert" />
     </div>
     <div v-else-if="error" class="px-5 py-4 text-sm text-[var(--tape-down)]">
       {{ error }}
