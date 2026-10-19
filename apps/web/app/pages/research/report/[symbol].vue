@@ -28,7 +28,7 @@ interface ReportState {
   name: string | null
   cached: boolean
   generated_at: string | null
-  price: { last: number | null, change: number | null, change_pct: number | null, currency: string } | null
+  price: RiskReport['price'] | null
   bars: PriceBar[] | null
   markers: ChartMarker[]
   kpis: { label: string, value: string, tone: RiskCardTone }[] | null
@@ -274,6 +274,7 @@ const sections = computed(() => {
           :change="state.price.change"
           :change-pct="state.price.change_pct"
           :currency="state.price.currency"
+          :source="state.price.source"
           :generated-at="state.generated_at"
           :cached="state.cached"
         />

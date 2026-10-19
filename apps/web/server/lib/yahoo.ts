@@ -447,7 +447,7 @@ export interface YahooQuote {
   highPrice: number | null
   lowPrice: number | null
   prevClosePrice: number | null
-  /** Percent, like moomoo's change_rate (1.5 = +1.5%). */
+  /** Decimal, like moomoo's change_rate (0.015 = +1.5%). */
   changeRate: number | null
   volume: number | null
   updateTime: string | null
@@ -466,6 +466,11 @@ interface RawQuote {
   regularMarketTime?: unknown
 }
 
+// Yahoo's regularMarketChangePercent is a percent (1.5 = +1.5%).
+function pctToDecimal(pct: number | null): number | null {
+  return pct === null ? null : pct / 100
+}
+
 /** Delayed quote, or null when Yahoo has no price for the symbol. */
 export async function getYahooQuote(symbol: string): Promise<YahooQuote | null> {
   try {
@@ -480,7 +485,7 @@ export async function getYahooQuote(symbol: string): Promise<YahooQuote | null> 
       highPrice: num(q.regularMarketDayHigh),
       lowPrice: num(q.regularMarketDayLow),
       prevClosePrice: num(q.regularMarketPreviousClose),
-      changeRate: num(q.regularMarketChangePercent),
+      changeRate: pctToDecimal(num(q.regularMarketChangePercent)),
       volume: num(q.regularMarketVolume),
       updateTime: q.regularMarketTime instanceof Date ? q.regularMarketTime.toISOString() : null,
     }

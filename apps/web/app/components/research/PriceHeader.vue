@@ -12,6 +12,9 @@ const props = defineProps<{
   /** Null until the report finishes; the age is hidden until then. */
   generatedAt: string | null
   cached: boolean
+  /** 'yahoo' is the delayed fallback for markets moomoo refuses. Absent on
+   *  reports cached before the field existed, which were all moomoo. */
+  source?: 'moomoo' | 'yahoo'
 }>()
 
 const tone = computed(() => {
@@ -50,7 +53,12 @@ const generatedAgo = computed(() => (props.generatedAt ? ageLabel(props.generate
     <div class="ts">
       <span>{{ cached ? 'cached' : 'live' }}</span>
       <span class="dot">·</span>
-      <span>moomoo</span>
+      <template v-if="source === 'yahoo'">
+        <span>yahoo</span>
+        <span class="dot">·</span>
+        <span>delayed</span>
+      </template>
+      <span v-else>moomoo</span>
       <template v-if="generatedAgo">
         <span class="dot">·</span>
         <span>{{ generatedAgo }}</span>

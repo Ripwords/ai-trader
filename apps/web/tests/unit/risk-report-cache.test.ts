@@ -4,6 +4,8 @@ import type { RiskReport, RiskReportEvent } from '../../types/research'
 const getSnapshot = vi.fn()
 const getKline = vi.fn()
 const generateRiskReport = vi.fn()
+const getYahooBars = vi.fn()
+const getYahooQuote = vi.fn()
 
 vi.mock('../../server/llm/http', () => ({
   getApiClient: () => ({ getSnapshot, getKline }),
@@ -19,6 +21,8 @@ vi.mock('../../server/lib/yahoo', () => ({
   getQuarterlyHistory: vi.fn(async () => []),
   getEarningsInfo: vi.fn(async () => ({ last_earnings_date: null })),
   getCompanyNews: vi.fn(async () => []),
+  getYahooBars: (...args: unknown[]) => getYahooBars(...args),
+  getYahooQuote: (...args: unknown[]) => getYahooQuote(...args),
 }))
 
 const pillar = (score: number) => ({ score, label: 'x', summary: 'x', points: [] })
@@ -44,6 +48,8 @@ beforeEach(() => {
   getSnapshot.mockReset().mockResolvedValue({ name: 'Apple', lastPrice: 200, prevClosePrice: 190, changeRate: 5.26 })
   getKline.mockReset().mockResolvedValue({ bars: [{ time: '2026-10-17', open: 1, high: 2, low: 1, close: 2, volume: 10 }] })
   generateRiskReport.mockReset().mockResolvedValue({ llm: LLM })
+  getYahooBars.mockReset().mockResolvedValue([])
+  getYahooQuote.mockReset().mockResolvedValue(null)
   vi.stubGlobal('defineCachedFunction', (fn: unknown) => fn)
   vi.stubGlobal('useStorage', (base?: string) => {
     const prefix = base ? `${base}:` : ''
@@ -121,5 +127,49 @@ describe('streamRiskReport caching', () => {
     const { streamRiskReport } = await import('../../server/lib/risk-report')
     const events = await drain(streamRiskReport({ symbol: 'US.AAPL' }))
     expect(events.at(-1)?.kind).toBe('done')
+  })
+})
+
+describe('streamRiskReport Yahoo fallback', () => {
+  const NO_PERMISSION = Object.assign(new Error('502 Bad Gateway'), {
+    data: { detail: 'get_market_snapshot failed: No permission to get quotes for MY.1066.' },
+  })
+
+  it('labels a moomoo price as moomoo and prices US symbols in USD', async () => {
+    const { streamRiskReport } = await import('../../server/lib/risk-report')
+    const events = await drain(streamRiskReport({ symbol: 'US.AAPL' }))
+    const price = events.find(e => e.kind === 'price')
+    expect(price).toMatchObject({ price: { last: 200, currency: 'USD', source: 'moomoo' } })
+  })
+
+  it('builds the price and chart from delayed Yahoo data when moomoo refuses the market', async () => {
+    getSnapshot.mockRejectedValue(NO_PERMISSION)
+    getKline.mockRejectedValue(NO_PERMISSION)
+    getYahooQuote.mockResolvedValue({
+      name: 'RHB Bank Berhad', lastPrice: 7.2, openPrice: 7.1, highPrice: 7.25, lowPrice: 7.05,
+      prevClosePrice: 7.08, changeRate: 0.0169, volume: 1000, updateTime: null,
+    })
+    getYahooBars.mockResolvedValue([
+      { time: '2026-10-16', open: 7, high: 7.1, low: 6.9, close: 7.08, volume: 900 },
+      { time: '2026-10-17', open: 7.1, high: 7.25, low: 7.05, close: 7.2, volume: 1000 },
+    ])
+    const { streamRiskReport } = await import('../../server/lib/risk-report')
+
+    const events = await drain(streamRiskReport({ symbol: 'MY.1066' }))
+
+    expect(getYahooBars).toHaveBeenCalledWith('MY.1066', '1d', 252)
+    expect(events.find(e => e.kind === 'price')).toMatchObject({
+      price: { last: 7.2, change_pct: 0.0169, currency: 'MYR', source: 'yahoo' },
+    })
+    const change = (events.find(e => e.kind === 'price') as { price: { change: number } }).price.change
+    expect(change).toBeCloseTo(0.12, 6)
+    expect(events.find(e => e.kind === 'meta' && e.name !== null)).toMatchObject({ name: 'RHB Bank Berhad' })
+    const chart = events.find(e => e.kind === 'chart') as { bars: unknown[] }
+    expect(chart.bars).toHaveLength(2)
+    expect(generateRiskReport).toHaveBeenCalledWith(expect.objectContaining({
+      price: expect.objectContaining({ last: 7.2, currency: 'MYR' }),
+    }))
+    const stored = store.get('cache:risk-report:MY.1066.json') as RiskReport
+    expect(stored.price).toMatchObject({ currency: 'MYR', source: 'yahoo' })
   })
 })

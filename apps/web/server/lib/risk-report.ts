@@ -6,6 +6,7 @@
 
 import { getApiClient } from '../llm/http'
 import type { KLineResponse, Snapshot } from '../llm/http'
+import { klineWithFallback, snapshotWithFallback, type YahooKLine, type YahooSnapshot } from './market-fallback'
 import { buildChartSummary, generateRiskReport } from '../llm/risk-report'
 import {
   getCompanyNews,
@@ -18,10 +19,11 @@ import type { PriceBar, QuarterlyRow, RiskReport, RiskReportEvent } from '../../
 // moomoo fetches are cached so a `?refresh=1` regenerate (or two near-
 // simultaneous opens of the same symbol) doesn't re-hit OpenD. Snapshot
 // has a short TTL since price moves intraday; daily k-line is stable for
-// the trading day.
+// the trading day. Markets moomoo refuses (e.g. Bursa Malaysia) fall back
+// to delayed Yahoo data, marked `source: 'yahoo'`.
 const fetchSnapshotCached = defineCachedFunction(
   async (symbol: string) => {
-    return getApiClient().getSnapshot({ code: symbol })
+    return snapshotWithFallback(getApiClient(), { code: symbol })
   },
   {
     name: 'risk-report',
@@ -30,11 +32,11 @@ const fetchSnapshotCached = defineCachedFunction(
     swr: true,
     getKey: (symbol: string) => symbol,
   },
-) as (symbol: string) => Promise<Snapshot>
+) as (symbol: string) => Promise<Snapshot | YahooSnapshot>
 
 const fetchKlineCached = defineCachedFunction(
   async (symbol: string) => {
-    return getApiClient().getKline({ code: symbol, ktype: '1d', num: 252 })
+    return klineWithFallback(getApiClient(), { code: symbol, ktype: '1d', num: 252 })
   },
   {
     name: 'risk-report',
@@ -43,7 +45,29 @@ const fetchKlineCached = defineCachedFunction(
     swr: true,
     getKey: (symbol: string) => symbol,
   },
-) as (symbol: string) => Promise<KLineResponse>
+) as (symbol: string) => Promise<KLineResponse | YahooKLine>
+
+// moomoo snapshots carry no currency; the market prefix decides it.
+const MARKET_CURRENCY: Record<string, string> = {
+  US: 'USD', HK: 'HKD', SH: 'CNY', SZ: 'CNY', MY: 'MYR', SG: 'SGD', JP: 'JPY', AU: 'AUD', CA: 'CAD',
+}
+
+export function marketCurrency(symbol: string): string {
+  const market = symbol.includes('.') ? symbol.slice(0, symbol.indexOf('.')).toUpperCase() : 'US'
+  return MARKET_CURRENCY[market] ?? 'USD'
+}
+
+function priceOf(symbol: string, snapshot: Snapshot | YahooSnapshot | null): RiskReport['price'] {
+  return {
+    last: snapshot?.lastPrice ?? null,
+    change: snapshot && snapshot.lastPrice !== null && snapshot.prevClosePrice !== null
+      ? snapshot.lastPrice - snapshot.prevClosePrice
+      : null,
+    change_pct: snapshot?.changeRate ?? null,
+    currency: marketCurrency(symbol),
+    source: snapshot && 'source' in snapshot ? snapshot.source : 'moomoo',
+  }
+}
 
 // 35% valuation · 35% health · 30% growth — fixed weights so the score
 // breakdown bars on the page always equal the displayed total. The LLM
@@ -138,7 +162,7 @@ export async function* streamRiskReport({ symbol, signal, refresh }: StreamArgs)
     ['yahoo', Promise.all([metricsP, quarterlyP, earningsP, newsP]).then(v => ({ branch: 'yahoo' as Branch, value: v }))],
   ])
 
-  let snapshot: Snapshot | null = null
+  let snapshot: Snapshot | YahooSnapshot | null = null
   let bars: PriceBar[] = []
   let metrics!: Awaited<typeof metricsP>
   let quarterlyRaw!: Awaited<typeof quarterlyP>
@@ -153,19 +177,12 @@ export async function* streamRiskReport({ symbol, signal, refresh }: StreamArgs)
     branches.delete(winner.branch)
 
     if (winner.branch === 'snapshot') {
-      snapshot = winner.value as Snapshot | null
-      const price = {
-        last: snapshot?.lastPrice ?? null,
-        change: snapshot && snapshot.lastPrice !== null && snapshot.prevClosePrice !== null
-          ? snapshot.lastPrice - snapshot.prevClosePrice
-          : null,
-        change_pct: snapshot?.changeRate ?? null,
-        currency: 'USD',
-      }
+      snapshot = winner.value as Snapshot | YahooSnapshot | null
+      const price = priceOf(symbol, snapshot)
       yield { kind: 'meta', symbol, name: snapshot?.name ?? null }
       yield { kind: 'price', price }
     } else if (winner.branch === 'kline') {
-      const klineRes = winner.value as KLineResponse | null
+      const klineRes = winner.value as KLineResponse | YahooKLine | null
       bars = klineRes?.bars
         ? klineRes.bars.map(b => ({
             time: typeof b.time === 'string' ? b.time : new Date(b.time as unknown as string).toISOString(),
@@ -193,14 +210,7 @@ export async function* streamRiskReport({ symbol, signal, refresh }: StreamArgs)
 
   // All upstream done — fire LLM. This is the slow leg (~30-40s) but the
   // page already has price + chart + fundamentals painted by now.
-  const price = {
-    last: snapshot?.lastPrice ?? null,
-    change: snapshot && snapshot.lastPrice !== null && snapshot.prevClosePrice !== null
-      ? snapshot.lastPrice - snapshot.prevClosePrice
-      : null,
-    change_pct: snapshot?.changeRate ?? null,
-    currency: 'USD',
-  }
+  const price = priceOf(symbol, snapshot)
   let llm: Awaited<ReturnType<typeof generateRiskReport>>['llm']
   try {
     const llmResult = await generateRiskReport({
@@ -270,7 +280,7 @@ export async function* streamRiskReport({ symbol, signal, refresh }: StreamArgs)
  */
 export async function assembleRiskReport({ symbol }: AssembleArgs): Promise<RiskReport> {
   let meta: { symbol: string, name: string | null } = { symbol, name: null }
-  let price: RiskReport['price'] = { last: null, change: null, change_pct: null, currency: 'USD' }
+  let price: RiskReport['price'] = { last: null, change: null, change_pct: null, currency: marketCurrency(symbol) }
   let bars: PriceBar[] = []
   let quarterly: QuarterlyRow[] = []
   let earnings_update: RiskReport['earnings_update'] = null

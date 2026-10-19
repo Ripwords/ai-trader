@@ -56,7 +56,7 @@ export interface PriceBar {
 export type RiskReportEvent =
   | { kind: 'cached', report: RiskReport }
   | { kind: 'meta', symbol: string, name: string | null }
-  | { kind: 'price', price: { last: number | null, change: number | null, change_pct: number | null, currency: string } }
+  | { kind: 'price', price: RiskReport['price'] }
   | { kind: 'chart', bars: PriceBar[] }
   | { kind: 'fundamentals', quarterly: QuarterlyRow[], earnings_update: { headline: string, date: string, body: string } | null }
   | { kind: 'llm', kpis: { label: string, value: string, tone: RiskCardTone }[], valuation: RiskPillar, health: RiskPillar, growth: RiskPillar, markers: ChartMarker[], catalysts: string[], risks: string[], bottom_line: string, rating: RiskRating }
@@ -73,6 +73,9 @@ export interface RiskReport {
     change: number | null
     change_pct: number | null
     currency: string
+    /** Where the price came from. 'yahoo' is delayed, used when moomoo refuses
+     *  the market (e.g. Bursa Malaysia). Absent on reports cached before this. */
+    source?: 'moomoo' | 'yahoo'
   }
   chart: {
     bars: PriceBar[]
