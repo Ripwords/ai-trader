@@ -8,7 +8,10 @@
 #   - web                → ai-trader-web:latest             (apps/web, default target)
 #   - drizzle-migrate    → ai-trader-drizzle-migrate:latest (apps/web, target=migrate)
 #
-# Not built (pulled on the server): postgres.
+# Bundled but not built: redis (redis:7-alpine, pulled for linux/amd64 so the
+# server does not need registry access for the cache service).
+#
+# Not bundled (pulled on the server): postgres.
 #
 # Usage:
 #   ./scripts/build-all-images.sh
@@ -27,6 +30,7 @@ PLATFORM="linux/amd64"
 API_IMAGE="ai-trader-api:latest"
 WEB_IMAGE="ai-trader-web:latest"
 MIGRATE_IMAGE="ai-trader-drizzle-migrate:latest"
+REDIS_IMAGE="redis:7-alpine"
 
 mkdir -p "${OUT_DIR}"
 
@@ -52,8 +56,14 @@ docker buildx build \
   --load \
   "${WEB_CONTEXT}"
 
-echo "→ saving 3 images to ${OUT_FILE}"
-docker save "${API_IMAGE}" "${WEB_IMAGE}" "${MIGRATE_IMAGE}" | gzip > "${OUT_FILE}"
+# A plain pull retags ${REDIS_IMAGE} to the amd64 variant on this machine, so
+# the native one is pulled back after saving (the trap covers a failed save).
+echo "→ pulling ${REDIS_IMAGE} for ${PLATFORM}"
+docker pull --platform "${PLATFORM}" "${REDIS_IMAGE}"
+trap 'echo "→ restoring native ${REDIS_IMAGE}"; docker pull --quiet "${REDIS_IMAGE}" >/dev/null' EXIT
+
+echo "→ saving 4 images to ${OUT_FILE}"
+docker save "${API_IMAGE}" "${WEB_IMAGE}" "${MIGRATE_IMAGE}" "${REDIS_IMAGE}" | gzip > "${OUT_FILE}"
 
 SIZE="$(du -h "${OUT_FILE}" | cut -f1)"
 echo
@@ -91,6 +101,6 @@ cat <<'EOF'
 #    # → should print the path. If "No such file or directory", the swap didn't take.
 #
 #    sudo docker compose ps
-#    # → api + web should be Up, drizzle-migrate should be Exited (0).
+#    # → api + web should be Up, redis Up (healthy), drizzle-migrate Exited (0).
 
 EOF
