@@ -49,7 +49,7 @@ export interface PriceBar {
 
 // SSE events emitted by /api/research/deep-report/stream. The page composes
 // the final report progressively as these land. `cached` is terminal (full
-// payload from the row cache) — when present, no other events fire.
+// payload from the report cache) — when present, no other events fire.
 // Otherwise: meta first, then price + chart + fundamentals in arbitrary
 // order as upstream calls resolve, then llm once all inputs are ready, then
 // done with the deterministic blended risk_score.

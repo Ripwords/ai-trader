@@ -10,6 +10,7 @@ export default defineEventHandler(async (event) => {
   if (!symbol) {
     throw createError({ statusCode: 400, statusMessage: 'symbol required' })
   }
+  const refresh = q.refresh === '1'
 
   const stream = createEventStream(event)
   const ac = new AbortController()
@@ -27,7 +28,7 @@ export default defineEventHandler(async (event) => {
 
   ;(async () => {
     try {
-      for await (const ev of streamRiskReport({ symbol, signal: ac.signal })) {
+      for await (const ev of streamRiskReport({ symbol, refresh, signal: ac.signal })) {
         if (ac.signal.aborted) break
         await stream.push({ event: ev.kind, data: JSON.stringify(ev) })
       }

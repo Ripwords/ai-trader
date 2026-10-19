@@ -12,5 +12,6 @@ export default defineConfig({
     testTimeout: process.env.EVAL_LLM === '1' ? 120_000 : 5_000,
     // Per-file overrides via `// @vitest-environment happy-dom` docblock.
     environment: 'node',
+    setupFiles: ['tests/setup-nitro-globals.ts'],
   },
 })

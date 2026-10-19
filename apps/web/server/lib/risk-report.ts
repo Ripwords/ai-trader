@@ -1,9 +1,8 @@
 // Bundle assembler + deterministic 35/35/30 blend for the deep risk-score
 // report. The route fetches all upstream data here, hands the bundle to the
-// LLM module, and blends the final risk_score. There is no row cache —
-// nuxt's `defineCachedFunction` already memoizes the slow moomoo legs;
-// adding a per-day DB row gave little extra and the persona-era table is
-// being dropped.
+// LLM module, and blends the final risk_score. Finished reports are kept in
+// the Nitro `cache` storage (Redis in Docker) for RISK_REPORT_TTL_SECONDS so
+// reopening a symbol replays one `cached` event instead of a 30-60s LLM run.
 
 import { getApiClient } from '../llm/http'
 import type { KLineResponse, Snapshot } from '../llm/http'
@@ -64,6 +63,30 @@ interface AssembleArgs {
 
 interface StreamArgs extends AssembleArgs {
   signal?: AbortSignal
+  /** Skip the stored report and generate a fresh one (the page's regenerate button). */
+  refresh?: boolean
+}
+
+/** How long a finished report is replayed before the next open regenerates it. */
+export const RISK_REPORT_TTL_SECONDS = 6 * 60 * 60
+
+const reportKey = (symbol: string) => `risk-report:${symbol.toUpperCase()}.json`
+
+// Checks the age itself too: the in-memory fallback driver ignores `ttl`.
+async function readStoredReport(symbol: string): Promise<RiskReport | null> {
+  const report = await useStorage('cache').getItem<RiskReport>(reportKey(symbol)).catch((err: unknown) => {
+    console.error('[risk-report] cache read failed', symbol, err)
+    return null
+  })
+  if (!report?.generated_at) return null
+  const ageMs = Date.now() - new Date(report.generated_at).getTime()
+  return ageMs >= 0 && ageMs < RISK_REPORT_TTL_SECONDS * 1000 ? { ...report, cached: true } : null
+}
+
+async function storeReport(report: RiskReport): Promise<void> {
+  await useStorage('cache').setItem(reportKey(report.symbol), report, { ttl: RISK_REPORT_TTL_SECONDS }).catch((err: unknown) => {
+    console.error('[risk-report] cache write failed', report.symbol, err)
+  })
 }
 
 /**
@@ -71,13 +94,22 @@ interface StreamArgs extends AssembleArgs {
  * fetches resolve so the page can render sections progressively instead of
  * blocking on a 30–60s cold call.
  *
- * Order: meta → (price | chart | fundamentals as they resolve) → llm → done
+ * Order: meta → (price | chart | fundamentals as they resolve) → llm → done,
+ * or a single `cached` event when a fresh-enough report is stored.
  *
  * Errors per source emit as non-fatal `error` events so a moomoo outage
  * doesn't kill the report — the LLM still runs on whatever bundle exists.
  */
-export async function* streamRiskReport({ symbol, signal }: StreamArgs): AsyncGenerator<RiskReportEvent> {
+export async function* streamRiskReport({ symbol, signal, refresh }: StreamArgs): AsyncGenerator<RiskReportEvent> {
   if (signal?.aborted) return
+
+  if (!refresh) {
+    const stored = await readStoredReport(symbol)
+    if (stored) {
+      yield { kind: 'cached', report: stored }
+      return
+    }
+  }
 
   // Kick off every upstream call up-front so they overlap. Yield events as
   // each branch resolves; the LLM call waits for snapshot+kline+yahoo bundle.
@@ -112,6 +144,8 @@ export async function* streamRiskReport({ symbol, signal }: StreamArgs): AsyncGe
   let quarterlyRaw!: Awaited<typeof quarterlyP>
   let earnings!: Awaited<typeof earningsP>
   let news!: Awaited<typeof newsP>
+  let quarterly: QuarterlyRow[] = []
+  let earnings_update: RiskReport['earnings_update'] = null
 
   while (branches.size > 0) {
     if (signal?.aborted) return
@@ -149,11 +183,9 @@ export async function* streamRiskReport({ symbol, signal }: StreamArgs): AsyncGe
       quarterlyRaw = tuple[1]
       earnings = tuple[2]
       news = tuple[3]
-      yield {
-        kind: 'fundamentals',
-        quarterly: buildQuarterlyRows(quarterlyRaw),
-        earnings_update: buildEarningsUpdate(earnings, news),
-      }
+      quarterly = buildQuarterlyRows(quarterlyRaw)
+      earnings_update = buildEarningsUpdate(earnings, news)
+      yield { kind: 'fundamentals', quarterly, earnings_update }
     }
   }
 
@@ -204,6 +236,29 @@ export async function* streamRiskReport({ symbol, signal }: StreamArgs): AsyncGe
 
   const risk_score = blendRiskScore(llm.valuation.score, llm.health.score, llm.growth.score)
   const generated_at = new Date().toISOString()
+
+  // A report missing the moomoo legs is degraded; don't pin it for hours.
+  if (snapshot && bars.length > 0) {
+    await storeReport({
+      symbol,
+      name: snapshot.name ?? null,
+      generated_at,
+      cached: false,
+      price,
+      chart: { bars, markers: llm.markers },
+      kpis: llm.kpis,
+      valuation: llm.valuation,
+      health: llm.health,
+      growth: llm.growth,
+      risk_score,
+      quarterly,
+      earnings_update,
+      catalysts: llm.catalysts,
+      risks: llm.risks,
+      bottom_line: llm.bottom_line,
+      rating: llm.rating,
+    })
+  }
 
   yield { kind: 'done', risk_score, generated_at }
 }

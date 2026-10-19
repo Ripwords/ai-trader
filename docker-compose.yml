@@ -18,6 +18,21 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Cache only: Nitro's `cache` storage (every defineCachedFunction, plus
+  # finished risk reports). Nothing here is a source of truth, so there is no
+  # volume or persistence; a restart just means the next request refills it.
+  # SWR entries carry no TTL, so the memory cap with LRU eviction is what
+  # bounds it. The web container falls back to in-memory caching while it is down.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   drizzle-migrate:
     build:
       context: ./apps/web
@@ -118,6 +133,8 @@ services:
       VAPID_SUBJECT: ${VAPID_SUBJECT:-}
       # 1 stops the price-alert check (reminders and sending keep running).
       PRICE_ALERTS_DISABLED: ${PRICE_ALERTS_DISABLED:-}
+      # Nitro cache storage, on the redis service above.
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     ports:
       - "${WEB_PORT:-3000}:3000"
     # See api service: pin external DNS off the flaky Tailscale resolver so
@@ -128,6 +145,8 @@ services:
     depends_on:
       api:
         condition: service_started
+      redis:
+        condition: service_healthy
       drizzle-migrate:
         condition: service_completed_successfully
     # The scheduler lives in this process: if it dies, alerts and reminders

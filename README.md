@@ -99,6 +99,7 @@ Price alerts and reminders are delivered by **email** (Resend) and **Web Push** 
 - **Timezone** for reminders, and on/off switches for each category (price alerts, reminders, research runs, chat replies). Each switch is labelled **email + push** or **push only**. A switched-off category is still recorded but not sent.
 - **Push devices.** **enable push on this device** asks the browser for permission (only when you click it) and subscribes that browser. Every subscribed device is listed with when it last received something; the bin icon removes it after a confirmation. **send test push** pushes to all of them. A device the push service reports as gone is removed automatically.
 - **iPhone / iPad.** Push works only from the Home Screen app: in Safari tap Share → **Add to Home Screen**, open ai·trader from the Home Screen, then enable push there. The page shows this hint when it is opened in the browser on iOS.
+- **Desktop Chrome on a Mac.** The browser can accept a push and macOS can still hide it. If **send test push** reports the device as sent but nothing appears, open System Settings → Notifications and turn on **Allow notifications** for both **Google Chrome** and **Google Chrome Helper (Alerts)**. Check that Focus / Do Not Disturb is off. Chrome must be running (a window can be closed) to receive push. Each browser has to be enabled separately: it should appear in the device list.
 - **Scheduler.** When each check (price alerts, reminders, email/push sender) last ran. A check that has not run for 3 minutes shows **not running** in red, here and on the alerts and reminders panels.
 
 **How sending works.** Three Nitro scheduled tasks run every minute inside the web container: `alerts:evaluate`, `reminders:dispatch` and `notify:send`. A triggered alert, a due reminder or a finished run writes one row to the `notifications` outbox in the same transaction that changes its status, keyed so the same event can never be queued twice. The producing task then starts the sender at once, so a trigger goes out within seconds; `notify:send` also sweeps the outbox every minute. It delivers each row by email and push and records each channel as `sent`, `failed` or `skipped`. A channel is **skipped**, not failed, when the category is push only (email shows `push-only notification`), its category is off, there is no recipient, its keys are unset, or no device is subscribed. A temporary failure is retried with backoff (1, 4, 16, 64 minutes) up to 5 attempts; a rejected address or key fails at once. Emails carry a Resend idempotency key, so a retry after a crash does not send twice. The alert chart is rendered to a PNG when the alert fires (by `@resvg/resvg-js`) and stored with the outbox row. It is attached as an inline image, so every retry sends the same image. The web, api and postgres containers restart on their own (`restart: unless-stopped`); after a restart the tasks pick up where they left off.
@@ -147,6 +148,7 @@ docker-compose.yml
 │                                  (LangGraph multi-agent)│
 │  drizzle-migrate         one-shot schema sync           │
 │  postgres (16-alpine)    chat • runs • algo • agents    │
+│  redis (7-alpine)        cache only (no persistence)    │
 └──┬──────────────┬──────────────────┬────────────────────┘
    │              │                  │
    ▼              ▼                  ▼
@@ -160,6 +162,19 @@ docker-compose.yml
 - The Nuxt server runs **`ai-sdk`** (plus `@modelcontextprotocol/sdk` for the Ghostfolio MCP client) and proxies market data + paper-trading calls to FastAPI.
 - The FastAPI side embeds [**TradingAgents**](https://github.com/TauricResearch/TradingAgents) — a LangGraph multi-agent debate (analysts → bull/bear researchers → trader → risk panel → portfolio manager). Run checkpoints persist via `langgraph-checkpoint-postgres`. Algo strategies/runs/signals are also written from this side via asyncpg, so both services share the Drizzle-managed schema.
 - [**Ghostfolio MCP**](https://github.com/mhajder/ghostfolio-mcp) is a remote MCP endpoint you bring yourself (set `GHOSTFOLIO_MCP_URL` + bearer); it talks to your [**Ghostfolio**](https://github.com/ghostfolio/ghostfolio) instance and gives the agent cross-broker holdings/performance/dividends tools. Leave it unset and the agent simply doesn't see the `ghostfolio_*` tools. Only the read-only subset listed in `GHOSTFOLIO_TOOL_ALLOWLIST` (`apps/web/server/llm/mcp.ts`) is exposed to the model; the server's write tools (create/delete accounts and activities, imports, balance transfers) are never reachable from chat.
+
+### Caching (Redis)
+
+Slow reads are cached in the `redis` service, which backs Nitro's `cache` storage: every `defineCachedFunction` in the web server (Yahoo fundamentals, price history, news, earnings and FX rates; the portfolio and correlation views; symbol search) plus the entries below. The cache survives `docker compose up -d --build web`, so a rebuild no longer starts it cold. Redis keeps nothing on disk and evicts least-recently-used keys at 256 MB; it is never a source of truth.
+
+| What | Stale after | Notes |
+|---|---|---|
+| Risk report (`/research/report/<symbol>`) | 6 hours | Reopening a symbol shows the stored report at once, labelled **cached** with the time it was generated. **Regenerate** builds a fresh one and replaces it. A report built while moomoo was unreachable (no price or chart) is not stored. |
+| Valuation (`/api/research/valuation`) | 6 hours | Matches the 6-hour Yahoo fundamentals it is computed from. Served stale while it refreshes in the background. |
+| News angles (search queries derived per company) | 24 hours | One quick-model call per company per day. A failed derivation is not stored. |
+| Brave / Tavily searches | 15 minutes | Keyed on query, kind and result count. Empty answers and provider errors are not stored. |
+
+An edit to the risk-report prompt applies to a stored report only after you click **Regenerate**. If Redis is down, the web server logs `[cache] Cache read error` and serves every request uncached until it is back; nothing fails. `REDIS_URL` (default `redis://redis:6379`) points the web container at it. To empty the cache: `docker compose restart redis`.
 
 ### Two portfolio layers, never summed
 

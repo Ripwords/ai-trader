@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { stubNitroCache } from '../fixtures/nitro-cache'
 
 const generateObjectMock = vi.fn()
 vi.mock('ai', () => ({ generateObject: generateObjectMock }))
@@ -15,6 +16,7 @@ beforeEach(async () => {
   vi.resetModules()
   generateObjectMock.mockReset()
   promptOverrides.value = {}
+  stubNitroCache()
   ;({ deriveAngles } = await import('../../server/lib/contextual-news-angles'))
 })
 
@@ -48,5 +50,15 @@ describe('deriveAngles', () => {
     generateObjectMock.mockRejectedValue(new Error('llm down'))
     const out = await deriveAngles({ symbol: 'NVDA' })
     expect(out).toEqual({ queries: [], failed: true })
+  })
+
+  it('reuses the angles for a repeat company but retries after a failure', async () => {
+    generateObjectMock.mockRejectedValueOnce(new Error('rate limited'))
+    generateObjectMock.mockResolvedValue({ object: { queries: ['q'] }, usage: undefined })
+
+    expect((await deriveAngles({ symbol: 'NVDA' })).failed).toBe(true)
+    expect(await deriveAngles({ symbol: 'NVDA' })).toEqual({ queries: ['q'], failed: false })
+    await deriveAngles({ symbol: 'NVDA' })
+    expect(generateObjectMock).toHaveBeenCalledTimes(2)
   })
 })

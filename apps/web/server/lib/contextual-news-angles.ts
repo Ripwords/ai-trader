@@ -19,7 +19,7 @@ export interface DeriveAnglesResult {
   failed: boolean
 }
 
-export async function deriveAngles(args: DeriveAnglesArgs): Promise<DeriveAnglesResult> {
+async function deriveAnglesUncached(args: DeriveAnglesArgs): Promise<DeriveAnglesResult> {
   const who = [args.companyName, `(${args.symbol})`, args.sector ? `sector: ${args.sector}` : '']
     .filter(Boolean)
     .join(' ')
@@ -50,3 +50,11 @@ export async function deriveAngles(args: DeriveAnglesArgs): Promise<DeriveAngles
     return { queries: [], failed: true }
   }
 }
+
+// The angles for a company barely move day to day, and each derivation is an
+// LLM call. A failed derivation is not stored, so the next call retries.
+export const deriveAngles = defineCachedFunction(deriveAnglesUncached, {
+  name: 'contextual-news-angles',
+  maxAge: 24 * 60 * 60,
+  validate: entry => entry.value !== undefined && !entry.value.failed,
+}) as typeof deriveAnglesUncached

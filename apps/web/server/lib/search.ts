@@ -20,7 +20,7 @@ export type SearchKind = 'web' | 'news'
  * 'brave'). A provider with no API key is skipped silently. If both
  * providers fail, throws the last error so the agent can surface it.
  */
-export async function searchWithFallback(
+async function searchUncached(
   kind: SearchKind,
   query: string,
   maxResults: number,
@@ -49,6 +49,15 @@ export async function searchWithFallback(
   if (answered) return []
   throw new Error('No search provider configured. Set BRAVE_API_KEY and/or TAVILY_API_KEY.')
 }
+
+// Both providers bill per call and chat, the dossier and the research agents
+// repeat the same queries within minutes. An empty answer is not stored: it is
+// as likely a provider hiccup as a real "nothing found".
+export const searchWithFallback = defineCachedFunction(searchUncached, {
+  name: 'search',
+  maxAge: 15 * 60,
+  validate: entry => Array.isArray(entry.value) && entry.value.length > 0,
+}) as typeof searchUncached
 
 interface BraveWebResponse {
   web?: { results?: { title: string; url: string; description: string; age?: string; page_age?: string }[] }

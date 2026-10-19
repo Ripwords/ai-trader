@@ -1,5 +1,6 @@
 import type { H3Event } from 'h3'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { stubNitroCache } from '../fixtures/nitro-cache'
 
 const resolveSymbol = vi.fn()
 
@@ -16,6 +17,7 @@ beforeEach(async () => {
   resolveSymbol.mockReset()
   fetchSpy = vi.fn()
   vi.stubGlobal('fetch', fetchSpy)
+  stubNitroCache()
   const mod = await import('../../server/api/research/valuation.get')
   handler = mod.default as Handler
 })
@@ -52,5 +54,25 @@ describe('/api/research/valuation proxy', () => {
       expect.objectContaining({ headers: expect.objectContaining({ authorization: expect.any(String) }) }),
     )
     expect(result).toEqual(apiPayload)
+  })
+
+  it('serves a repeat valuation of the same resolved symbol from cache', async () => {
+    resolveSymbol.mockResolvedValue({ status: 'resolved', symbol: 'AAPL', name: 'Apple Inc.' })
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({ symbol: 'AAPL', fair_value: 150 }) })
+
+    await handler(makeEvent({ symbol: 'aapl' }))
+    const second = await handler(makeEvent({ symbol: 'AAPL' }))
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(second).toEqual({ symbol: 'AAPL', fair_value: 150 })
+  })
+
+  it('does not cache an upstream failure', async () => {
+    resolveSymbol.mockResolvedValue({ status: 'resolved', symbol: 'AAPL', name: 'Apple Inc.' })
+    fetchSpy.mockResolvedValueOnce({ ok: false, status: 502 })
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({ symbol: 'AAPL' }) })
+
+    await expect(handler(makeEvent({ symbol: 'AAPL' }))).rejects.toMatchObject({ statusCode: 502 })
+    await expect(handler(makeEvent({ symbol: 'AAPL' }))).resolves.toEqual({ symbol: 'AAPL' })
   })
 })
