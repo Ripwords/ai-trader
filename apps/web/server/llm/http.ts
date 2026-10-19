@@ -20,7 +20,8 @@ export interface Bar {
   low: number
   close: number
   volume: number
-  turnover: number
+  /** null when the bars came from the Yahoo fallback, which has no turnover. */
+  turnover: number | null
 }
 
 export interface KLineResponse {

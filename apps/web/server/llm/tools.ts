@@ -3,6 +3,7 @@ import { getCookie, type H3Event } from 'h3'
 import { z } from 'zod'
 import type { ApiClient } from './http'
 import { searchWithFallback } from '../lib/search'
+import { klineWithFallback, snapshotWithFallback } from '../lib/market-fallback'
 import { getContextualNews } from '../lib/contextual-news'
 
 // Self-fetches to this app's own /api routes; none of them stream.
@@ -113,7 +114,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
   return {
     'market_kline': tool({
       description:
-        'Fetch candlestick (k-line) bars for a symbol. Use when the user asks for a chart, trend, or historical price.',
+        'Fetch candlestick (k-line) bars for a symbol. Use when the user asks for a chart, trend, or historical price. When moomoo cannot quote the symbol (no market permission, e.g. MY.*, or OpenD down), daily/weekly/monthly bars come from Yahoo instead: the result then has source "yahoo", delayed true and fallbackReason; say the data is delayed from Yahoo.',
       inputSchema: z.object({
         code: z.string().describe('moomoo symbol like US.NVDA, HK.00700, SH.600519'),
         ktype: z
@@ -122,14 +123,14 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           .describe('candle interval'),
         num: z.number().int().min(1).max(1000).default(60).describe('how many bars'),
       }),
-      execute: async ({ code, ktype, num }) => client.getKline({ code, ktype, num }),
+      execute: async ({ code, ktype, num }) => klineWithFallback(client, { code, ktype, num }),
     }),
 
     'market_snapshot': tool({
       description:
-        'Fetch the latest quote snapshot for a symbol (last price, change, volume, etc.).',
+        'Fetch the latest quote snapshot for a symbol (last price, change, volume, etc.). When moomoo cannot quote the symbol (no market permission, e.g. MY.*, or OpenD down), the quote comes from Yahoo instead: the result then has source "yahoo", delayed true and fallbackReason; say the price is delayed from Yahoo.',
       inputSchema: z.object({ code: z.string() }),
-      execute: async ({ code }) => client.getSnapshot({ code }),
+      execute: async ({ code }) => snapshotWithFallback(client, { code }),
     }),
 
     'market_order_book': tool({

@@ -131,14 +131,18 @@ export function toYahooSymbol(s: string): string {
   // moomoo-style "US.NVDA" / "HK.00700" / "SH.600519" / "SZ.000001" → yahoo
   const m = s.match(/^([A-Z]{2})\.(.+)$/)
   if (!m) return s
-  const mkt = m[1]
+  const mkt = m[1] ?? ''
   const code = m[2] ?? ''
   if (mkt === 'US') return code
   if (mkt === 'HK') return `${code.replace(/^0+/, '').padStart(4, '0')}.HK`
   if (mkt === 'SH') return `${code}.SS`
   if (mkt === 'SZ') return `${code}.SZ`
-  return s
+  const suffix = YAHOO_SUFFIX[mkt]
+  return suffix ? `${code}.${suffix}` : s
 }
+
+// moomoo market prefix → Yahoo exchange suffix, for markets whose codes carry over as-is.
+const YAHOO_SUFFIX: Record<string, string> = { MY: 'KL', SG: 'SI', JP: 'T', AU: 'AX', CA: 'TO' }
 
 function f(obj: unknown, key: string): number | null {
   if (!obj || typeof obj !== 'object') return null
@@ -393,6 +397,96 @@ export async function getDailyBars(symbol: string, limit = 252): Promise<DailyBa
   } catch (err) {
     console.error('[yahoo] getDailyBars failed', symbol, err)
     return []
+  }
+}
+
+export type YahooInterval = '1d' | '1wk' | '1mo'
+
+const DAYS_PER_BAR: Record<YahooInterval, number> = { '1d': 1, '1wk': 7, '1mo': 31 }
+
+// Delayed bars for markets moomoo has no quote permission for. Calendar days
+// are padded ~1.5x so weekends and holidays still leave `limit` bars.
+const fetchBars = defineCachedFunction(
+  async (symbol: string, interval: YahooInterval, limit: number): Promise<DailyBar[]> => {
+    const days = Math.ceil(limit * DAYS_PER_BAR[interval] * 1.5) + 30
+    const period1 = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    const chart = await yahoo.chart(toYahooSymbol(symbol), { period1, interval })
+    return (chart.quotes ?? [])
+      .filter(q => q.open !== null && q.high !== null && q.low !== null && q.close !== null && q.volume !== null)
+      .slice(-limit)
+      .map(q => ({
+        time: q.date.toISOString().slice(0, 10),
+        open: q.open as number,
+        high: q.high as number,
+        low: q.low as number,
+        close: q.close as number,
+        volume: q.volume as number,
+      }))
+  },
+  {
+    name: 'yahoo',
+    group: 'bars',
+    maxAge: 60 * 15,
+    getKey: (symbol: string, interval: YahooInterval, limit: number) => `${symbol}:${interval}:${limit}`,
+  },
+)
+
+export async function getYahooBars(symbol: string, interval: YahooInterval, limit: number): Promise<DailyBar[]> {
+  try {
+    return await fetchBars(symbol, interval, limit)
+  } catch (err) {
+    console.error('[yahoo] getYahooBars failed', symbol, interval, err)
+    return []
+  }
+}
+
+export interface YahooQuote {
+  name: string | null
+  lastPrice: number
+  openPrice: number | null
+  highPrice: number | null
+  lowPrice: number | null
+  prevClosePrice: number | null
+  /** Percent, like moomoo's change_rate (1.5 = +1.5%). */
+  changeRate: number | null
+  volume: number | null
+  updateTime: string | null
+}
+
+interface RawQuote {
+  shortName?: unknown
+  longName?: unknown
+  regularMarketPrice?: unknown
+  regularMarketOpen?: unknown
+  regularMarketDayHigh?: unknown
+  regularMarketDayLow?: unknown
+  regularMarketPreviousClose?: unknown
+  regularMarketChangePercent?: unknown
+  regularMarketVolume?: unknown
+  regularMarketTime?: unknown
+}
+
+/** Delayed quote, or null when Yahoo has no price for the symbol. */
+export async function getYahooQuote(symbol: string): Promise<YahooQuote | null> {
+  try {
+    const q = (await yahoo.quote(toYahooSymbol(symbol))) as RawQuote | undefined
+    const lastPrice = num(q?.regularMarketPrice)
+    if (!q || lastPrice === null) return null
+    const name = typeof q.longName === 'string' ? q.longName : typeof q.shortName === 'string' ? q.shortName : null
+    return {
+      name,
+      lastPrice,
+      openPrice: num(q.regularMarketOpen),
+      highPrice: num(q.regularMarketDayHigh),
+      lowPrice: num(q.regularMarketDayLow),
+      prevClosePrice: num(q.regularMarketPreviousClose),
+      changeRate: num(q.regularMarketChangePercent),
+      volume: num(q.regularMarketVolume),
+      updateTime: q.regularMarketTime instanceof Date ? q.regularMarketTime.toISOString() : null,
+    }
+  } catch (err) {
+    console.error('[yahoo] getYahooQuote failed', symbol, err)
+    return null
   }
 }
 
