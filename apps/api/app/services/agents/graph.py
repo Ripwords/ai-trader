@@ -113,7 +113,98 @@ _TOOLKIT_ATTRS = (
     "get_insider_transactions",
     "get_news",
     "get_global_news",
+    "get_earnings_release",
+    "get_earnings_surprise",
+    "get_earnings_call_transcript",
+    "get_estimate_revisions",
 )
+
+# Tools each analyst may call. Upstream hardcodes 4 for fundamentals and 3 for
+# news; we add the earnings tools so a post-earnings run can compare the print
+# with consensus and read the company's own release (drivers, one-offs,
+# segments, guidance) before calling it a beat or a miss.
+_FUNDAMENTALS_TOOLS = (
+    "get_fundamentals",
+    "get_balance_sheet",
+    "get_cashflow",
+    "get_income_statement",
+    "get_earnings_surprise",
+    "get_earnings_release",
+    "get_estimate_revisions",
+    "get_earnings_call_transcript",
+)
+# The transcript (~10k tokens) stays with fundamentals only; news gets the
+# compact revisions table.
+_NEWS_TOOLS = (
+    "get_news",
+    "get_global_news",
+    "get_insider_transactions",
+    "get_earnings_surprise",
+    "get_earnings_release",
+    "get_estimate_revisions",
+)
+_MARKET_TOOLS = ("get_stock_data", "get_indicators")
+_SOCIAL_TOOLS = ("get_news",)
+
+
+def _analyst_factory(
+    toolkit: AgentToolkit, prompt_name: str, tool_attrs: tuple[str, ...], report_key: str
+) -> Callable[[Any], Callable[[Any], dict[str, Any]]]:
+    """Analyst node factory that binds *our* tool objects to the LLM.
+
+    Mirrors the upstream ``create_fundamentals_analyst`` / ``create_news_analyst``
+    node body (tradingagents 0.2.4) with two differences: the tool list comes
+    from the per-run toolkit (so the LLM sees our docstrings and the earnings
+    tools), and the system prompt is read through the override-aware loader.
+    """
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+    tools = [getattr(toolkit, attr) for attr in tool_attrs]
+    tool_names = ", ".join(t.name for t in tools)
+
+    def create(llm: Any) -> Callable[[Any], dict[str, Any]]:
+        def analyst_node(state: Any) -> dict[str, Any]:
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", prompts_mod.load_prompt_with_overrides(prompt_name)),
+                MessagesPlaceholder(variable_name="messages"),
+            ])
+            prompt = prompt.partial(
+                tool_names=tool_names,
+                current_date=state.trade_date,
+                ticker=state.company_of_interest,
+            )
+            result = (prompt | llm.bind_tools(tools)).invoke(state.messages)
+            report = "" if result.tool_calls else result.content
+            return {"messages": [result], report_key: report}
+
+        analyst_node.__name__ = f"{prompt_name}_node"
+        return analyst_node
+
+    create.__ai_trader_toolkit__ = True  # type: ignore[attr-defined]
+    return create
+
+
+def fundamentals_analyst_factory(toolkit: AgentToolkit) -> Callable[[Any], Callable[[Any], dict[str, Any]]]:
+    return _analyst_factory(toolkit, "fundamentals_analyst", _FUNDAMENTALS_TOOLS, "fundamentals_report")
+
+
+def news_analyst_factory(toolkit: AgentToolkit) -> Callable[[Any], Callable[[Any], dict[str, Any]]]:
+    return _analyst_factory(toolkit, "news_analyst", _NEWS_TOOLS, "news_report")
+
+
+def _tool_nodes(toolkit: AgentToolkit) -> dict[str, Any]:
+    """ToolNodes matching each analyst's bound tools (seeded onto ``ta``)."""
+    from langgraph.prebuilt import ToolNode
+
+    def node(attrs: tuple[str, ...]) -> Any:
+        return ToolNode([getattr(toolkit, a) for a in attrs])
+
+    return {
+        "market": node(_MARKET_TOOLS),
+        "social": node(_SOCIAL_TOOLS),
+        "news": node(_NEWS_TOOLS),
+        "fundamentals": node(_FUNDAMENTALS_TOOLS),
+    }
 
 
 def _install_toolkit(toolkit: AgentToolkit) -> None:
@@ -138,10 +229,25 @@ def _install_toolkit(toolkit: AgentToolkit) -> None:
     """
     from tradingagents.graph import trading_graph as _trading_graph
 
+    from tradingagents.agents.analysts import market_analyst as _market_analyst
+    from tradingagents.agents.analysts import social_media_analyst as _social_analyst
+    from tradingagents.graph import setup as _setup
+
     for attr in _TOOLKIT_ATTRS:
         replacement = getattr(toolkit, attr)
         setattr(_agent_utils, attr, replacement)
-        setattr(_trading_graph, attr, replacement)
+        if hasattr(_trading_graph, attr):
+            setattr(_trading_graph, attr, replacement)
+    # The market and social analysts bind tool objects copied into their own
+    # module namespaces at import; repoint them so the LLM sees our schemas.
+    for module, attrs in ((_market_analyst, _MARKET_TOOLS), (_social_analyst, _SOCIAL_TOOLS)):
+        for attr in attrs:
+            if hasattr(module, attr):
+                setattr(module, attr, getattr(toolkit, attr))
+    # Fundamentals and news get their own factories: upstream hardcodes their
+    # tool lists, so the earnings tools could not be added otherwise.
+    _setup.create_fundamentals_analyst = fundamentals_analyst_factory(toolkit)
+    _setup.create_news_analyst = news_analyst_factory(toolkit)
 
 
 def build_graph(
@@ -208,6 +314,8 @@ def build_graph(
     # Seeding its cached properties gives each role its own provider and key.
     ta.__dict__["deep_thinking_llm"] = llm_config.build_role_model(models.chat, reasoning_effort=effort)
     ta.__dict__["quick_thinking_llm"] = llm_config.build_role_model(models.quick, reasoning_effort=effort)
+    # Upstream's ToolNodes omit the earnings tools; seed ours before compile.
+    ta.__dict__["tool_nodes"] = _tool_nodes(toolkit)
     # Touch ``ta.graph`` (a cached_property) inside the build path so the
     # compile step — which reads the toolkit globals we just installed — runs
     # before another concurrent caller can monkey-patch them with a different

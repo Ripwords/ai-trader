@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { toolOutputOf, type ChatToolOutput } from '../../app/utils/chat-tool-output'
+import { toolGuideOf, toolOutputOf, type ChatToolOutput } from '../../app/utils/chat-tool-output'
 import type { KLineResponse } from '../../server/llm/http'
 
 const kline = { code: 'US.NVDA', ktype: '1d', bars: [] }
@@ -32,5 +32,20 @@ describe('toolOutputOf', () => {
 
   it('types the output from the server tool definitions', () => {
     expectTypeOf<ChatToolOutput<'market_kline'>>().toEqualTypeOf<KLineResponse>()
+  })
+})
+
+describe('toolGuideOf', () => {
+  const guide = { categories: [], commands: [], notes: [] }
+
+  it('returns the guide carried by a tool-guide data part', () => {
+    expect(toolGuideOf({ type: 'data-tool-guide', data: guide })).toBe(guide)
+  })
+
+  it('is undefined for any other part', () => {
+    expect(toolGuideOf({ type: 'data-other', data: guide })).toBeUndefined()
+    expect(toolGuideOf({ type: 'text', text: 'hi' })).toBeUndefined()
+    expect(toolGuideOf({ type: 'data-tool-guide' })).toBeUndefined()
+    expect(toolGuideOf(null)).toBeUndefined()
   })
 })

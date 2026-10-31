@@ -338,6 +338,70 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         client.valuationScreen(symbols?.length ? { symbols } : {}),
     }),
 
+    'earnings_release': tool({
+      description:
+        'The company\'s latest earnings press release (SEC 8-K Item 2.02, exhibit 99.1) as text, with the filing URLs. '
+        + 'Holds what headline numbers hide: segment revenue and operating income (e.g. AWS), one-off and non-operating '
+        + 'gains, FX and timing effects, operating cash flow vs capex, and management guidance. Use after an earnings '
+        + 'report, or when asked why EPS/revenue/FCF moved. Explain each headline number by its driver and cite the '
+        + 'filing URL. US SEC filers only.',
+      inputSchema: z.object({
+        symbol: z.string().describe('Ticker, e.g. AMZN or US.AMZN'),
+      }),
+      execute: async ({ symbol }) => {
+        const { getLatestEarningsRelease } = await import('../lib/sec-edgar')
+        return getLatestEarningsRelease(symbol)
+      },
+    }),
+
+    'earnings_call_transcript': tool({
+      description:
+        'The earnings-call transcript: management\'s prepared remarks and the analyst Q&A, each turn with a sentiment '
+        + 'score. Holds what the release does not: why a number moved in management\'s words, what analysts pushed on, '
+        + 'and what management dodged. Defaults to the latest quarter (falls back one if not yet published); pass '
+        + 'quarter like 2026Q2 for a specific call. Source: Alpha Vantage, free tier of 25 requests a day shared with '
+        + 'estimate_revisions; answers are cached, and `quota.remaining` says what is left. Call it once per question, '
+        + 'not per follow-up. US tickers only.',
+      inputSchema: z.object({
+        symbol: z.string().describe('Ticker, e.g. AMZN or US.AMZN'),
+        quarter: z.string().regex(/^\d{4}Q[1-4]$/).optional().describe('Fiscal quarter as YYYYQn, e.g. 2026Q2; omit for the latest'),
+      }),
+      execute: async ({ symbol, quarter }) => {
+        const { getEarningsCallTranscript } = await import('../lib/alpha-vantage')
+        return getEarningsCallTranscript(symbol, quarter)
+      },
+    }),
+
+    'estimate_revisions': tool({
+      description:
+        'How analyst consensus has moved: EPS and revenue consensus for upcoming quarters and years with the value '
+        + '7/30/90 days ago and up/down revision counts, plus the consensus going into each of the last four prints '
+        + '(including revenue consensus, which earnings_surprise lacks for past quarters). Use to tell whether the street '
+        + 'is chasing a story up or quietly cutting numbers, and to judge a revenue beat or miss. Source: Alpha Vantage, '
+        + 'shares the 25-a-day budget with earnings_call_transcript; cached 12 hours. US tickers only.',
+      inputSchema: z.object({
+        symbol: z.string().describe('Ticker, e.g. AMZN or US.AMZN'),
+      }),
+      execute: async ({ symbol }) => {
+        const { getEstimateRevisions } = await import('../lib/alpha-vantage')
+        return getEstimateRevisions(symbol)
+      },
+    }),
+
+    'earnings_surprise': tool({
+      description:
+        'Reported vs consensus EPS (and revenue where available) for recent quarters, plus next-quarter consensus '
+        + 'and estimate revisions, from Yahoo Finance. Use for "did X beat", "what did the street expect", or before '
+        + 'judging a post-earnings move. A large EPS surprise is often a non-operating item; check earnings_release.',
+      inputSchema: z.object({
+        symbol: z.string().describe('Ticker, e.g. AMZN or US.AMZN'),
+      }),
+      execute: async ({ symbol }) => {
+        const { getEarningsSurprise } = await import('../lib/earnings-surprise')
+        return getEarningsSurprise(symbol)
+      },
+    }),
+
     'technical_analysis': tool({
       description:
         'Deterministic technical analysis of a symbol from daily OHLCV bars: SMA 20/50/200 ladder, '
@@ -611,26 +675,9 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
-    'research_status': tool({
-      description:
-        'Check the current status of a research run by its runId (running / complete / failed). Use after research_start if the user asks "is it done yet".',
-      inputSchema: z.object({ runId: z.string() }),
-      execute: async ({ runId }) => {
-        const baseUrl = process.env.NUXT_PUBLIC_BASE_URL || 'http://localhost:3000'
-        const sessionCookie = options.event ? getCookie(options.event, 'session') : undefined
-        const res = await fetch(`${baseUrl}/api/research/agent-messages?run_id=${encodeURIComponent(runId)}&since=999999`, {
-          signal: AbortSignal.timeout(SELF_FETCH_TIMEOUT_MS),
-          headers: { ...(sessionCookie ? { cookie: `session=${sessionCookie}` } : {}) },
-        })
-        if (!res.ok) return { runId, status: 'unknown', error: `status check failed: ${res.status}` }
-        const body = await res.json() as { runId: string; status: string }
-        return { runId: body.runId, status: body.status }
-      },
-    }),
-
     'research_get': tool({
       description:
-        "Fetch the assessment from a completed research run so you can cite the agents' actual verdict. Pass runId if you have it (e.g. from an auto-injected recent-run hint or research_start), otherwise pass symbol to get that ticker's latest completed run. Returns rating, confidence, and rationale. Use this whenever the user references a ticker that has a recent run — do NOT re-run research_start if a recent assessment already exists.",
+        "Fetch the assessment from a research run so you can cite the agents' actual verdict. Pass runId if you have it (e.g. from an auto-injected recent-run hint or research_start), otherwise pass symbol to get that ticker's latest completed run. Returns status, rating, confidence, and rationale; a run that is still running comes back with its status and no verdict yet, so this is also how to answer \"is it done yet\" after research_start. Use this whenever the user references a ticker that has a recent run — do NOT re-run research_start if a recent assessment already exists.",
       inputSchema: z.object({
         runId: z.string().optional(),
         symbol: z.string().optional(),
@@ -854,12 +901,14 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'usage_summary': tool({
       description:
-        'Recent LLM usage summary: total cost today/week, breakdown by source. Use when the user asks "how much have I spent" or "is research expensive".',
+        'Recent LLM usage summary: total cost today/week, breakdown by source, plus today\'s Alpha Vantage request quota (dataQuotas.alphaVantage). Use when the user asks "how much have I spent", "is research expensive" or how many data calls are left.',
       inputSchema: z.object({}),
       execute: async () => {
         const { getLlmUsageSummary, getOwnerId } = await import('../db/repo')
+        const { getAlphaVantageQuota } = await import('../lib/alpha-vantage')
         const ownerId = await getOwnerId()
-        return getLlmUsageSummary(ownerId)
+        const [llm, alphaVantage] = await Promise.all([getLlmUsageSummary(ownerId), getAlphaVantageQuota()])
+        return { ...llm, dataQuotas: { alphaVantage } }
       },
     }),
 

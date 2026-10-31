@@ -1,7 +1,8 @@
 import YahooFinance from 'yahoo-finance2'
 import type { SymbolResolution } from '../../types/symbol'
 
-const yahoo = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
+export const yahooClient = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
+const yahoo = yahooClient
 
 export interface FinancialMetrics {
   symbol: string

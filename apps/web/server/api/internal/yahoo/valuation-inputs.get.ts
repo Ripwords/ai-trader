@@ -1,5 +1,6 @@
 import { createError, defineEventHandler, getQuery } from 'h3'
 import { getDailyBars, getFinancialMetrics, getFxRate, getHistorical } from '../../../lib/yahoo'
+import { getTtmCashflow } from '../../../lib/cashflow-series'
 import { requireInternalBearer } from '../_guard'
 
 /**
@@ -15,10 +16,11 @@ export default defineEventHandler(async (event) => {
   if (typeof symbol !== 'string' || !symbol.trim()) {
     throw createError({ statusCode: 400, statusMessage: 'symbol required' })
   }
-  const [metrics, history, bars] = await Promise.all([
+  const [metrics, history, bars, ttm_cashflow] = await Promise.all([
     getFinancialMetrics(symbol),
     getHistorical(symbol, 6),
     getDailyBars(symbol, 252),
+    getTtmCashflow(symbol),
   ])
 
   const priceCcy = metrics.currency
@@ -35,5 +37,5 @@ export default defineEventHandler(async (event) => {
       price_conversion_error = `quote is in ${priceCcy} but statements are in ${finCcy} and no FX rate was available`
     }
   }
-  return { symbol, metrics, history, dailyBars, price_conversion, price_conversion_error }
+  return { symbol, metrics, history, dailyBars, price_conversion, price_conversion_error, ttm_cashflow }
 })

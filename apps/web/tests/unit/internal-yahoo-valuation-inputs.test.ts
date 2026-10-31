@@ -10,10 +10,15 @@ vi.mock('../../server/lib/yahoo', () => ({
   getDailyBars: vi.fn().mockResolvedValue([{ time: '2024-01-02', open: 180, high: 182, low: 179, close: 181, volume: 1000000 }]),
 }))
 
+const getTtmCashflow = vi.fn()
+vi.mock('../../server/lib/cashflow-series', () => ({ getTtmCashflow: (s: string) => getTtmCashflow(s) }))
+
 type Handler = (event: H3Event) => unknown
 let handler: Handler
 beforeEach(async () => {
   vi.resetModules()
+  getTtmCashflow.mockReset()
+  getTtmCashflow.mockResolvedValue(null)
   process.env.INTERNAL_BEARER = 'test-bearer-0123456789abcdef0123456789'
   const mod = await import('../../server/api/internal/yahoo/valuation-inputs.get')
   handler = mod.default as Handler
@@ -73,5 +78,13 @@ describe('/internal/yahoo/valuation-inputs', () => {
     expect(result.price_conversion).toBeNull()
     expect(result.price_conversion_error).toContain('HKD')
     expect(result.dailyBars[0]?.close).toBe(181)
+  })
+
+  it('carries the TTM OCF − capex cross-check for the DCF regime guard', async () => {
+    const ttm = { period_end: '2026-09-30', operating_cash_flow: 168.3e9, capex: 215.192e9, fcf: -46.892e9, source: 'SEC EDGAR XBRL' }
+    getTtmCashflow.mockResolvedValue(ttm)
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'AMZN' })
+    const result = (await handler(event)) as { ttm_cashflow: unknown }
+    expect(result.ttm_cashflow).toEqual(ttm)
   })
 })

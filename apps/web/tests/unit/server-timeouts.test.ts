@@ -55,7 +55,6 @@ describe('chat tool self-fetches carry a timeout signal', () => {
   it.each([
     ['value_stock', { symbol: 'NVDA' }],
     ['research_start', { symbol: 'NVDA' }],
-    ['research_status', { runId: 'r' }],
     ['agents_debate', { symbol: 'NVDA', max_debate_rounds: 1, deep_thinking: false }],
   ])('%s', async (name, args) => {
     expect(await signalFor(name, args)).toBeInstanceOf(AbortSignal)

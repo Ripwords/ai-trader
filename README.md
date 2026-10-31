@@ -35,6 +35,7 @@ cp .env.example .env
 #   The web service refuses to start while INTERNAL_BEARER or ENCRYPTION_KEY is
 #   the `change-me…` example value or shorter than 32 characters.
 #   TAVILY_API_KEY     — tvly-… key for news/web search (optional)
+#   SEC_USER_AGENT     — "<app> <email>" sent to SEC EDGAR for earnings releases (has a default)
 #   POSTGRES_PORT      — host port for postgres (default 5432; override if 5432 is taken)
 #   RESEND_*, VAPID_*  — email and push for alerts/reminders (optional; see Notifications & reminders)
 
@@ -59,6 +60,7 @@ Settings (`/settings`, also reachable from the `model · …` badge in the heade
 - **Removing a provider.** Blocked while either role uses it. Point the role at another provider and save first.
 - **Upgrading from `LLM_MODEL` env vars.** On first start with an empty provider table, the web service imports `LLM_MODEL`, `LLM_MODEL_QUICK`, and the matching `*_API_KEY` from its environment into Settings and logs `[llm] imported …`. If `LLM_MODEL` names a provider with no key in the environment, only the keys are imported and the log says to pick the chat and quick models in Settings. It runs once. After that the env vars are ignored and can be deleted.
 - **Cost.** `/usage` prices calls for models in the built-in price table. Other models show as unpriced. Costs show to the cent; a cost under a cent shows two significant digits (e.g. `$0.0042`) so it doesn't read as free.
+- **Data quotas.** When `ALPHA_VANTAGE_API_KEY` is set, `/usage` also shows how many of today's 25 Alpha Vantage requests are left (UTC day). See [Alpha Vantage budget](#reading-earnings-below-the-headline).
 
 Behind a reverse proxy, long chat and research streams can sit quiet between tokens. nginx drops a proxied response after 60 s of silence by default. Raising `proxy_read_timeout` (for example to `600s`) on the location that serves the web app is optional but avoids cut-off replies.
 
@@ -202,6 +204,31 @@ Ghostfolio mirrors the moomoo account, so the two sources overlap on purpose:
 
 ### Chat tool catalogue
 
+#### What the assistant can do (`/tools`)
+
+Type `/tools` in chat to see every tool the assistant can use, grouped by purpose. It answers instantly and makes no model call, so it costs nothing and works before a model is chosen. Open a group and click an example to put it in the composer, or click a slash command to start it. You never have to name a tool: ask in your own words.
+
+| Group | Use it when you want… |
+|---|---|
+| **Portfolio** | how your investments are doing: today's move, performance over time, net worth, whether you hold a symbol, and risk and correlation (MPT). |
+| **Broker account** | raw moomoo data: which accounts you have, buying power, positions in one account (including paper), and orders versus actual fills. |
+| **Trading** | to place, change or cancel an order. Paper by default; a live order needs the exact confirmation phrase the assistant gives you. |
+| **Market data** | a price now, a chart, or the order book for one symbol. |
+| **Research** | to dig into one company: what its last earnings really said (`earnings_release`, `earnings_surprise`, `earnings_call_transcript`, `estimate_revisions`), DCF valuation, cheapest names on your watchlist, technicals, a full research memo, a sharp first-principles question, or whether your thesis still holds. |
+| **Agent research runs** | a rated verdict from the multi-agent pipeline. Watch it here ("run the agents on NVDA") or start it in the background and get notified ("research AMD in the background"). Ask "is it done?" or "what did the agents conclude?" afterwards. |
+| **News & web** | why a stock moved (ticker plus macro and peer news), news on a theme or sector, or a general web search. |
+| **Watchlist** | to see, add or remove watchlist symbols. |
+| **Alerts & reminders** | a price alert (above, below, or a big daily move) or a timed reminder, delivered by email and push. |
+| **Algo trading** | to list or backtest your strategies, see recent signals, or flip the kill switch. |
+| **Ghostfolio tracker** | net-worth views across every account Ghostfolio tracks: allocation, dividends, contributions, benchmarks. Shown only when Ghostfolio is connected. |
+| **Utilities** | a currency conversion, or what the AI has cost you. |
+
+Slash commands run a specific tool directly: `/investment-research <symbol>`, `/investment-team <symbol>`, `/deep-company-series <symbol>`, `/management-deep-dive <person> <symbol>`, `/news-pulse <symbol>`, `/thesis-tracker <symbol>`, `/dyp-ask <question>`, `/technical-analysis <symbol>` (alias `/ta`).
+
+The guide's text lives in `apps/web/server/llm/tool-catalog.ts`. `tests/unit/tool-catalog.test.ts` and the typecheck fail when a tool has no catalog entry, so a new tool cannot ship without its "use it when" line.
+
+#### Developer reference
+
 Tools are defined in `apps/web/server/llm/tools.ts` and the routing rules in `apps/web/server/llm/chat-context.ts`. A unit test (`tests/unit/chat-prompt-tool-names.test.ts`) fails when the prompt or a slash command names a tool that no longer exists.
 
 | Group | Tools |
@@ -211,9 +238,9 @@ Tools are defined in `apps/web/server/llm/tools.ts` and the routing rules in `ap
 | news / web | `news_pulse` (stock news + the macro/sector context behind a move), `search_news` (topics that are not one ticker), `search_web` |
 | broker (moomoo) | `trade_accounts`, `trade_account_overview`, `trade_portfolio`, `trade_orders`, `trade_fills` (today by default, pass `start`/`end` for history), `trade_place_order`, `trade_modify_order`, `trade_cancel_order` |
 | portfolio | `investment_portfolio`, `investment_performance`, `holdings_context`, `portfolio_performance`, `portfolio_mpt_analysis`, `convert_fx` |
-| research | `agents_debate`, `research_start`, `research_status`, `research_get`, `investment_research`, `thesis_tracker`, `dyp_ask`, `value_stock`, `value_screen`, `technical_analysis` |
+| research | `agents_debate`, `research_start`, `research_get` (also reports a running run's status), `investment_research`, `thesis_tracker`, `dyp_ask`, `value_stock`, `value_screen`, `technical_analysis`, `earnings_release` (latest SEC 8-K press release), `earnings_surprise` (actual vs consensus), `earnings_call_transcript` (prepared remarks + analyst Q&A), `estimate_revisions` (how consensus moved; revenue consensus per print) |
 | algo (paper only) | `algo_list`, `algo_backtest`, `algo_recent_signals`, `algo_state`, `algo_kill`, `algo_unkill` |
-| alerts / reminders / usage | `alert_create`, `alert_list`, `alert_cancel`, `reminder_create`, `reminder_list`, `reminder_cancel`, `usage_summary` |
+| alerts / reminders / usage | `alert_create`, `alert_list`, `alert_cancel`, `reminder_create`, `reminder_list`, `reminder_cancel`, `usage_summary` (also Alpha Vantage requests left today) |
 
 ### Safety rails
 
@@ -244,7 +271,8 @@ flowchart LR
         direction TB
         MOOMOO["moomoo OpenD<br/>klines · watchlist"]
         STOCK["stockstats<br/>50+ indicators"]
-        YAHOO["Yahoo Finance<br/>balance sheet · cashflow<br/>income statement<br/>fundamentals · insider txn"]
+        YAHOO["Yahoo Finance<br/>balance sheet · income statement<br/>fundamentals · insider txn<br/>earnings vs consensus"]
+        SEC["SEC EDGAR<br/>8-K earnings releases<br/>quarterly cash flow (XBRL)"]
         SEARCH["Brave / Tavily<br/>news · web · social"]
     end
 
@@ -295,6 +323,8 @@ flowchart LR
     MOOMOO --> MA
     STOCK --> MA
     YAHOO --> FA
+    SEC --> FA
+    SEC --> NA
     SEARCH --> NA
     SEARCH --> SA
 
@@ -355,6 +385,25 @@ flowchart LR
 | **Execution** | Places the order against `SIMULATE` (paper) by default; `REAL` is gated by `MAX_DAILY_LIVE_NOTIONAL_USD`. | Manager decision → moomoo OpenD |
 
 Each run starts fresh: agents do not carry lessons from past decisions into later runs. The only extra context is the deterministic DCF valuation, which the Research Manager and Risk Manager see before they rule.
+
+#### Reading earnings below the headline
+
+The fundamentals and news analysts have extra earnings tools, and their default prompts tell them to explain every headline number that moved by its driver (one-off or non-operating items, timing shifts, FX, operating cash flow vs capex, segment mix) before calling it bullish or bearish:
+
+- `get_earnings_release` fetches the latest earnings press release from SEC EDGAR (8-K Item 2.02, exhibit 99.1) and returns it as text with the filing URLs: segment results, one-off gains, FX commentary, cash flow and guidance. US SEC filers only.
+- `get_earnings_surprise` gives reported vs consensus EPS for the last four quarters, plus next-quarter consensus and estimate revisions, from Yahoo. Yahoo does not keep past revenue consensus, so revenue beat/miss is not available.
+- `get_cashflow` now lists the last eight quarters as operating cash flow − capex = free cash flow from SEC filings, plus trailing-twelve-month totals against the prior year. Other FCF figures (Yahoo's levered FCF, the company's own FCF definition) are listed separately and labelled, because they are not interchangeable.
+
+- `get_estimate_revisions` (fundamentals and news) shows EPS and revenue consensus for upcoming quarters and years, the EPS estimate 90 days ago, and up/down revisions over 30 days. It also lists the consensus going into each of the last four prints, including revenue consensus, which fills the gap in `get_earnings_surprise`. From Alpha Vantage.
+- `get_earnings_call_transcript` (fundamentals only, because a call is about 10k tokens) returns management's prepared remarks and the analyst Q&A, with a sentiment score per speaker. It defaults to the latest calendar quarter and falls back one quarter when the newest call is not published yet (Alpha Vantage usually posts it a few days after the call). From Alpha Vantage.
+
+The chat assistant has the same tools (`earnings_release`, `earnings_surprise`, `estimate_revisions`, `earnings_call_transcript`) and the same rule.
+
+**Alpha Vantage budget.** The two Alpha Vantage tools need `ALPHA_VANTAGE_API_KEY` in `.env` (free key from https://www.alphavantage.co/support/#api-key). The free tier allows 25 requests a day and 1 a second. The web app counts every request in a per-day counter in Redis (UTC day), spaces requests 1.5 s apart, and stops at 25. If Alpha Vantage still answers with its per-second notice, the app waits 3 s and retries once. If it answers with its daily-limit notice first, the app marks the day as used up. Answers are cached (estimates 12 hours, a published transcript 30 days, a not-yet-published transcript 6 hours), so asking again costs nothing. A fresh company costs up to 3 requests: estimates, plus one or two transcript lookups. When the budget is used up, the tools say so and the analysts continue without them. The **usage** page shows the requests left today, and `usage_summary` in chat reports the same number.
+
+**DCF out-of-regime guard.** The DCF is discarded when its base free cash flow is negative or under 1% of revenue, or when fair value lands outside 0.2×–5× the price. A discarded DCF does not cap the rating (no "valuation veto"); the agents are told why it was discarded. Before this, a capex-heavy company with negative FCF could get a nonsense fair value (e.g. $3.56 against a $254 price) that still blocked a BUY.
+
+SEC asks callers to identify themselves: set `SEC_USER_AGENT` in `.env` (default `ai-trader contact@jjteoh.com`). Requests are throttled under SEC's 10 per second limit and cached.
 
 ## Tests
 

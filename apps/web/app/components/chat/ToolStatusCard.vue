@@ -29,7 +29,6 @@ const labels: Record<string, string> = {
   thesis_tracker: 'Loading thesis history',
   dyp_ask: 'Gathering context',
   research_start: 'Starting research run',
-  research_status: 'Checking research run',
   research_get: 'Loading research verdict',
   trade_portfolio: 'Loading broker portfolio',
   trade_orders: 'Loading orders',

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { H3Event } from 'h3'
 import { parseSlashCommand, SLASH_COMMANDS } from '../../server/llm/research/commands'
 
 describe('SLASH_COMMANDS', () => {
@@ -64,5 +65,14 @@ describe('parseSlashCommand', () => {
     const p2 = parseSlashCommand('/management-deep-dive 王兴 美团 Holdings')!
     expect(p2.args.person).toBe('王兴')
     expect(p2.args.symbol).toBe('美团 Holdings')
+  })
+})
+
+describe('GET /api/chat/commands', () => {
+  it('offers /tools first, then every dispatching command', async () => {
+    const handler = (await import('../../server/api/chat/commands.get')).default
+    const { commands } = await handler({} as H3Event)
+    expect(commands[0]?.name).toBe('tools')
+    expect(commands.slice(1).map(c => c.name)).toEqual(SLASH_COMMANDS.map(c => c.name))
   })
 })

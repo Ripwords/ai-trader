@@ -212,6 +212,31 @@ describe('POST /api/chat', () => {
   })
 })
 
+describe('POST /api/chat /tools', () => {
+  it('answers with the tool guide without resolving or calling a model', async () => {
+    lastModel = undefined
+    const res = await post(event({ messages: [userMessage('/tools')], chatId: 'th-1' }))
+    const body = await res.text()
+    await until(() => !chatStreams.isActive('th-1'))
+
+    expect(lastModel).toBeUndefined()
+    expect(body).toContain('"type":"data-tool-guide"')
+    expect(body).toContain('"type":"finish"')
+    expect(body).toContain('"finishReason":"stop"')
+    expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true)
+
+    const [saved] = assistantSaves()
+    expect(assistantSaves()).toHaveLength(1)
+    const types = (saved!.parts as Array<{ type: string }>).map(p => p.type)
+    expect(types).toContain('data-tool-guide')
+    expect(types).toContain('text')
+    const guide = (saved!.parts as Array<{ type: string; data?: { categories: unknown[]; commands: unknown[] } }>)
+      .find(p => p.type === 'data-tool-guide')!.data!
+    expect(guide.categories.length).toBeGreaterThan(0)
+    expect(guide.commands.length).toBeGreaterThan(0)
+  })
+})
+
 describe('POST /api/chat concurrent sends', () => {
   it('refuses the second of two near-simultaneous sends before saving its question', async () => {
     let release!: () => void

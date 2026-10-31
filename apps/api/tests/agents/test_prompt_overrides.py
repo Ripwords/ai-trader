@@ -36,6 +36,9 @@ NODE_NAMES = (
 )
 
 
+EARNINGS_AWARE = ("fundamentals_analyst", "news_analyst")
+
+
 def _raw(name: str) -> str:
     return (ta_prompts._PROMPT_DIR / f"{name}.md").read_text()
 
@@ -58,7 +61,12 @@ def test_defaults_cover_every_node_prompt_and_the_judge() -> None:
     defaults = prompts_mod.prompt_defaults()
     assert set(defaults) == {*NODE_NAMES, "confidence_judge"}
     for name in NODE_NAMES:
-        assert defaults[name]["text"] == _raw(name)
+        if name in EARNINGS_AWARE:
+            # Our earnings-discipline rules are appended to the upstream text.
+            assert defaults[name]["text"].startswith(_raw(name))
+            assert defaults[name]["text"] != _raw(name)
+        else:
+            assert defaults[name]["text"] == _raw(name)
         assert "Please respond in" not in defaults[name]["text"]
     assert defaults["market_analyst"]["placeholders"] == ["current_date", "ticker", "tool_names"]
     assert defaults["trader_system"]["placeholders"] == ["past_memory_str"]
@@ -163,6 +171,37 @@ def test_every_node_module_gets_the_patched_loader() -> None:
 
 def test_loader_returns_upstream_text_without_an_override() -> None:
     assert prompts_mod.load_prompt_with_overrides("trader_system") == ta_prompts.load_prompt("trader_system")
+
+
+@pytest.mark.parametrize("name", EARNINGS_AWARE)
+def test_analyst_defaults_carry_the_earnings_discipline_rules(name: str) -> None:
+    text = prompts_mod.prompt_defaults()[name]["text"]
+    for phrase in ("get_earnings_surprise", "get_earnings_release", "consensus", "FX", "one-off", "guidance", "surface"):
+        assert phrase in text, phrase
+    # The added rules must not introduce template fields.
+    assert prompts_mod.prompt_defaults()[name]["placeholders"] == ["current_date", "ticker", "tool_names"]
+
+
+def test_fundamentals_default_names_which_fcf_figure_it_uses() -> None:
+    text = prompts_mod.prompt_defaults()["fundamentals_analyst"]["text"]
+    assert "OCF − capex" in text
+    assert "levered" in text
+
+
+@pytest.mark.parametrize("name", EARNINGS_AWARE)
+def test_loader_without_override_uses_the_augmented_default(name: str) -> None:
+    text = prompts_mod.load_prompt_with_overrides(name)
+    assert text == prompts_mod.raw_node_prompt(name) + ta_prompts._language_instruction()
+    assert "get_earnings_release" in text
+
+
+def test_an_override_replaces_the_augmented_default_entirely() -> None:
+    token = prompts_mod.set_run_overrides({"fundamentals_analyst": "MINE {tool_names} {current_date} {ticker}"})
+    try:
+        text = prompts_mod.load_prompt_with_overrides("fundamentals_analyst")
+    finally:
+        prompts_mod.reset_run_overrides(token)
+    assert text == "MINE {tool_names} {current_date} {ticker}" + ta_prompts._language_instruction()
 
 
 def test_loader_returns_the_override_plus_the_language_line() -> None:

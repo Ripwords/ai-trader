@@ -70,21 +70,36 @@ describe('research_start tool', () => {
   })
 })
 
-describe('research_status tool', () => {
-  it('returns the run status from agent-messages', async () => {
-    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
-      jsonResponse(200, { runId: 'run-9', status: 'complete', lastSeq: 12 })) as unknown as typeof fetch
+// research_get by runId is how the chat checks on a run research_start began:
+// it reports the run's status while it is still going, with no verdict yet.
+describe('research_get tool', () => {
+  it('reports a still-running run by runId, so no separate status tool is needed', async () => {
+    vi.doMock('../../server/db/repo', () => ({ getOwnerId: async () => 'user-1' }))
+    vi.doMock('../../server/lib/agents/runs-query', () => ({
+      getRunAssessment: vi.fn(async (_u: string, runId: string) => ({
+        runId, symbol: 'NVDA', status: 'running', finishedAt: null, rating: null, confidence: null, rationale: null,
+      })),
+      getLatestRunForSymbol: vi.fn(async () => null),
+    }))
     const tools = makeTools({} as unknown as ApiClient)
-    const out = await tools.research_status.execute({ runId: 'run-9' }, {} as unknown) as Record<string, unknown>
-    expect(out).toMatchObject({ runId: 'run-9', status: 'complete' })
+    const out = await tools.research_get.execute({ runId: 'run-9' }, {} as unknown) as Record<string, unknown>
+    expect(out).toMatchObject({ runId: 'run-9', status: 'running', rating: null })
+    vi.doUnmock('../../server/db/repo')
+    vi.doUnmock('../../server/lib/agents/runs-query')
   })
 
-  it('forwards the session cookie when fetching run status', async () => {
-    const fetchSpy = vi.fn(async () => jsonResponse(200, { runId: 'run-9', status: 'complete', lastSeq: 12 }))
-    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = fetchSpy as unknown as typeof fetch
-    const tools = makeTools({} as unknown as ApiClient, fakeEventWithCookie('session=xyz'))
-    await tools.research_status.execute({ runId: 'run-9' }, {} as unknown)
-    const init = (fetchSpy.mock.calls[0]?.[1] ?? {}) as RequestInit
-    expect((init.headers as Record<string, string>).cookie).toBe('session=xyz')
+  it('tells the model to check progress with research_get, not a removed tool', () => {
+    const tools = makeTools({} as unknown as ApiClient)
+    expect(tools.research_status).toBeUndefined()
+    expect(tools.research_get.description).toMatch(/still running|in progress/i)
+  })
+
+  it('points the research_start reply at research_get for progress', async () => {
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
+      jsonResponse(200, { runId: 'run-9', status: 'running', symbol: 'NVDA' })) as unknown as typeof fetch
+    const tools = makeTools({} as unknown as ApiClient)
+    const out = await tools.research_start.execute({ symbol: 'NVDA' }, {} as unknown) as Record<string, unknown>
+    expect(String(out.message)).toContain('research_get')
+    expect(tools.research_start.description).not.toContain('research_status')
   })
 })

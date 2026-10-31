@@ -1,9 +1,11 @@
 """TradingAgents toolkit shim.
 
-The 8 LangChain ``@tool`` functions TradingAgents expects, each routed
-through the sibling Nuxt container's ``/internal/*`` endpoints (Yahoo
-fundamentals, news search) or the in-process moomoo OpenD client (live
-market data + technical indicators). Output is LLM-shaped markdown so
+The 9 LangChain ``@tool`` functions TradingAgents expects plus two
+earnings-explainer tools of our own (``get_earnings_release``,
+``get_earnings_surprise``), each routed through the sibling Nuxt container's
+``/internal/*`` endpoints (Yahoo fundamentals and consensus, SEC EDGAR, news
+search) or the in-process moomoo OpenD client (live market data + technical
+indicators). Output is LLM-shaped markdown so
 agents can quote it back in their analysis.
 """
 
@@ -206,6 +208,10 @@ class AgentToolkit:
     get_insider_transactions: Any
     get_news: Any
     get_global_news: Any
+    get_earnings_release: Any
+    get_earnings_surprise: Any
+    get_earnings_call_transcript: Any
+    get_estimate_revisions: Any
 
 
 def _normalize_moomoo_symbol(symbol: str) -> str:
@@ -250,11 +256,106 @@ async def _market_bars(opend: Any, symbol: str, *, ktype: str, num: int) -> list
     return await _yahoo_daily_bars(symbol, num)
 
 
+def _eps(v: Any) -> str:
+    return f"{float(v):.2f}" if isinstance(v, (int, float)) and not isinstance(v, bool) else "n/a"
+
+
+def _signed_pct(v: Any) -> str:
+    return f"{float(v):+.2f}%" if isinstance(v, (int, float)) and not isinstance(v, bool) else "n/a"
+
+
+def _sum_rows(rows: list[dict], key: str) -> float | None:
+    vals = [r.get(key) for r in rows]
+    if not vals or not all(isinstance(v, (int, float)) for v in vals):
+        return None
+    return float(sum(vals))
+
+
+_OTHER_FCF_NOTE = (
+    "Company-reported FCF in the earnings release may differ from OCF − capex: "
+    "companies often net proceeds from property and equipment sales and incentives "
+    "against capex, or report finance-lease variants. Quote the release's own "
+    "definition next to its number."
+)
+
+
+def _render_cashflow_series(label: str, series: dict, levered: Any) -> str:
+    """FCF = OCF − capex per labelled period, plus the other FCF figures an
+    agent will meet elsewhere, each named so they are never mixed up."""
+    parts = [
+        f"Cash flow for {label}",
+        f"Source: {series.get('source', 'unknown')}",
+        f"Definition: {series.get('definition', 'FCF = OCF − capex')}",
+    ]
+    quarterly = [r for r in series.get("quarterly") or [] if isinstance(r, dict)]
+    if quarterly:
+        rows = [
+            [
+                str(r.get("label")),
+                _fmt_money(r.get("operating_cash_flow")),
+                _fmt_money(r.get("capex")),
+                f"{_fmt_money(r.get('operating_cash_flow'))} − {_fmt_money(r.get('capex'))} = {_fmt_money(r.get('fcf'))}",
+            ]
+            for r in quarterly
+        ]
+        parts.append(
+            "Quarterly (oldest → newest):\n"
+            + _md_table(["Period", "Operating cash flow", "Capex", "FCF = OCF − Capex"], rows)
+        )
+    ttm = series.get("ttm")
+    if isinstance(ttm, dict):
+        line = (
+            f"{ttm.get('label')}: OCF {_fmt_money(ttm.get('operating_cash_flow'))} − capex "
+            f"{_fmt_money(ttm.get('capex'))} = FCF {_fmt_money(ttm.get('fcf'))}"
+        )
+        if len(quarterly) >= 8:
+            prior = quarterly[-8:-4]
+            p_ocf = _sum_rows(prior, "operating_cash_flow")
+            p_capex = _sum_rows(prior, "capex")
+            if p_ocf is not None and p_capex is not None:
+                line += (
+                    f"\nvs prior TTM to {prior[-1].get('period_end')}: OCF {_fmt_money(p_ocf)} "
+                    f"(OCF {_pct_delta(ttm.get('operating_cash_flow'), p_ocf)}), capex {_fmt_money(p_capex)} "
+                    f"(capex {_pct_delta(ttm.get('capex'), p_capex)}), FCF {_fmt_money(p_ocf - p_capex)}. "
+                    "Rising OCF with falling FCF means heavier investment spend, not weaker operations."
+                )
+        parts.append(line)
+    annual = [r for r in series.get("annual") or [] if isinstance(r, dict)]
+    if annual:
+        parts.append(
+            "Annual:\n"
+            + _md_table(
+                ["Period", "Operating cash flow", "Capex", "FCF"],
+                [
+                    [str(r.get("label")), _fmt_money(r.get("operating_cash_flow")),
+                     _fmt_money(r.get("capex")), _fmt_money(r.get("fcf"))]
+                    for r in annual
+                ],
+            )
+        )
+    for note in series.get("notes") or []:
+        parts.append(f"Note: {note}")
+    other = ["FCF figures you may see elsewhere — not interchangeable:"]
+    if isinstance(ttm, dict):
+        other.append(f"- OCF − capex (this tool): {_fmt_money(ttm.get('fcf'))} ({ttm.get('label')}).")
+    if isinstance(levered, dict) and levered.get("value") is not None:
+        other.append(
+            f"- Yahoo levered FCF: {_fmt_money(levered.get('value'))}. {levered.get('definition', '')}. "
+            "Do not present it as the company's free cash flow."
+        )
+    other.append(f"- {_OTHER_FCF_NOTE}")
+    parts.append("\n".join(other))
+    urls = series.get("source_urls") or []
+    if urls:
+        parts.append("Source URLs:\n" + "\n".join(f"- {u}" for u in urls))
+    return "\n\n".join(parts)
+
+
 def build_toolkit(
     opend_client: OpenDClient | None,
     company_name: str | None = None,
 ) -> AgentToolkit:
-    """Build the 9-tool toolkit. ``opend_client`` may be None in tests; the
+    """Build the 11-tool toolkit. ``opend_client`` may be None in tests; the
     market-data tools then short-circuit with a friendly placeholder.
 
     All tool parameters use ``symbol`` (matching TradingAgents' bundled tool
@@ -343,16 +444,19 @@ def build_toolkit(
         freq: str = "quarterly",
         curr_date: str | None = None,
     ) -> str:
-        """Retrieve the latest cash flow statement PLUS a multi-year annual
-        free-cash-flow trend table with YoY deltas. ``freq`` is accepted for
-        compatibility, but cashflow history is annual-only in the data
-        source, so the trend is always annual. ``curr_date`` is ignored
-        (no as-of support)."""
-        del freq, curr_date  # see docstring — annual-only history, no as-of
-        data, hist = await asyncio.gather(
-            _internal_get("/api/internal/yahoo/cashflow", {"symbol": ticker}),
-            _statement_history(ticker, "annual", 5),
-        )
+        """Retrieve operating cash flow, capex and FCF for the last ~8
+        quarters, the trailing twelve months (with the prior TTM for
+        comparison) and recent fiscal years. Every row shows FCF = OCF −
+        capex with its period, and the output names the other FCF figures
+        you may meet (Yahoo levered FCF, company-reported FCF) so they are
+        not mixed up. ``freq`` is accepted for compatibility (both views are
+        always returned). ``curr_date`` is ignored (no as-of support)."""
+        del freq, curr_date  # see docstring — both views returned, no as-of
+        data = await _internal_get("/api/internal/yahoo/cashflow", {"symbol": ticker})
+        series = data.get("series") if isinstance(data, dict) else None
+        if isinstance(series, dict) and (series.get("quarterly") or series.get("ttm")):
+            return _render_cashflow_series(_label(ticker), series, data.get("yahoo_levered_fcf"))
+        hist = await _statement_history(ticker, "annual", 5)
         cf = data.get("cashflow")
         if not cf and not hist:
             return f"No cashflow available for {_label(ticker)}."
@@ -458,9 +562,23 @@ def build_toolkit(
         data = await _internal_get("/api/internal/yahoo/fundamentals", {"symbol": ticker})
         metrics = data.get("metrics") if isinstance(data, dict) else None
         history = data.get("history") if isinstance(data, dict) else None
+        fcf_note = ""
+        if isinstance(metrics, dict) and "free_cash_flow" in metrics:
+            # Yahoo's financialData.freeCashflow is a levered estimate, not
+            # OCF − capex; unlabelled it was quoted as "the" FCF (AMZN +3.22B
+            # against a real TTM of about −47B).
+            metrics = {
+                ("yahoo_levered_fcf" if k == "free_cash_flow" else k): v for k, v in metrics.items()
+            }
+            fcf_note = (
+                "\nNote: yahoo_levered_fcf is Yahoo's levered free cash flow estimate, "
+                "not OCF − capex and not the company-reported FCF. Use get_cashflow for "
+                "OCF, capex and FCF by period."
+            )
         body = (
             f"Fundamentals for {_label(ticker)}:\n"
             f"```json\n{json.dumps(metrics if metrics else data, indent=2)}\n```"
+            + fcf_note
         )
         if isinstance(history, list) and len(history) >= 2:
             chron = list(reversed(history))  # oldest → newest
@@ -700,6 +818,215 @@ def build_toolkit(
         body = "\n".join(sections)
         return f"Indicators for {_label(symbol)} as of {curr_date} (look_back={look_back_days}d):\n{body}"
 
+    @tool
+    async def get_earnings_release(ticker: str, curr_date: str | None = None) -> str:
+        """Retrieve the company's latest earnings press release (SEC 8-K
+        Item 2.02, exhibit 99.1) as text: headline results, segment
+        figures, management commentary, guidance and cash-flow tables, with
+        the SEC source URLs. US SEC filers only. Use it to explain WHY
+        revenue, EPS, margins or FCF moved (one-offs, FX, timing, capex,
+        segment mix) and to quote management guidance. ``curr_date`` is
+        ignored (always the latest release)."""
+        del curr_date  # always the latest filed release
+        try:
+            r = await _internal_get("/api/internal/sec/earnings-release", {"symbol": ticker})
+        except Exception as exc:  # noqa: BLE001 - tool output, not a crash
+            return f"Earnings release unavailable for {_label(ticker)} (SEC EDGAR request failed: {exc})."
+        if not isinstance(r, dict) or r.get("status") != "ok":
+            reason = r.get("reason", "no release found") if isinstance(r, dict) else "no release found"
+            src = f" Checked: {r.get('source_url')}." if isinstance(r, dict) and r.get("source_url") else ""
+            return (
+                f"No SEC earnings release for {_label(ticker)}: {reason}.{src} "
+                "Use get_earnings_surprise for consensus vs actual and get_news for coverage of the results."
+            )
+        header = [
+            f"Earnings release for {_label(ticker)}: {r.get('company')} {r.get('form')} Item 2.02, exhibit 99.1",
+            f"Filed: {r.get('filing_date')} (accession {r.get('accession')})",
+            f"Source: {r.get('exhibit_url')}",
+            f"Filing index: {r.get('filing_index_url')}",
+        ]
+        if r.get("truncated"):
+            omitted = ", ".join(r.get("omitted") or []) or "none"
+            header.append(
+                f"Text shortened from {r.get('chars_total')} characters to fit; sections left out: {omitted}. "
+                "Headline results, guidance, segment and cash-flow sections are kept first."
+            )
+        return "\n".join(header) + "\n\n---\n" + str(r.get("text", ""))
+
+    @tool
+    async def get_earnings_surprise(ticker: str, curr_date: str | None = None) -> str:
+        """Retrieve consensus vs actual EPS (with surprise %) for the last
+        four reported quarters, reported revenue, and the analyst consensus
+        for the next quarter and current fiscal year (EPS and revenue ranges,
+        analyst count, estimate revisions). Source: Yahoo Finance consensus.
+        Use it to judge a print against expectations rather than in
+        isolation. ``curr_date`` is ignored (latest data)."""
+        del curr_date  # latest consensus only
+        try:
+            s = await _internal_get("/api/internal/yahoo/earnings-surprise", {"symbol": ticker})
+        except Exception as exc:  # noqa: BLE001 - tool output, not a crash
+            return f"Earnings surprise data unavailable for {_label(ticker)} ({exc})."
+        quarters = [q for q in (s.get("quarters") or []) if isinstance(q, dict)]
+        parts = [f"Earnings surprise for {_label(ticker)}", f"Source: {s.get('source', 'Yahoo Finance consensus')}"]
+        if quarters:
+            rows = [
+                [
+                    str(q.get("fiscal_quarter")),
+                    str(q.get("reported_date") or "n/a"),
+                    _eps(q.get("eps_estimate")),
+                    _eps(q.get("eps_actual")),
+                    _signed_pct(q.get("eps_surprise_pct")),
+                    _fmt_money(q.get("revenue_actual")),
+                ]
+                for q in quarters
+            ]
+            parts.append(
+                "Reported quarters (oldest → newest):\n"
+                + _md_table(["Quarter", "Reported", "EPS est", "EPS actual", "Surprise", "Revenue actual"], rows)
+            )
+            last = quarters[-1]
+            if isinstance(last.get("days_since_report"), int):
+                parts.append(f"Latest: {last.get('fiscal_quarter')} reported {last['days_since_report']} days ago.")
+        else:
+            parts.append("No reported-quarter consensus history available.")
+
+        def _consensus(title: str, c: Any) -> str | None:
+            if not isinstance(c, dict):
+                return None
+            line = (
+                f"{title} (period ending {c.get('period_end')}, {c.get('analysts') or 'n/a'} analysts): "
+                f"EPS {_eps(c.get('eps_avg'))} (range {_eps(c.get('eps_low'))}–{_eps(c.get('eps_high'))}; "
+                f"year-ago {_eps(c.get('year_ago_eps'))}); revenue {_fmt_money(c.get('revenue_avg'))} "
+                f"(range {_fmt_money(c.get('revenue_low'))}–{_fmt_money(c.get('revenue_high'))}; "
+                f"year-ago {_fmt_money(c.get('year_ago_revenue'))}"
+            )
+            g = c.get("revenue_growth")
+            line += f", growth {float(g) * 100:+.1f}%)." if isinstance(g, (int, float)) else ")."
+            t = c.get("eps_trend")
+            if isinstance(t, dict) and t.get("current") is not None:
+                line += f" EPS estimate now {_eps(t.get('current'))} vs {_eps(t.get('d90'))} 90 days ago."
+            rv = c.get("revisions")
+            if isinstance(rv, dict):
+                line += f" Revisions last 30 days: {rv.get('up_30d') or 0} up / {rv.get('down_30d') or 0} down."
+            return line
+
+        for title, key in (("Next quarter consensus", "next_quarter"), ("Current fiscal year consensus", "current_year")):
+            line = _consensus(title, s.get(key))
+            if line:
+                parts.append(line)
+        if s.get("next_earnings_date"):
+            parts.append(f"Next earnings date: {s['next_earnings_date']}.")
+        notes = s.get("notes") or []
+        if notes:
+            parts.append("Notes:\n" + "\n".join(f"- {n}" for n in notes))
+        return "\n\n".join(parts)
+
+    def _av_quota_line(r: dict) -> str:
+        q = r.get("quota") if isinstance(r.get("quota"), dict) else {}
+        cached = " (cached, no request spent)" if r.get("cached") else ""
+        return f"Alpha Vantage requests left today: {q.get('remaining', 'n/a')} of {q.get('limit', 25)}{cached}."
+
+    def _av_unavailable(what: str, ticker: str, r: dict, fallback: str) -> str:
+        reason = r.get("reason")
+        msg = r.get("message") or "no reason given"
+        if reason in ("quota_exhausted", "no_key"):
+            return (
+                f"{what} unavailable for {_label(ticker)}: Alpha Vantage quota is used up or not configured ({msg}). "
+                f"Do not call this tool again in this run; use {fallback} instead."
+            )
+        return f"{what} unavailable for {_label(ticker)} ({msg}). Use {fallback} instead."
+
+    @tool
+    async def get_earnings_call_transcript(ticker: str, quarter: str | None = None) -> str:
+        """Retrieve the latest earnings-call transcript: management's
+        prepared remarks and the analyst Q&A, with a sentiment score per
+        turn. Use it for WHY a number moved in management's own words, what
+        analysts pressed on, and what management avoided answering. Pass
+        ``quarter`` as YYYYQn (e.g. 2026Q2) for a specific call; omit it for
+        the latest published one. Limited free budget: call it at most once
+        per run."""
+        params = {"symbol": ticker}
+        if quarter:
+            params["quarter"] = quarter
+        try:
+            r = await _internal_get("/api/internal/alpha-vantage/transcript", params)
+        except Exception as exc:  # noqa: BLE001 - tool output, not a crash
+            return f"Earnings-call transcript unavailable for {_label(ticker)} ({exc}). Use get_earnings_release instead."
+        if r.get("status") != "ok":
+            return _av_unavailable("Earnings-call transcript", ticker, r, "get_earnings_release and get_news")
+        d = r.get("data") or {}
+
+        def _turns(turns: Any) -> str:
+            out = []
+            for t in turns or []:
+                if not isinstance(t, dict):
+                    continue
+                s = t.get("sentiment")
+                senti = f", sentiment {float(s):+.2f}" if isinstance(s, (int, float)) else ""
+                body = str(t.get("content", ""))
+                if t.get("truncated"):
+                    body += " [turn truncated]"
+                out.append(f"**{t.get('speaker')} ({t.get('title')}{senti})**: {body}")
+            return "\n\n".join(out)
+
+        parts = [
+            f"Earnings-call transcript for {_label(ticker)}, {d.get('quarter')}",
+            f"Source: {r.get('source', 'Alpha Vantage')}. {_av_quota_line(r)}",
+        ]
+        for n in d.get("notes") or []:
+            parts.append(f"Note: {n}")
+        parts.append("## Prepared remarks\n" + (_turns(d.get("prepared")) or "(none)"))
+        parts.append("## Q&A\n" + (_turns(d.get("qa")) or "(no Q&A section found)"))
+        return "\n\n".join(parts)
+
+    @tool
+    async def get_estimate_revisions(ticker: str, curr_date: str | None = None) -> str:
+        """Retrieve how analyst consensus has moved: EPS and revenue
+        consensus for upcoming quarters and fiscal years, with the EPS
+        estimate 90 days ago and up/down revisions over 30 days, plus the
+        consensus going into each of the last four reported quarters
+        (including revenue consensus, so a revenue beat or miss can be
+        judged). Rising numbers into a print set a higher bar; cuts after
+        a print show what the street believes. ``curr_date`` is ignored."""
+        del curr_date  # latest consensus only
+        try:
+            r = await _internal_get("/api/internal/alpha-vantage/estimates", {"symbol": ticker})
+        except Exception as exc:  # noqa: BLE001 - tool output, not a crash
+            return f"Estimate revisions unavailable for {_label(ticker)} ({exc}). Use get_earnings_surprise instead."
+        if r.get("status") != "ok":
+            return _av_unavailable("Estimate revisions", ticker, r, "get_earnings_surprise")
+        d = r.get("data") or {}
+        parts = [
+            f"Estimate revisions for {_label(ticker)}",
+            f"Source: {r.get('source', 'Alpha Vantage')}. {_av_quota_line(r)}",
+        ]
+        fwd = [p for p in d.get("forward") or [] if isinstance(p, dict)]
+        if fwd:
+            rows = []
+            for p in fwd:
+                rv = p.get("revisions_30d") or {}
+                rows.append([
+                    f"{p.get('horizon')} {p.get('date')}",
+                    _eps(p.get("eps_avg")),
+                    _eps(p.get("eps_90d_ago")),
+                    _signed_pct(p.get("eps_change_90d_pct")),
+                    f"{rv.get('up') or 0:g} / {rv.get('down') or 0:g}",
+                    _fmt_money(p.get("revenue_avg")),
+                    f"{p.get('eps_analysts'):g}" if isinstance(p.get("eps_analysts"), (int, float)) else "n/a",
+                ])
+            parts.append(
+                "Forward consensus (period end):\n"
+                + _md_table(["Period", "EPS now", "EPS 90d ago", "90d change", "Revisions 30d up / down", "Revenue", "Analysts"], rows)
+            )
+        rep = [p for p in d.get("reported") or [] if isinstance(p, dict)]
+        if rep:
+            rows = [[str(p.get("date")), _eps(p.get("eps_avg")), _fmt_money(p.get("revenue_avg"))] for p in rep]
+            parts.append(
+                "Consensus going into recent prints (compare with reported actuals):\n"
+                + _md_table(["Quarter end", "EPS consensus", "Revenue consensus"], rows)
+            )
+        return "\n\n".join(parts)
+
     return AgentToolkit(
         get_stock_data=get_stock_data,
         get_indicators=get_indicators,
@@ -710,4 +1037,8 @@ def build_toolkit(
         get_insider_transactions=get_insider_transactions,
         get_news=get_news,
         get_global_news=get_global_news,
+        get_earnings_release=get_earnings_release,
+        get_earnings_surprise=get_earnings_surprise,
+        get_earnings_call_transcript=get_earnings_call_transcript,
+        get_estimate_revisions=get_estimate_revisions,
     )

@@ -1,5 +1,6 @@
 import type { InferUITools } from 'ai'
 import type { makeTools } from '../../server/llm/tools'
+import { TOOL_GUIDE_PART_TYPE, type ToolGuide } from '../../types/tool-guide'
 
 export type ChatTools = InferUITools<ReturnType<typeof makeTools>>
 export type ChatToolName = keyof ChatTools
@@ -20,4 +21,18 @@ export function toolOutputOf<N extends ChatToolName>(part: unknown, name: N): Ch
   const p = part as Record<string, unknown>
   if (partToolName(p) !== name || p.state !== 'output-available') return undefined
   return p.output as ChatToolOutput<N>
+}
+
+function isToolGuide(data: unknown): data is ToolGuide {
+  if (typeof data !== 'object' || data === null) return false
+  return 'categories' in data && Array.isArray(data.categories)
+    && 'commands' in data && Array.isArray(data.commands)
+    && 'notes' in data && Array.isArray(data.notes)
+}
+
+/** The /tools guide carried by a message part, or undefined for any other part. */
+export function toolGuideOf(part: unknown): ToolGuide | undefined {
+  if (typeof part !== 'object' || part === null) return undefined
+  if (!('type' in part) || part.type !== TOOL_GUIDE_PART_TYPE || !('data' in part)) return undefined
+  return isToolGuide(part.data) ? part.data : undefined
 }

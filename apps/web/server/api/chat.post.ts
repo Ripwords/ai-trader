@@ -14,6 +14,8 @@ import { buildSystemPrompt } from '../llm/chat-context'
 import { loadChatPromptInputs, type ChatPromptInputs } from '../lib/prompts/chat-runtime'
 import { resolveModel, supportsForcedToolChoice } from '../llm/model'
 import { makeTools } from '../llm/tools'
+import { buildToolGuide, isToolsGuideCommand, TOOLS_GUIDE_INTRO } from '../llm/tool-catalog'
+import { TOOL_GUIDE_PART_TYPE } from '../../types/tool-guide'
 import { settleStoppedParts, stopOnAbort } from '../llm/chat-stop'
 import { resolveMaxSteps } from '../llm/chat-steps'
 import { watchReplyEnding } from '../llm/chat-ending'
@@ -43,11 +45,13 @@ export default defineEventHandler(async (event) => {
   if (!Array.isArray(body?.messages) || body.messages.length === 0) {
     throw createError({ statusCode: 400, statusMessage: 'messages must be a non-empty array' })
   }
-  const resolved = await resolveModel('chat')
-
-  const ownerId = await getOwnerId()
   const newestUser = [...body.messages].reverse().find(m => m.role === 'user')
   const newestUserText = extractText(newestUser?.parts as unknown[] | undefined)
+  // /tools is answered from the tool catalog, with no model: it works even
+  // when no provider is configured, and costs nothing.
+  const resolved = isToolsGuideCommand(newestUserText) ? null : await resolveModel('chat')
+
+  const ownerId = await getOwnerId()
 
   // Resolve thread: validate provided id OR create one from the first user message.
   let threadId = body.chatId
@@ -62,6 +66,7 @@ export default defineEventHandler(async (event) => {
   const thread = threadId
 
   const recordUsage = async (usage: { inputTokens?: number; outputTokens?: number }) => {
+    if (!resolved) return
     const { recordUsageSafely } = await import('../lib/llm-cost')
     await recordUsageSafely({
       source: 'chat',
@@ -94,6 +99,17 @@ export default defineEventHandler(async (event) => {
           return abortSignal.aborted
         }
         if (stoppedEarly()) return
+        if (!resolved) {
+          const ghostfolio = await within(getGhostfolioStatus(), MCP_PREP_MS, 'failing' as GhostfolioStatus)
+          writer.write({ type: 'start' })
+          writer.write({ type: 'text-start', id: 'tool-guide-intro' })
+          writer.write({ type: 'text-delta', id: 'tool-guide-intro', delta: TOOLS_GUIDE_INTRO })
+          writer.write({ type: 'text-end', id: 'tool-guide-intro' })
+          writer.write({ type: TOOL_GUIDE_PART_TYPE, data: buildToolGuide({ ghostfolio }) })
+          // A finish reason, so the client does not take the reply as cut short.
+          writer.write({ type: 'finish', finishReason: 'stop' })
+          return
+        }
         const client = getApiClient()
         const [[ghostfolioTools, ghostfolioStatus], recallContext, promptParts] = await Promise.all([
           within(

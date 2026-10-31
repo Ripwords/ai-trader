@@ -466,6 +466,17 @@ function onSubmit() {
   input.value = ''
 }
 function pickSuggestion(s: string) { input.value = s; onSubmit() }
+// A /tools guide example or command goes into the composer for the user to
+// edit and send, not straight to the model.
+function useExample(text: string) {
+  input.value = text
+  void nextTick(() => {
+    const ta = findTextarea()
+    if (!ta) return
+    ta.focus()
+    ta.setSelectionRange(text.length, text.length)
+  })
+}
 function onSelect(code: string) {
   input.value = `Show me ${code} daily`
   onSubmit()
@@ -662,8 +673,11 @@ function agentsVerdict(output: unknown) {
             <template v-if="greetingPart">Good <span class="text-[var(--accent)]">{{ greetingPart }}</span></template>
             <template v-else>Hello</template>
           </div>
-          <div class="font-mono text-xs sm:text-sm uppercase tracking-[0.25em] text-[var(--paper-3)] mt-4">
+          <div class="font-mono text-sm uppercase tracking-[0.25em] text-[var(--paper-3)] mt-4">
             ask anything · charts, news, your portfolio
+          </div>
+          <div class="text-sm text-[var(--paper-3)] mt-2">
+            Type <span class="font-mono text-[var(--paper-2)]">/tools</span> to see everything I can do.
           </div>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-xl rise-in rise-2">
@@ -743,6 +757,12 @@ function agentsVerdict(output: unknown) {
                 :streaming="isToolStreaming(part)"
               />
             </template>
+
+            <ToolGuideCard
+              v-else-if="toolGuideOf(part)"
+              :guide="toolGuideOf(part)!"
+              @use="useExample"
+            />
 
             <template v-else-if="isTextUIPart(part)">
               <Comark

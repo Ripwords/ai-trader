@@ -44,6 +44,16 @@ interface UsageResponse {
     bySource: BreakdownRow[]
   }
   recent: UsageRow[]
+  dataQuotas: {
+    alphaVantage: {
+      date: string
+      used: number
+      limit: number
+      remaining: number
+      exhausted: boolean
+      configured: boolean
+    }
+  }
 }
 
 const { data, pending, error, refresh } = useLazyFetch<UsageResponse>('/api/usage')
@@ -111,6 +121,25 @@ function sourceColor(source: string): string {
               <StatTile label="all time" :value="formatUsd(data.summary.totals.allTime.estimatedCostUsd)" :sub="callsAndTokens(data.summary.totals.allTime)" />
               <StatTile label="tokens" :value="formatTokens(data.summary.totals.month.totalTokens)" sub="last 30 days" />
             </div>
+          </section>
+
+          <!-- Free data-provider budgets (requests, not dollars) -->
+          <section v-if="data.dataQuotas.alphaVantage.configured" class="surface-1 p-4 sm:p-5 space-y-3" aria-label="data quotas">
+            <div class="flex items-baseline justify-between gap-4">
+              <h2 class="label-eyebrow">alpha vantage · today (utc)</h2>
+              <div class="font-mono text-sm" :class="data.dataQuotas.alphaVantage.exhausted ? 'text-[var(--tape-down)]' : 'text-[var(--paper-2)]'">
+                {{ data.dataQuotas.alphaVantage.remaining }} of {{ data.dataQuotas.alphaVantage.limit }} requests left
+              </div>
+            </div>
+            <div class="h-2 bg-[var(--ink-1)] rounded-sm overflow-hidden">
+              <div
+                class="h-full transition-[width] duration-300"
+                :style="{ width: `${Math.min(100, (data.dataQuotas.alphaVantage.used / data.dataQuotas.alphaVantage.limit) * 100)}%`, backgroundColor: data.dataQuotas.alphaVantage.exhausted ? 'var(--tape-down)' : 'var(--accent)' }"
+              />
+            </div>
+            <p class="text-sm text-[var(--paper-3)]">
+              Call transcripts and estimate revisions. Answers are cached, so asking again costs nothing; the count resets at 00:00 UTC.
+            </p>
           </section>
 
           <!-- Cost by source -->
