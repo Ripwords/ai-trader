@@ -79,6 +79,25 @@ def test_prompt_carries_rating_horizon_and_debate() -> None:
     assert "FINAL TRANSACTION PROPOSAL" in prompt
 
 
+def test_prompt_reads_upstream_pydantic_debate_states() -> None:
+    # TradingAgents 0.5 stores the nested debate states as pydantic models,
+    # not dicts; the judge crashed on `.get` for every real run.
+    from tradingagents.agents.utils.agent_states import (
+        InvestDebateState,
+        RiskDebateState,
+    )
+
+    state = {
+        **STATE,
+        "investment_debate_state": InvestDebateState(**STATE["investment_debate_state"]),
+        "risk_debate_state": RiskDebateState(**STATE["risk_debate_state"]),
+    }
+    prompt = build_judge_prompt(state, "hold", horizon_days=7)
+    assert "valuation stretched" in prompt
+    assert "Research manager leans hold" in prompt
+    assert "Conservative: trim" in prompt
+
+
 @pytest.mark.asyncio
 async def test_judge_returns_parsed_number_and_forwards_config() -> None:
     llm = FakeLlm("CONFIDENCE: 58\nREASON: split debate")
