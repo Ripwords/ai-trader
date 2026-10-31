@@ -12,6 +12,7 @@ import {
 import { isPartStreaming, isToolStreaming } from '@nuxt/ui/utils/ai'
 import { useMediaQuery } from '@vueuse/core'
 import { BorderBeam } from 'vue-border-beam'
+import { changedWatchlist, copyableText, editTarget } from '../lib/chat-actions'
 import { requestRunNotificationPermission } from '../lib/notify'
 import { useChatPresence } from '../composables/useChatPresence'
 import { afterRequest, endedWithoutFinish, followRunningReply, interruptionOf, reattach, recoverReply, replyEnding } from '../lib/chat-recovery'
@@ -190,6 +191,7 @@ onMounted(() => {
 const chatId = ref<string | null>(typeof route.query.c === 'string' ? route.query.c : null)
 useChatPresence(chatId)
 const conversationsList = ref<{ refresh: () => Promise<void> } | null>(null)
+const watchlistSidebar = ref<{ refresh: () => Promise<void> } | null>(null)
 
 // The watchlist and conversation rail lives in the left column on desktop and
 // inside the global drawer on phones. It moves via <Teleport :disabled>, which
@@ -295,6 +297,9 @@ const chat = new Chat({
   onError(err) { console.error('chat error', err) },
   onFinish(ending) {
     pendingRequest = null
+    // The server may have given a new thread a short title while it replied.
+    void conversationsList.value?.refresh()
+    if (changedWatchlist(ending.message)) void watchlistSidebar.value?.refresh()
     if (settling.value) {
       cutShort = endedWithoutFinish(ending)
       return
@@ -386,12 +391,40 @@ const interruptionText = computed(() => {
     ? 'Reply stopped.'
     : 'This message has no reply. The reply may have been cut off by a restart.'
 })
+const copiedId = ref<string | null>(null)
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
+async function copyMessage(message: UIMessage) {
+  await navigator.clipboard.writeText(copyableText(message))
+  copiedId.value = message.id
+  clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => { copiedId.value = null }, 1500)
+}
+const isMessageStreaming = (message: UIMessage) =>
+  chat.status !== 'ready' && chat.status !== 'error' && message.id === chat.messages.at(-1)?.id
+/** Retry replaces the newest reply only; an older one would take every later turn with it. */
+const canRetry = (message: UIMessage) =>
+  message.role === 'assistant' && message.id === chat.messages.at(-1)?.id && (chat.status === 'ready' || chat.status === 'error')
+
 function retryReply() {
   chat.clearError()
   void chat.regenerate()
 }
 
+// Editing puts a question back in the composer; sending replaces it and every turn after it.
+const editingId = ref<string | null>(null)
+const canEdit = (message: UIMessage) =>
+  message.role === 'user' && (chat.status === 'ready' || chat.status === 'error')
+function startEdit(message: UIMessage) {
+  editingId.value = message.id
+  useExample(copyableText(message))
+}
+function cancelEdit() {
+  editingId.value = null
+  input.value = ''
+}
+
 async function loadConversation(id: string | null) {
+  editingId.value = null
   if (!id) {
     chat.messages = []
     activeConversationMetadata.value = null
@@ -415,6 +448,17 @@ async function loadConversation(id: string | null) {
 }
 
 onMounted(async () => {
+  // Other pages link here with ?ask= to start a chat on a topic. The question
+  // is put in the box, not sent, so it can be edited first.
+  const ask = typeof route.query.ask === 'string' ? route.query.ask.trim() : ''
+  if (ask) {
+    const { ask: _ask, c: _c, ...rest } = route.query
+    chatId.value = null
+    input.value = ask
+    await router.replace({ query: rest })
+    scheduleContextEstimate(0)
+    return
+  }
   if (chatId.value) await openConversation(chatId.value)
   else scheduleContextEstimate(0)
 })
@@ -441,6 +485,7 @@ watch(() => route.query.c, async (next) => {
 
 function startNewChat() {
   stopStreams()
+  editingId.value = null
   chatId.value = null
   chat.messages = []
   activeConversationMetadata.value = null
@@ -462,7 +507,10 @@ function onSubmit() {
   // stream (and, on a fresh chat, a second thread).
   if (chat.status === 'submitted' || chat.status === 'streaming') return
   void requestRunNotificationPermission()
-  chat.sendMessage({ text })
+  const messageId = editTarget(chat.messages, editingId.value)
+  editingId.value = null
+  if (messageId) chat.clearError()
+  chat.sendMessage(messageId ? { text, messageId } : { text })
   input.value = ''
 }
 function pickSuggestion(s: string) { input.value = s; onSubmit() }
@@ -645,7 +693,7 @@ function agentsVerdict(output: unknown) {
   <aside class="rail-desktop hidden lg:flex">
     <Teleport to="#shell-drawer-extra" :disabled="isDesktop">
       <div class="rail-body">
-        <WatchlistSidebar class="!w-full !border-r-0 flex-1 min-h-0" @select="onSelect" />
+        <WatchlistSidebar ref="watchlistSidebar" class="!w-full !border-r-0 flex-1 min-h-0" @select="onSelect" />
         <div class="border-t hairline">
           <ConversationsList
             ref="conversationsList"
@@ -696,6 +744,7 @@ function agentsVerdict(output: unknown) {
         v-else
         :messages="chat.messages"
         :status="chat.status"
+        should-auto-scroll
         class="flex-1 min-h-0 max-w-3xl mx-auto w-full page-x overflow-y-auto scroll-hidden"
       >
         <template #content="{ message }">
@@ -755,6 +804,7 @@ function agentsVerdict(output: unknown) {
                 :tool-name="getToolName(part)"
                 :state="getPartState(part)"
                 :streaming="isToolStreaming(part)"
+                :error-text="part.state === 'output-error' ? part.errorText : undefined"
               />
             </template>
 
@@ -783,6 +833,37 @@ function agentsVerdict(output: unknown) {
           >
             {{ replyEnding(message)?.kind === 'stopped' ? 'stopped' : 'ended with an error' }}
           </p>
+        </template>
+        <template #actions="{ message }">
+          <template v-if="!isMessageStreaming(message)">
+            <UTooltip v-if="copyableText(message)" :text="copiedId === message.id ? 'Copied' : 'Copy'">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                :icon="copiedId === message.id ? 'i-lucide-check' : 'i-lucide-copy'"
+                :aria-label="copiedId === message.id ? 'Copied' : 'Copy'"
+                @click="copyMessage(message)"
+              />
+            </UTooltip>
+            <UTooltip v-if="canEdit(message)" text="Edit">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-pencil"
+                aria-label="Edit"
+                @click="startEdit(message)"
+              />
+            </UTooltip>
+            <UTooltip v-if="canRetry(message)" text="Retry">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-rotate-ccw"
+                aria-label="Retry"
+                @click="retryReply()"
+              />
+            </UTooltip>
+          </template>
         </template>
       </UChatMessages>
       <div
@@ -967,10 +1048,14 @@ function agentsVerdict(output: unknown) {
               <span class="slash-desc">{{ s.description }}</span>
             </button>
           </div>
-          <p v-if="llmNotConfigured" class="mb-2 font-mono text-xs text-[var(--tape-down)]">
+          <div v-if="editingId" class="mb-2 flex items-center justify-between gap-3 text-sm text-[var(--paper-2)]" data-testid="chat-editing">
+            <span>Editing your question. Sending replaces it and every reply after it.</span>
+            <UButton color="neutral" variant="ghost" label="Cancel" @click="cancelEdit()" />
+          </div>
+          <p v-if="llmNotConfigured" class="mb-2 font-mono text-sm text-[var(--tape-down)]">
             No model provider is configured. <NuxtLink to="/settings" class="underline">Add one in Settings</NuxtLink>.
           </p>
-          <p v-else-if="llmKeyUnreadable" class="mb-2 font-mono text-xs text-[var(--tape-down)]">
+          <p v-else-if="llmKeyUnreadable" class="mb-2 font-mono text-sm text-[var(--tape-down)]">
             The stored API key can't be decrypted because your server's encryption key changed.
             <NuxtLink to="/settings" class="underline">Re-enter it in Settings</NuxtLink>.
           </p>

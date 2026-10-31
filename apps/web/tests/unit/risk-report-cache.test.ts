@@ -6,6 +6,8 @@ const getKline = vi.fn()
 const generateRiskReport = vi.fn()
 const getYahooBars = vi.fn()
 const getYahooQuote = vi.fn()
+const getFinancialMetrics = vi.fn()
+const getQuarterlyHistory = vi.fn()
 
 vi.mock('../../server/llm/http', () => ({
   getApiClient: () => ({ getSnapshot, getKline }),
@@ -17,8 +19,8 @@ vi.mock('../../server/llm/risk-report', () => ({
 }))
 
 vi.mock('../../server/lib/yahoo', () => ({
-  getFinancialMetrics: vi.fn(async () => ({})),
-  getQuarterlyHistory: vi.fn(async () => []),
+  getFinancialMetrics: (...args: unknown[]) => getFinancialMetrics(...args),
+  getQuarterlyHistory: (...args: unknown[]) => getQuarterlyHistory(...args),
   getEarningsInfo: vi.fn(async () => ({ last_earnings_date: null })),
   getCompanyNews: vi.fn(async () => []),
   getYahooBars: (...args: unknown[]) => getYahooBars(...args),
@@ -50,6 +52,8 @@ beforeEach(() => {
   generateRiskReport.mockReset().mockResolvedValue({ llm: LLM })
   getYahooBars.mockReset().mockResolvedValue([])
   getYahooQuote.mockReset().mockResolvedValue(null)
+  getQuarterlyHistory.mockReset().mockResolvedValue([])
+  getFinancialMetrics.mockReset().mockResolvedValue({ symbol: 'US.AAPL', market_cap: 3e12 })
   vi.stubGlobal('defineCachedFunction', (fn: unknown) => fn)
   vi.stubGlobal('useStorage', (base?: string) => {
     const prefix = base ? `${base}:` : ''
@@ -119,6 +123,16 @@ describe('streamRiskReport caching', () => {
     expect(store.has('cache:risk-report:US.AAPL.json')).toBe(false)
   })
 
+  it('does not cache a report scored without Yahoo fundamentals', async () => {
+    // getFinancialMetrics returns all-null metrics when Yahoo fails; the LLM
+    // then scores valuation and health blind, so don't replay that for hours.
+    getFinancialMetrics.mockResolvedValue({ symbol: 'US.AAPL', market_cap: null })
+    const { streamRiskReport } = await import('../../server/lib/risk-report')
+    const events = await drain(streamRiskReport({ symbol: 'US.AAPL' }))
+    expect(events.at(-1)?.kind).toBe('done')
+    expect(store.has('cache:risk-report:US.AAPL.json')).toBe(false)
+  })
+
   it('still streams the report when the cache store is unreachable', async () => {
     vi.stubGlobal('useStorage', () => ({
       getItem: async () => { throw new Error('ECONNREFUSED') },
@@ -171,5 +185,22 @@ describe('streamRiskReport Yahoo fallback', () => {
     }))
     const stored = store.get('cache:risk-report:MY.1066.json') as RiskReport
     expect(stored.price).toMatchObject({ currency: 'MYR', source: 'yahoo' })
+  })
+})
+
+describe('streamRiskReport quarterly rows', () => {
+  const q = (end_date: string, revenue: number) => ({ period: end_date, end_date, revenue, net_income: null, operating_income: null, eps: null })
+
+  it('compares each quarter with the one a year earlier by date, not by position', async () => {
+    // 2025-12-31 is missing, so the row four places after 2026-09-30 is 2025-06-30.
+    getQuarterlyHistory.mockResolvedValue([
+      q('2026-09-30', 202), q('2026-06-30', 200), q('2026-03-31', 180), q('2025-09-30', 180), q('2025-06-30', 160),
+    ])
+    const { streamRiskReport } = await import('../../server/lib/risk-report')
+    const events = await drain(streamRiskReport({ symbol: 'US.AMZN' }))
+    const rows = (events.find(e => e.kind === 'fundamentals') as { quarterly: { period: string, revenue_yoy: number | null }[] }).quarterly
+    expect(rows.find(r => r.period === '2026-09-30')?.revenue_yoy).toBeCloseTo(22 / 180, 6)
+    expect(rows.find(r => r.period === '2026-06-30')?.revenue_yoy).toBeCloseTo(40 / 160, 6)
+    expect(rows.find(r => r.period === '2026-03-31')?.revenue_yoy).toBeNull()
   })
 })

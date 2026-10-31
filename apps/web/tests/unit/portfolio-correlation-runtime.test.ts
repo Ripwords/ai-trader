@@ -73,4 +73,23 @@ describe('getPortfolioCorrelationCached', () => {
     expect(result.matrix[0]?.[1]).toBeCloseTo(-1, 6)
     expect(result.current_portfolio?.weights).toEqual({ NVDA: 0.3, TLT: 0.7 })
   })
+
+  it('does not look up cash or manual assets on Yahoo', async () => {
+    getFullPortfolioCached.mockResolvedValue({
+      positions: [
+        { symbol: 'NVDA', name: 'NVIDIA', market_value: 300, asset_class: 'EQUITY', data_source: 'YAHOO' },
+        { symbol: 'USD', name: 'USD', market_value: 100, asset_class: 'LIQUIDITY', data_source: 'MANUAL' },
+        { symbol: 'GF_KWSP', name: 'KWSP', market_value: 50, asset_class: 'FIXED_INCOME', data_source: 'MANUAL' },
+      ],
+    })
+    getDailyBars.mockResolvedValue([])
+    const { getPortfolioCorrelationCached } = await import('../../server/lib/portfolio-correlation')
+    const result = await getPortfolioCorrelationCached({ force: true })
+    expect(getDailyBars.mock.calls.map(c => c[0])).toEqual(['NVDA'])
+    expect(result.excluded).toEqual(expect.arrayContaining([
+      { symbol: 'USD', reason: 'cash' },
+      { symbol: 'GF_KWSP', reason: 'manual_asset' },
+    ]))
+  })
 })
+

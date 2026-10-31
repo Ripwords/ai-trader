@@ -47,8 +47,9 @@ describe('AgentRunTee', () => {
     tee.push({ type: 'run-end', run_id: 'run-1', tokens_in: 3, tokens_out: 4, cost_usd: 0.5 })
     await tee.flush()
 
-    const usage = fake.updates.find(u => u.set.tokensIn === 3)!
-    expect(usage.set).toMatchObject({ tokensOut: 4, costUsd: '0.5' })
+    // Added to the run's totals in SQL; agent-run-usage-db.test.ts checks the sums.
+    const usage = fake.updates.find(u => 'costUsd' in u.set && 'tokensIn' in u.set)!
+    expect(usage).toBeDefined()
     expect(usage.set.status).toBeUndefined()
     const terminal = fake.updates.filter(u => u.set.status)
     expect(terminal).toHaveLength(1)

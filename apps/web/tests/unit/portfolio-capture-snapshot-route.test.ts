@@ -54,6 +54,24 @@ describe('POST /api/portfolio/capture-snapshot', () => {
     expect(captureInvestmentSnapshot).toHaveBeenCalledWith('auto')
   })
 
+  it('takes one auto snapshot when two tabs open the page at once', async () => {
+    // Each capture checks for today's row, spends seconds fetching, then
+    // inserts; two overlapping loads both found no row and both inserted.
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    capturePortfolioSnapshot.mockImplementation(async (source: string) => {
+      await gate
+      return { id: 'nw', capturedAt: '2026-09-26T00:00:00.000Z', source, skipped: false, totals: null }
+    })
+    const both = Promise.all([handler(makeEvent({ source: 'auto' })), handler(makeEvent({ source: 'auto' }))])
+    release()
+    const [a, b] = await both
+    expect(capturePortfolioSnapshot).toHaveBeenCalledTimes(1)
+    expect(captureInvestmentSnapshot).toHaveBeenCalledTimes(1)
+    expect(a.source).toBe('auto')
+    expect(b.source).toBe('auto')
+  })
+
   it('treats an unknown source as manual', async () => {
     await handler(makeEvent({ source: 'bogus' }))
     expect(capturePortfolioSnapshot).toHaveBeenCalledWith('manual')

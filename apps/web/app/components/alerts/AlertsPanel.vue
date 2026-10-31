@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { PriceAlert, AlertKind } from '../../../server/lib/alerts-core'
+import { apiErrorMessage } from '../../lib/api-error'
 
-// Server list is capped at 100; show newest-first. The alerts:evaluate task
+// Server returns every armed alert plus the newest 100 settled ones, newest-first. The alerts:evaluate task
 // runs server-side every minute and notifies by email/push — this panel is
 // CRUD over /api/alerts plus that task's heartbeat.
 const { data, pending, error, refresh } = useLazyFetch<{ alerts: PriceAlert[] }>('/api/alerts', {
@@ -57,7 +58,7 @@ async function createAlert() {
     form.value.note = ''
     await refresh()
   } catch (err) {
-    formMessage.value = err instanceof Error ? err.message : 'create failed'
+    formMessage.value = apiErrorMessage(err, 'create failed')
   } finally {
     creating.value = false
   }
@@ -65,13 +66,15 @@ async function createAlert() {
 
 async function cancelAlert(id: string) {
   cancellingId.value = id
+  formMessage.value = ''
   try {
     await $fetch(`/api/alerts/${id}/cancel`, { method: 'POST' })
-    await refresh()
-  } catch {
-    /* row stays; next refresh reconciles */
+  } catch (err) {
+    // Usually the alert fired since the list loaded: say so, and reload to show it.
+    formMessage.value = apiErrorMessage(err, 'cancel failed')
   } finally {
     cancellingId.value = null
+    await refresh()
   }
 }
 
@@ -159,7 +162,7 @@ const statusClass = (status: PriceAlert['status']) => {
         {{ creating ? 'arming…' : '+ arm' }}
       </button>
     </div>
-    <div v-if="formMessage" class="font-mono text-[10px] text-[var(--paper-3)] truncate">
+    <div v-if="formMessage" class="font-mono text-sm text-[var(--paper-3)]" role="status">
       {{ formMessage }}
     </div>
 

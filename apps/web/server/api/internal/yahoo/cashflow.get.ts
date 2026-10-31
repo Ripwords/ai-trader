@@ -28,10 +28,12 @@ export default defineEventHandler(async (event) => {
   const cached = cacheGet<CashflowResponse>(cacheKey, SIX_HOURS_MS)
   if (cached) return cached
 
+  let seriesFailed = false
   const [bundle, series] = await Promise.all([
     getFundamentalsBundle(symbol),
     getCashflowSeries(symbol).catch((err: unknown) => {
       console.error('[internal/yahoo/cashflow] series failed', symbol, err)
+      seriesFailed = true
       return null
     }),
   ])
@@ -41,6 +43,8 @@ export default defineEventHandler(async (event) => {
     series,
     yahoo_levered_fcf: { value: bundle.metrics?.free_cash_flow ?? null, definition: LEVERED_FCF_DEFINITION },
   }
-  cacheSet(cacheKey, out)
+  // A failed lookup is usually transient (getHistorical returns [] when Yahoo
+  // fails); caching it would hide the data for six hours.
+  if (!seriesFailed && bundle.history.length > 0) cacheSet(cacheKey, out)
   return out
 })

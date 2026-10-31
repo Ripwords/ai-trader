@@ -14,6 +14,7 @@ export default defineEventHandler(async (event) => {
   if (cached) return cached
 
   const result = await getFundamentalsBundle(symbol)
-  cacheSet(cacheKey, result)
+  // getHistorical returns [] when Yahoo fails; caching that would hide the data for a day.
+  if (result.history.length > 0) cacheSet(cacheKey, result)
   return result
 })

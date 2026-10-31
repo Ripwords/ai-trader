@@ -88,7 +88,17 @@ describe('holding sources', () => {
     const rows = holdingRows(portfolio({
       moomoo_live: [{ symbol: 'US.TSM', quantity: 5, market_value: 2426.7, pnl_pct: 25.81, account_id: 'x', currency: 'USD' }],
     }), 'live')
-    expect(rows).toEqual([{ symbol: 'US.TSM', name: null, quantity: 5, value: 2426.7, currency: 'USD', allocationPct: null, pnlPct: 25.81 }])
+    expect(rows).toEqual([{ key: 'x:US.TSM', symbol: 'US.TSM', name: null, quantity: 5, value: 2426.7, currency: 'USD', allocationPct: null, pnlPct: 25.81 }])
+  })
+
+  it('keys each row uniquely when two moomoo accounts hold the same symbol', () => {
+    const rows = holdingRows(portfolio({
+      moomoo_live: [
+        { symbol: 'US.NVDA', quantity: 1, market_value: 200, pnl_pct: 1, account_id: 'a', currency: 'USD' },
+        { symbol: 'US.NVDA', quantity: 2, market_value: 400, pnl_pct: 1, account_id: 'b', currency: 'USD' },
+      ],
+    }), 'live')
+    expect(new Set(rows.map(r => r.key)).size).toBe(2)
   })
 
   it('values the aggregate in the base currency', () => {
@@ -160,7 +170,7 @@ describe('keyFigures', () => {
 
   it('says why the 1-day move is missing instead of showing a zero', () => {
     const figs = keyFigures(portfolio(), performance(null))
-    expect(figs[1]).toMatchObject({ value: '—', tone: 'neutral', sub: 'needs two daily snapshots' })
+    expect(figs[1]).toMatchObject({ value: '—', tone: 'neutral', sub: 'needs a snapshot from the last few days' })
   })
 
   it('shows dashes when Ghostfolio reports no totals', () => {

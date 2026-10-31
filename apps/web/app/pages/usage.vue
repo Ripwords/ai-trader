@@ -3,7 +3,7 @@
 
 definePageMeta({ section: 'usage' })
 import { computed } from 'vue'
-import { formatUsdCost as formatUsd } from '../utils/usage-view'
+import { formatUsdCost as formatUsd, withUnpriced } from '../utils/usage-view'
 
 useHead({ title: 'usage' })
 
@@ -25,12 +25,14 @@ interface BreakdownRow {
   outputTokens: number
   totalTokens: number
   estimatedCostUsd: number
+  unpricedCalls: number
 }
 
 interface PeriodTotals {
   calls: number
   totalTokens: number
   estimatedCostUsd: number
+  unpricedCalls: number
 }
 
 interface UsageResponse {
@@ -69,8 +71,12 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
+function calls(n: number): string {
+  return `${n} call${n === 1 ? '' : 's'}`
+}
+
 function callsAndTokens(t: PeriodTotals): string {
-  return `${t.calls} call${t.calls === 1 ? '' : 's'} · ${formatTokens(t.totalTokens)} tokens`
+  return withUnpriced(`${calls(t.calls)} · ${formatTokens(t.totalTokens)} tokens`, t.unpricedCalls)
 }
 
 function barWidth(cost: number): string {
@@ -113,7 +119,7 @@ function sourceColor(source: string): string {
               label="last 30 days"
               size="lg"
               :value="formatUsd(data.summary.totals.month.estimatedCostUsd)"
-              :sub="`${data.summary.totals.month.calls} call${data.summary.totals.month.calls === 1 ? '' : 's'}`"
+              :sub="withUnpriced(calls(data.summary.totals.month.calls), data.summary.totals.month.unpricedCalls)"
             />
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-5 border-t hairline pt-5">
               <StatTile label="today" :value="formatUsd(data.summary.totals.today.estimatedCostUsd)" :sub="callsAndTokens(data.summary.totals.today)" />
@@ -161,10 +167,10 @@ function sourceColor(source: string): string {
                 :key="row.source"
                 class="space-y-1"
               >
-                <div class="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4 font-mono text-xs">
+                <div class="flex flex-col gap-0.5 sm:flex-row sm:justify-between sm:gap-4 font-mono text-sm">
                   <span class="text-[var(--paper-1)]">{{ row.source }}</span>
                   <span class="text-[var(--paper-3)]">
-                    {{ formatUsd(row.estimatedCostUsd) }} · {{ row.calls }} call{{ row.calls === 1 ? '' : 's' }} · {{ formatTokens(row.totalTokens) }} tokens
+                    {{ withUnpriced(`${formatUsd(row.estimatedCostUsd)} · ${calls(row.calls)} · ${formatTokens(row.totalTokens)} tokens`, row.unpricedCalls) }}
                   </span>
                 </div>
                 <div class="h-2 bg-[var(--ink-1)] rounded-sm overflow-hidden">
@@ -208,7 +214,10 @@ function sourceColor(source: string): string {
                       :key="row.id"
                       class="border-b hairline last:border-b-0"
                     >
-                      <td class="px-4 py-2.5 text-[var(--paper-2)]"><NuxtTime :datetime="row.ts" month="short" day="numeric" hour="2-digit" minute="2-digit" /></td>
+                      <td class="px-4 py-2.5 text-[var(--paper-2)]">
+                        <!-- Server renders UTC/en-US, the browser its own zone; formatting server-side mismatches on hydration. -->
+                        <ClientOnly><NuxtTime :datetime="row.ts" month="short" day="numeric" hour="2-digit" minute="2-digit" /></ClientOnly>
+                      </td>
                       <td class="px-4 py-2.5 text-[var(--paper-1)]">{{ row.source }}</td>
                       <td class="px-4 py-2.5 text-[var(--paper-3)]">{{ row.modelSpec }}</td>
                       <td class="px-4 py-2.5 text-right text-[var(--paper-2)]">{{ formatTokens(row.inputTokens) }}</td>

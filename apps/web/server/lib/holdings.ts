@@ -91,6 +91,8 @@ export interface FullPortfolioPosition {
   /** Percent (47.53 for +47.53%). */
   pnl_pct: number
   asset_class: string
+  /** Ghostfolio's price source (YAHOO, MANUAL, ...); null when not reported. */
+  data_source: string | null
   sectors: string[]
   /** The asset's own trading currency (not the currency of market_value). */
   currency: string
@@ -118,7 +120,11 @@ export interface FullPortfolio {
   moomoo_paper: FullPortfolioMoomooPosition[]
   moomoo_live: FullPortfolioMoomooPosition[]
   ghostfolio_status: GhostfolioStatus
+  /** 'failing': moomoo could not be reached; 'partial': an account could not be read. */
+  moomoo_status: MoomooStatus
 }
+
+export type MoomooStatus = 'ok' | 'partial' | 'failing'
 
 // ---------------------------------------------------------------------------
 // Ghostfolio
@@ -287,6 +293,7 @@ async function fetchGhostfolioSlice(): Promise<GhostfolioSlice> {
       allocation_pct: allocRaw != null ? (allocRaw <= 1 ? allocRaw * 100 : allocRaw) : 0,
       pnl_pct: pnlRaw * 100,
       asset_class: str('assetClass') ?? 'UNKNOWN',
+      data_source: str('dataSource'),
       sectors: toStringArray(h.sectors ?? profile.sectors),
       currency: str('currency') ?? baseCurrency,
     })
@@ -314,20 +321,24 @@ interface MoomooAccountSlice {
   portfolio: Portfolio
 }
 
-/** One getPortfolio per non-IPO account. Unreadable accounts are skipped with a warning. */
-async function fetchMoomooAccounts(): Promise<MoomooAccountSlice[]> {
+/**
+ * One getPortfolio per non-IPO account. Unreadable accounts are skipped with
+ * a warning, and the status says so: an outage used to look like an empty
+ * broker list.
+ */
+async function fetchMoomooAccounts(): Promise<{ slices: MoomooAccountSlice[], status: MoomooStatus }> {
   let client: ReturnType<typeof getApiClient>
   try {
     client = getApiClient()
   } catch {
-    return []
+    return { slices: [], status: 'failing' }
   }
   let accounts: Account[]
   try {
     accounts = await client.listAccounts()
   } catch (err) {
     console.warn('[holdings] moomoo listAccounts failed:', err instanceof Error ? err.message : String(err))
-    return []
+    return { slices: [], status: 'failing' }
   }
   const slices = await Promise.all(
     accounts.filter(a => a.acc_role !== 'IPO').map(async (acc): Promise<MoomooAccountSlice | null> => {
@@ -340,7 +351,9 @@ async function fetchMoomooAccounts(): Promise<MoomooAccountSlice[]> {
       }
     }),
   )
-  return slices.filter((s): s is MoomooAccountSlice => s !== null)
+  const read = slices.filter((s): s is MoomooAccountSlice => s !== null)
+  const status: MoomooStatus = read.length === slices.length ? 'ok' : read.length === 0 ? 'failing' : 'partial'
+  return { slices: read, status }
 }
 
 /**
@@ -397,9 +410,10 @@ export async function getFullPortfolio(): Promise<FullPortfolio> {
     total_pnl_pct: ghos.total_pnl_pct,
     accounts: ghos.accounts,
     positions: ghos.positions,
-    moomoo_paper: project(moomoo.filter(s => s.isPaper)),
-    moomoo_live: project(moomoo.filter(s => !s.isPaper)),
+    moomoo_paper: project(moomoo.slices.filter(s => s.isPaper)),
+    moomoo_live: project(moomoo.slices.filter(s => !s.isPaper)),
     ghostfolio_status: ghos.status,
+    moomoo_status: moomoo.status,
   }
 }
 
@@ -435,7 +449,7 @@ export async function getHoldingForSymbol(symbol: string): Promise<HoldingSummar
   const cash_live_by_currency: Record<string, number> = {}
   let cash_paper_usd = 0
   let cash_live_usd = 0
-  for (const s of moomoo) {
+  for (const s of moomoo.slices) {
     const bucket = s.isPaper ? cash_paper_by_currency : cash_live_by_currency
     for (const [ccy, amt] of Object.entries(nativeCash(s.portfolio))) {
       bucket[ccy] = (bucket[ccy] ?? 0) + (amt || 0)

@@ -70,6 +70,16 @@ describe('/internal/yahoo/valuation-inputs', () => {
     expect(result.dailyBars[0]?.open).toBe(90)
   })
 
+  it('converts the market cap with the price, since Yahoo quotes it in the trading currency', async () => {
+    // HSBC: 2.32T HKD market cap, USD statements and USD free cash flow.
+    getFinancialMetrics.mockResolvedValueOnce({ symbol: 'HK.00005', currency: 'HKD', financial_currency: 'USD', market_cap: 2.32e12, free_cash_flow: 50e9 })
+    getFxRate.mockResolvedValueOnce(0.1275)
+    const event = makeEvent({ authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }, { symbol: 'HK.00005' })
+    const result = (await handler(event)) as { metrics: { market_cap: number, free_cash_flow: number } }
+    expect(result.metrics.market_cap).toBeCloseTo(2.32e12 * 0.1275, -3)
+    expect(result.metrics.free_cash_flow).toBe(50e9)
+  })
+
   it('discloses when the quote and statements currencies differ but no rate exists', async () => {
     getFinancialMetrics.mockResolvedValueOnce({ symbol: 'HK.00700', currency: 'HKD', financial_currency: 'CNY' })
     getFxRate.mockResolvedValueOnce(null)

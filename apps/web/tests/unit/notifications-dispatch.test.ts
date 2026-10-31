@@ -92,6 +92,27 @@ describe('dispatchNotifications', () => {
     expect(retry.saved[0]!.update).toMatchObject({ status: 'sent', pushStatus: 'sent', attempts: 2 })
   })
 
+  it('fails push at once when every device rejected it, instead of retrying for 85 minutes', async () => {
+    const { d, saved } = deps({ sendPush: vi.fn(async () => ({ result: 'rejected' as const, error: 'push 403: invalid VAPID' })) })
+    await dispatchNotifications(d)
+    expect(saved[0]!.update).toMatchObject({ emailStatus: 'sent', pushStatus: 'failed', status: 'sent' })
+    expect(saved[0]!.update.lastError).toMatch(/push 403/)
+  })
+
+  it('still retries when one device rejected and another had a temporary error', async () => {
+    const { d, saved } = deps({
+      listSubscriptions: vi.fn(async () => [
+        { id: 's1', endpoint: 'https://push/1', p256dh: 'p', auth: 'a' },
+        { id: 's2', endpoint: 'https://push/2', p256dh: 'p', auth: 'a' },
+      ]),
+      sendPush: vi.fn(async (_c, t) => t.endpoint.endsWith('1')
+        ? { result: 'rejected' as const, error: 'push 400: bad' }
+        : { result: 'error' as const, error: 'push 503: busy' }),
+    })
+    await dispatchNotifications(d)
+    expect(saved[0]!.update).toMatchObject({ pushStatus: 'pending' })
+  })
+
   it('counts push as delivered when one of several devices took it', async () => {
     const { d, saved } = deps({
       listSubscriptions: vi.fn(async () => [
@@ -120,6 +141,30 @@ describe('dispatchNotifications', () => {
     })
     await expect(dispatchNotifications(d)).resolves.toMatchObject({ processed: 2 })
     expect(saved.map(s => s.id)).toContain('n2')
+  })
+
+  it('counts a thrown delivery as an attempt and backs off, so a row that always throws stops after 5 tries instead of every lease forever', async () => {
+    // A row left queued under a kind that has since been removed throws in planDelivery.
+    const retired = { kind: 'reflection' as OutboxRow['kind'] }
+    const { d, saved } = deps({}, [row(retired)])
+    await dispatchNotifications(d)
+    expect(saved[0]!.update).toMatchObject({ status: 'pending', attempts: 1, lastError: expect.stringContaining('includes') })
+    expect(saved[0]!.update.nextAttemptAt.getTime()).toBeGreaterThan(NOW.getTime())
+
+    const last = deps({}, [row({ ...retired, attempts: 4 })])
+    await dispatchNotifications(last.d)
+    expect(last.saved[0]!.update).toMatchObject({ status: 'failed', attempts: 5 })
+  })
+
+  it('keeps what was already delivered when saving the result throws, so the retry does not push the same alert again', async () => {
+    const { d, saved } = deps()
+    let first = true
+    d.saveDelivery = vi.fn(async (id: string, update: DeliveryUpdate) => {
+      if (first) { first = false; throw new Error('db blip') }
+      saved.push({ id, update })
+    })
+    await dispatchNotifications(d)
+    expect(saved[0]!.update).toMatchObject({ emailStatus: 'sent', pushStatus: 'sent', status: 'sent' })
   })
 
   it('does nothing when no row is due', async () => {

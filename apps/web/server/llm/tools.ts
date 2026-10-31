@@ -5,6 +5,7 @@ import type { ApiClient } from './http'
 import { searchWithFallback } from '../lib/search'
 import { klineWithFallback, snapshotWithFallback } from '../lib/market-fallback'
 import { getContextualNews } from '../lib/contextual-news'
+import { claimLiveConfirmation, releaseLiveConfirmation } from './live-confirmations'
 
 // Self-fetches to this app's own /api routes; none of them stream.
 const SELF_FETCH_TIMEOUT_MS = 30_000
@@ -18,12 +19,14 @@ async function failureReason(res: Response): Promise<string> {
 interface MakeToolsOptions {
   event?: H3Event
   latestUserText?: string
+  /** Stays the same when a reply is retried, so a retry cannot reuse a spent phrase. */
+  latestUserMessageId?: string
 }
 
 type MakeToolsArg = H3Event | MakeToolsOptions | undefined
 
 function isMakeToolsOptions(arg: MakeToolsArg): arg is MakeToolsOptions {
-  return !!arg && ('latestUserText' in arg || 'event' in arg)
+  return !!arg && ('latestUserText' in arg || 'latestUserMessageId' in arg || 'event' in arg)
 }
 
 function normalizeOptions(arg: MakeToolsArg): MakeToolsOptions {
@@ -70,6 +73,20 @@ export function expectedLiveCancelConfirmation(args: { order_id: string }): stri
   return `LIVE CANCEL ${args.order_id}`.toUpperCase()
 }
 
+/**
+ * Whether `text` holds `phrase` as whole words. A bare substring check let a
+ * shorter number pass for a longer one at the end of the phrase: a typed
+ * "... @ 150" confirmed an order sent at 15, and "LIVE CANCEL 1234" cancelled
+ * order 12. A full stop or comma before a space still counts as a boundary,
+ * but not one inside a number: "@ 1,000" does not confirm "@ 1".
+ * The phrase must also not be followed by another order field, or the model
+ * could drop a confirmed QTY or TRIG and still pass.
+ */
+export function containsPhrase(text: string, phrase: string): boolean {
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?:^|[^A-Z0-9._-])${escaped}(?=$|[\\s;:!?)]|[.,](?:\\s|$))(?!\\s+(?:@|TRIG\\b|QTY\\b|PRICE\\b))`).test(text)
+}
+
 function assertLiveTradeConfirmed(args: {
   trd_env?: 'SIMULATE' | 'REAL'
   expected: string
@@ -81,10 +98,37 @@ function assertLiveTradeConfirmed(args: {
   const expected = normalizeConfirmationText(args.expected)
   const provided = normalizeConfirmationText(args.provided)
   const latestUserText = normalizeConfirmationText(args.latestUserText)
-  if (provided !== expected || !latestUserText.includes(expected)) {
+  if (provided !== expected || !containsPhrase(latestUserText, expected)) {
     throw new Error(
       `Live trade blocked. Ask the user to type this exact confirmation in their next message: ${expected}`,
     )
+  }
+}
+
+/**
+ * Run a confirmed REAL order action once per typed phrase. A refusal from the
+ * api (4xx) means nothing reached the broker, so the phrase can be used again;
+ * any other failure, such as a timeout, may hide an order that went through.
+ */
+async function onceForPhrase<T>(
+  options: MakeToolsOptions,
+  trdEnv: 'SIMULATE' | 'REAL' | undefined,
+  phrase: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (trdEnv !== 'REAL') return run()
+  const key = `${options.latestUserMessageId ?? normalizeConfirmationText(options.latestUserText)}|${normalizeConfirmationText(phrase)}`
+  if (!claimLiveConfirmation(key)) {
+    throw new Error(
+      `This confirmation was already used: ${normalizeConfirmationText(phrase)}. Do not place it again. List today's orders with trade_orders to see what went through; to send another, the user must type the phrase again in a new message.`,
+    )
+  }
+  try {
+    return await run()
+  } catch (e) {
+    const status = (e as { status?: number; statusCode?: number }).status ?? (e as { statusCode?: number }).statusCode
+    if (status != null && status >= 400 && status < 500) releaseLiveConfirmation(key)
+    throw e
   }
 }
 
@@ -358,8 +402,8 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       description:
         'The earnings-call transcript: management\'s prepared remarks and the analyst Q&A, each turn with a sentiment '
         + 'score. Holds what the release does not: why a number moved in management\'s words, what analysts pushed on, '
-        + 'and what management dodged. Defaults to the latest quarter (falls back one if not yet published); pass '
-        + 'quarter like 2026Q2 for a specific call. Source: Alpha Vantage, free tier of 25 requests a day shared with '
+        + 'and what management dodged. Defaults to the latest fiscal quarter (falls back one if not yet published); pass '
+        + 'a FISCAL quarter like 2026Q2 for a specific call. Source: Alpha Vantage, free tier of 25 requests a day shared with '
         + 'estimate_revisions; answers are cached, and `quota.remaining` says what is left. Call it once per question, '
         + 'not per follow-up. US tickers only.',
       inputSchema: z.object({
@@ -503,7 +547,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           provided: live_confirmation,
           latestUserText: options.latestUserText,
         })
-        const result = await client.placeOrder(order)
+        const result = await onceForPhrase(options, order.trd_env, expectedLivePlaceConfirmation(order), () => client.placeOrder(order))
         // Best-effort paper-orders ledger row. recordPaperOrder never throws
         // — a ledger failure must not fail the order the user just placed.
         if (order.trd_env !== 'REAL') {
@@ -901,13 +945,14 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'usage_summary': tool({
       description:
-        'Recent LLM usage summary: total cost today/week, breakdown by source, plus today\'s Alpha Vantage request quota (dataQuotas.alphaVantage). Use when the user asks "how much have I spent", "is research expensive" or how many data calls are left.',
+        'Recent LLM usage summary: total cost today/week (agents debates included, as source agents-debate; unpricedCalls counts calls with no price, which are not in the cost), breakdown by source, plus today\'s Alpha Vantage request quota (dataQuotas.alphaVantage). Use when the user asks "how much have I spent", "is research expensive" or how many data calls are left.',
       inputSchema: z.object({}),
       execute: async () => {
         const { getLlmUsageSummary, getOwnerId } = await import('../db/repo')
         const { getAlphaVantageQuota } = await import('../lib/alpha-vantage')
-        const ownerId = await getOwnerId()
-        const [llm, alphaVantage] = await Promise.all([getLlmUsageSummary(ownerId), getAlphaVantageQuota()])
+        const { getNotificationSettings } = await import('../lib/notification-settings')
+        const [ownerId, { timezone }] = await Promise.all([getOwnerId(), getNotificationSettings()])
+        const [llm, alphaVantage] = await Promise.all([getLlmUsageSummary(ownerId, timezone), getAlphaVantageQuota()])
         return { ...llm, dataQuotas: { alphaVantage } }
       },
     }),
@@ -933,11 +978,94 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    // --- Financial plan (the /portfolio plan tab) ----------------------------
+
+    'planning_get': tool({
+      description:
+        'The user\'s financial plan, the same as the /portfolio plan tab: target allocation (ideal wealth distribution by bucket: cash, equity, bond, crypto, real_estate, commodity, other) against actual, the buy/sell amount per bucket, emergency-fund and other goals, concentration, liabilities, monthly cashflow and savings rate. settings holds the editable inputs with the liability and cashflow ids planning_update needs. Call before suggesting or making any plan change.',
+      inputSchema: z.object({
+        force: z.boolean().default(false).describe('Re-read the portfolio instead of the cached copy.'),
+      }),
+      execute: async ({ force }) => {
+        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }] = await Promise.all([
+          import('../lib/portfolio-cache'),
+          import('../lib/planning-settings'),
+          import('../lib/planning'),
+        ])
+        const [portfolio, settings] = await Promise.all([getFullPortfolioCached({ force }), getPlanningSettings()])
+        return { settings, summary: buildPlanningSummary(portfolio, settings) }
+      },
+    }),
+
+    'planning_update': tool({
+      description:
+        'Change the user\'s financial plan settings: target allocation, monthly expenses, emergency-fund months, monthly contribution, liabilities and cashflow items. Call only when the user asks for a change, or agrees to one you proposed; to suggest a target model, describe it and wait for a yes. Send only the fields that change: target_model merges into the current model and must then total 100% (set every bucket you move money between). Upserts with an id replace that row; without one they add a row. It saves at once and returns each change with its before and after value: tell the user what changed, and to undo, call it again with the before values. It never places orders; for trades, use portfolio_rebalance_plan and then trade_place_order.',
+      inputSchema: z.object({
+        target_model: z.array(z.object({
+          key: z.enum(['cash', 'equity', 'bond', 'crypto', 'real_estate', 'commodity', 'other']),
+          target_pct: z.number().min(0).max(100),
+        })).optional().describe('Buckets to set, e.g. [{key:"equity",target_pct:70},{key:"bond",target_pct:20}]'),
+        monthly_expenses: z.number().min(0).optional(),
+        emergency_fund_months: z.number().min(0).max(36).optional(),
+        monthly_contribution: z.number().min(0).optional().describe('How much the user invests each month'),
+        upsert_liabilities: z.array(z.object({
+          id: z.string().optional(),
+          name: z.string().min(1),
+          balance: z.number().positive(),
+          interest_rate_pct: z.number().min(0).max(100),
+          minimum_payment: z.number().min(0),
+        })).optional(),
+        remove_liability_ids: z.array(z.string()).optional(),
+        upsert_cashflow_items: z.array(z.object({
+          id: z.string().optional(),
+          name: z.string().min(1),
+          kind: z.enum(['income', 'expense', 'saving']),
+          amount: z.number().positive().describe('Monthly amount in the base currency'),
+        })).optional(),
+        remove_cashflow_ids: z.array(z.string()).optional(),
+      }),
+      execute: async (patch) => {
+        const [{ getFullPortfolioCached }, { getPlanningSettings, savePlanningSettings }, { buildPlanningSummary }, { applyPlanningPatch }] = await Promise.all([
+          import('../lib/portfolio-cache'),
+          import('../lib/planning-settings'),
+          import('../lib/planning'),
+          import('../lib/planning-assistant'),
+        ])
+        const out = applyPlanningPatch(await getPlanningSettings(), patch)
+        if ('error' in out) return { error: out.error }
+        if (!out.changes.length) return { saved: false, changes: [], message: 'Nothing changed: the plan already has these values.' }
+        const saved = await savePlanningSettings(out.next)
+        const summary = buildPlanningSummary(await getFullPortfolioCached(), saved)
+        return { saved: true, changes: out.changes, allocation_rows: summary.allocation_rows, goals: summary.goals }
+      },
+    }),
+
+    'portfolio_rebalance_plan': tool({
+      description:
+        'Concrete trades that move the portfolio to the saved target allocation, in the base currency. mode=full buys and sells every bucket to its target, spreading each bucket over its holdings by size; mode=contribute_only spends new money (the monthly contribution unless contribution is given) on underweight buckets and never sells, which avoids realising gains. symbol null means the bucket holds nothing yet: suggest candidates, never a ticker as if it were held. Read-only: it places nothing. Present the trades as a plan; place any only when the user asks, one at a time with trade_place_order (paper unless they say live).',
+      inputSchema: z.object({
+        mode: z.enum(['full', 'contribute_only']).default('contribute_only'),
+        contribution: z.number().min(0).optional().describe('contribute_only: the amount to invest, in the base currency'),
+        maxPerBucket: z.number().int().min(1).max(20).default(3).describe('Spread each bucket over at most this many of its largest holdings. Keep it low for small amounts.'),
+      }),
+      execute: async ({ mode, contribution, maxPerBucket }) => {
+        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { buildRebalancePlan }] = await Promise.all([
+          import('../lib/portfolio-cache'),
+          import('../lib/planning-settings'),
+          import('../lib/planning'),
+          import('../lib/planning-assistant'),
+        ])
+        const [portfolio, settings] = await Promise.all([getFullPortfolioCached(), getPlanningSettings()])
+        const summary = buildPlanningSummary(portfolio, settings)
+        return { ...buildRebalancePlan(summary, portfolio, { mode, contribution, maxPerBucket }), allocation_rows: summary.allocation_rows }
+      },
+    }),
+
     // --- Price alerts (the alerts:evaluate scheduled task, every minute) -----
 
     'alert_create': tool({
       description:
-        'Create a price alert the server watches for the user — "notify me when NVDA hits 150" → alert_create(symbol NVDA, kind price_above, threshold 150); "tell me if TSLA drops below 200" → price_below; "ping me if AAPL moves more than 3% today" → pct_move_day with threshold 3. The alert fires once when the condition crosses: an email (if a recipient is set in Settings → Notifications) and a push to every subscribed device. The symbol is resolved to canonical form first; if resolution fails, relay the candidates to the user instead of guessing.',
+        'Create a price alert the server watches for the user — "notify me when NVDA hits 150" → price_above 150 if NVDA is below 150 now, price_below 150 if it is above (an alert whose condition already holds is refused with the current price, so pick the direction from it); "tell me if TSLA drops below 200" → price_below; "ping me if AAPL moves more than 3% today" → pct_move_day with threshold 3. The alert fires once when the condition crosses: an email (if a recipient is set in Settings → Notifications) and a push to every subscribed device. The symbol is resolved to canonical form first; if resolution fails, relay the candidates to the user instead of guessing.',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker, e.g. NVDA, US.NVDA, HK.00700'),
         kind: z.enum(['price_above', 'price_below', 'pct_move_day']).describe('price_above: last >= threshold; price_below: last <= threshold; pct_move_day: abs day move % >= threshold'),
@@ -953,6 +1081,9 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
             ...(resolution.status === 'ambiguous' ? { candidates: resolution.candidates } : {}),
           }
         }
+        const { checkNewAlert } = await import('../lib/alert-quote')
+        const problem = await checkNewAlert(resolution.symbol, { kind, threshold })
+        if (problem) return { error: problem }
         const { createAlert } = await import('../lib/alerts')
         const alert = await createAlert({ symbol: resolution.symbol, kind, threshold, note: note ?? null })
         return { alert, message: `Alert armed: ${alert.symbol} ${alert.kind} ${alert.threshold}. The server checks every minute; when it triggers the user is emailed (if a recipient is set in Settings → Notifications) and pushed to subscribed devices.` }
@@ -980,9 +1111,8 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       }),
       execute: async ({ id }) => {
         const { cancelAlert } = await import('../lib/alerts')
-        const alert = await cancelAlert(id)
-        if (!alert) return { error: 'alert not found', id }
-        return { alert }
+        const out = await cancelAlert(id)
+        return 'error' in out ? { ...out, id } : out
       },
     }),
 
@@ -990,7 +1120,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'reminder_create': tool({
       description:
-        'Schedule a one-off reminder — "remind me to check NVDA earnings on Friday 9am" → reminder_create(due_at "2026-10-23T09:00:00+08:00", message "Check NVDA earnings", symbol NVDA). due_at MUST be ISO 8601 with an explicit UTC offset; read relative or bare times ("tomorrow 9am") in the user\'s timezone (call reminder_list first if you don\'t know it — it returns the timezone). At the due minute the user is emailed (if a recipient is set in Settings → Notifications) and pushed to subscribed devices. Confirm back using dueAtLocal, and if delivery shows no email and no devices, tell the user to set one up in Settings → Notifications.',
+        'Schedule a one-off reminder — "remind me to check NVDA earnings on Friday 9am" → reminder_create(due_at "2026-10-23T09:00:00+08:00", message "Check NVDA earnings", symbol NVDA). due_at MUST be ISO 8601 with an explicit UTC offset; read relative or bare times ("tomorrow 9am") in the user\'s timezone (call reminder_list first if you don\'t know it — it returns the timezone). At the due minute the user is emailed (if a recipient is set in Settings → Notifications) and pushed to subscribed devices. Confirm back using dueAtLocal. delivery counts only what the server can actually send (it needs a recipient or a device and its RESEND_* / VAPID_* keys); if it shows no email and no devices, tell the user nothing will arrive and to check Settings → Notifications.',
       inputSchema: z.object({
         due_at: z.string().describe('ISO 8601 with offset, e.g. 2026-10-23T09:00:00+08:00'),
         message: z.string().describe('What to remind the user about, up to 500 characters'),
@@ -1014,20 +1144,23 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           canonical = resolution?.status === 'resolved' ? resolution.symbol : parsed.data.symbol.toUpperCase()
         }
 
-        const [{ createReminder }, { getNotificationSettings }, { countPushSubscriptions }, { formatInZone }] = await Promise.all([
+        const [{ createReminder }, { getNotificationSettings }, { countPushSubscriptions }, { formatInZone }, { emailConfigFromEnv }, { pushConfigFromEnv }] = await Promise.all([
           import('../lib/reminders'),
           import('../lib/notification-settings'),
           import('../lib/push/subscriptions'),
           import('../../types/zoned-time'),
+          import('../lib/email/resend'),
+          import('../lib/push/web-push'),
         ])
         const reminder = await createReminder({ dueAt, message: parsed.data.message, symbol: canonical })
         const settings = await getNotificationSettings()
-        const pushDevices = await countPushSubscriptions()
+        // A recipient or a device is no use without the server's Resend / VAPID keys.
+        const pushDevices = settings.reminders && pushConfigFromEnv() ? await countPushSubscriptions() : 0
         return {
           reminder,
           dueAtLocal: formatInZone(reminder.dueAt, settings.timezone),
           timezone: settings.timezone,
-          delivery: { email: settings.email !== null && settings.reminders, pushDevices: settings.reminders ? pushDevices : 0, remindersEnabled: settings.reminders },
+          delivery: { email: settings.email !== null && settings.reminders && emailConfigFromEnv() !== null, pushDevices, remindersEnabled: settings.reminders },
         }
       },
     }),

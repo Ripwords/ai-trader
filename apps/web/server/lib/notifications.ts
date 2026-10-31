@@ -42,10 +42,14 @@ export async function enqueueNotification(message: NotificationMessage, db: Inse
   return rows.length > 0
 }
 
-/** Enqueue without letting a failure escape into the producer. */
+/**
+ * Enqueue without letting a failure escape into the producer, and start the
+ * sender at once so a finished research run or chat reply doesn't wait for
+ * the next minute's tick.
+ */
 export async function enqueueNotificationSafely(message: NotificationMessage): Promise<void> {
   try {
-    await enqueueNotification(message)
+    if (await enqueueNotification(message)) kickNotifications()
   }
   catch (err) {
     console.error('[notify] enqueue failed for', message.dedupeKey, err instanceof Error ? err.message : err)

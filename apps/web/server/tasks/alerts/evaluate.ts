@@ -1,4 +1,5 @@
 import { getApiClient } from '../../llm/http'
+import { alertQuote } from '../../lib/alert-quote'
 import { runAlertEvaluation } from '../../lib/alerts-evaluate'
 import { getInvestmentPortfolio } from '../../lib/investment-portfolio'
 import type { AlertPosition } from '../../lib/price-alert-message'
@@ -22,7 +23,7 @@ async function findPosition(symbol: string): Promise<AlertPosition | null> {
 const job = createScheduledJob('alerts:evaluate', async () => {
   const api = getApiClient()
   const { triggered } = await runAlertEvaluation({
-    getSnapshot: args => api.getSnapshot(args),
+    getSnapshot: args => alertQuote(args.code),
     getKline: args => api.getKline(args),
     findPosition,
   })

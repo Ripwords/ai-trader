@@ -7,19 +7,29 @@ export async function requestRunNotificationPermission(): Promise<void> {
   }
 }
 
+/** The in-tab notice for a finished run. Same link and tag as the server push for that run. */
+export function runNotification(run: FinishedRun): { title: string; body: string; tag: string; url: string } {
+  const body = {
+    complete: run.rating ? `${run.rating}${run.confidence != null ? ` · conf ${run.confidence}` : ''}` : 'finished',
+    failed: 'the run did not complete',
+    cancelled: 'the run was stopped',
+  }[run.status]
+  const outcome = { complete: 'done', failed: 'failed', cancelled: 'cancelled' }[run.status]
+  return {
+    title: `${run.symbol} research ${outcome}`,
+    body,
+    tag: `run:${run.runId}`,
+    url: `/research/${encodeURIComponent(run.symbol)}?run=${encodeURIComponent(run.runId)}`,
+  }
+}
+
 export function fireRunNotification(run: FinishedRun): void {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
-  const done = run.status === 'complete'
-  const verdict = run.rating
-    ? `${run.rating}${run.confidence != null ? ` · conf ${run.confidence}` : ''}`
-    : run.status
-  const n = new Notification(`${run.symbol} research ${done ? 'done' : 'failed'}`, {
-    body: done ? verdict : 'the run did not complete',
-    tag: `research-${run.runId}`,
-  })
+  const { title, body, tag, url } = runNotification(run)
+  const n = new Notification(title, { body, tag })
   n.onclick = () => {
     window.focus()
-    window.location.href = `/research?run=${encodeURIComponent(run.runId)}`
+    window.location.href = url
     n.close()
   }
 }

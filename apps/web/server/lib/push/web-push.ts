@@ -34,6 +34,8 @@ export type PushResult =
   | { result: 'sent' }
   /** The push service no longer knows this subscription; delete it. */
   | { result: 'gone' }
+  /** The push service refused this message and would refuse it again (400, 403 key mismatch, 413). */
+  | { result: 'rejected'; error: string }
   | { result: 'error'; error: string }
 
 const TTL_SECONDS = 24 * 60 * 60
@@ -51,6 +53,10 @@ export async function sendPush(cfg: PushConfig, target: PushTarget, message: Pus
     const statusCode = (err as { statusCode?: number } | null)?.statusCode
     if (statusCode === 404 || statusCode === 410) return { result: 'gone' }
     const msg = err instanceof Error ? err.message : String(err)
-    return { result: 'error', error: statusCode ? `push ${statusCode}: ${msg}` : `push: ${msg}` }
+    const error = statusCode ? `push ${statusCode}: ${msg}` : `push: ${msg}`
+    if (statusCode && statusCode >= 400 && statusCode < 500 && statusCode !== 408 && statusCode !== 429) {
+      return { result: 'rejected', error }
+    }
+    return { result: 'error', error }
   }
 }

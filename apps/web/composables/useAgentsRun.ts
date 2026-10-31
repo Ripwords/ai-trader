@@ -104,6 +104,8 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; id
   const startedAt = ref<Date | null>(null)
   // A resume request is in flight; the page disables its button meanwhile.
   const resuming = ref(false)
+  const cancelling = ref(false)
+  const cancelError = ref<string | null>(null)
   let controller: AbortController | null = null
 
   function fail(message: string) {
@@ -220,6 +222,7 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; id
     if (view.value.status === 'running') return
     controller?.abort()
     runId.value = null
+    cancelError.value = null
     resolution.value = null
     view.value = { ...EMPTY_VIEW, status: 'running' }
     startedAt.value = new Date()
@@ -267,11 +270,21 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; id
     await follow(id, { keep: true })
   }
 
-  /** Ask the api to stop the run; the stream's end frame reports the outcome. */
-  function cancel() {
-    if (!runId.value) return
-    void fetch(`/api/research/agents-run?run_id=${encodeURIComponent(runId.value)}`, { method: 'DELETE' })
+  /**
+   * Ask the api to stop the run; the stream's end frame reports the outcome.
+   * A refused cancel leaves the run going (and billing), so it says why.
+   */
+  async function cancel() {
+    if (!runId.value || cancelling.value) return
+    cancelling.value = true
+    cancelError.value = null
+    const res = await fetch(`/api/research/agents-run?run_id=${encodeURIComponent(runId.value)}`, { method: 'DELETE' })
       .catch(() => null)
+    if (!res?.ok) {
+      const body = await res?.json().catch(() => ({})) as { statusMessage?: string } | undefined
+      cancelError.value = `cancel failed: ${body?.statusMessage ?? (res ? `the server answered ${res.status}` : 'the server did not respond')}. The run may still be going.`
+    }
+    cancelling.value = false
   }
 
   /** Back to the idle page without touching the run itself. */
@@ -283,6 +296,7 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; id
     connection.value = 'idle'
     resolution.value = null
     startedAt.value = null
+    cancelError.value = null
   }
 
   if (getCurrentScope()) onScopeDispose(() => controller?.abort())
@@ -293,7 +307,7 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; id
     currentNode: computed(() => view.value.currentNode),
     verdict: computed(() => view.value.verdict),
     error: computed(() => view.value.error),
-    runId, resolution, startedAt, connection, resuming,
+    runId, resolution, startedAt, connection, resuming, cancelling, cancelError,
     start, resume, cancel, follow, reconnect, reset,
   }
 }

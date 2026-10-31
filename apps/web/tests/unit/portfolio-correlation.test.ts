@@ -153,7 +153,7 @@ describe('portfolio correlation', () => {
         { symbol: 'HK.00700', market_value: 800, currency: 'HKD' },
       ],
       moomoo_paper: [],
-    } as unknown as FullPortfolio
+    } as FullPortfolio
 
     // Fake FX: 1 HKD = 0.128 USD. USD passes through unchanged.
     const convert = async (amount: number, from: string, to: string) =>
@@ -165,4 +165,60 @@ describe('portfolio correlation', () => {
     // 800 HKD → 102.4 USD, NOT summed raw as 800.
     expect(bySymbol['0700.HK']).toBeCloseTo(102.4, 5)
   })
+
+  it('weights moomoo-only MPT inputs by the live account, leaving paper positions out', async () => {
+    const portfolio = {
+      positions: [],
+      net_worth_currency: 'USD',
+      moomoo_live: [{ symbol: 'US.NVDA', market_value: 1000, currency: 'USD' }],
+      moomoo_paper: [{ symbol: 'US.TSLA', market_value: 50_000, currency: 'USD' }, { symbol: 'US.NVDA', market_value: 9000, currency: 'USD' }],
+    } as FullPortfolio
+    expect(await collectPortfolioMptInputs(portfolio)).toEqual([{ symbol: 'NVDA', name: 'NVDA', market_value: 1000 }])
+  })
+
+  it('uses paper positions when there is no live one, rather than showing nothing', async () => {
+    const portfolio = {
+      positions: [],
+      net_worth_currency: 'USD',
+      moomoo_live: [],
+      moomoo_paper: [{ symbol: 'US.TSLA', market_value: 500, currency: 'USD' }],
+    } as FullPortfolio
+    expect(await collectPortfolioMptInputs(portfolio)).toEqual([{ symbol: 'TSLA', name: 'TSLA', market_value: 500 }])
+  })
+
+  it('marks cash and manual assets instead of treating their symbols as tickers', async () => {
+    // Ghostfolio names a cash balance by its currency; on Yahoo "USD" is a
+    // leveraged semiconductor ETF.
+    const portfolio = {
+      positions: [
+        { symbol: 'NVDA', name: 'NVIDIA', market_value: 600, asset_class: 'EQUITY', data_source: 'YAHOO' },
+        { symbol: 'USD', name: 'USD', market_value: 100, asset_class: 'LIQUIDITY', data_source: 'MANUAL' },
+        { symbol: 'GF_KWSP', name: 'KWSP', market_value: 50, asset_class: 'FIXED_INCOME', data_source: 'MANUAL' },
+        { symbol: 'VGK', name: 'Vanguard Europe', market_value: 70, asset_class: 'EQUITY', data_source: null },
+      ],
+    } as unknown as FullPortfolio
+
+    expect(await collectPortfolioMptInputs(portfolio)).toEqual([
+      { symbol: 'NVDA', name: 'NVIDIA', market_value: 600 },
+      { symbol: 'USD', name: 'USD', market_value: 100, unpriced: 'cash' },
+      { symbol: 'GF_KWSP', name: 'KWSP', market_value: 50, unpriced: 'manual_asset' },
+      { symbol: 'VGK', name: 'Vanguard Europe', market_value: 70 },
+    ])
+  })
+
+  it('leaves unpriced holdings out of the model even when a ticker of that name has bars', () => {
+    const up = barsFromReturns('A', [0.01, 0.02, -0.01, 0.03])
+    const result = buildPortfolioCorrelation(
+      [
+        { symbol: 'NVDA', name: 'NVIDIA', market_value: 600 },
+        { symbol: 'TLT', name: 'TLT', market_value: 300 },
+        { symbol: 'USD', name: 'USD', market_value: 100, unpriced: 'cash' },
+      ],
+      new Map([['NVDA', up], ['TLT', barsFromReturns('B', [-0.01, 0.01, 0.02, -0.02])], ['USD', up]]),
+      { lookbackDays: 252, minReturns: 2, simulations: 10 },
+    )
+    expect(result.symbols).toEqual(['NVDA', 'TLT'])
+    expect(result.excluded).toEqual([{ symbol: 'USD', reason: 'cash' }])
+  })
 })
+

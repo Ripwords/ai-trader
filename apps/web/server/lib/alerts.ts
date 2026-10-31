@@ -1,4 +1,4 @@
-import { and, desc, eq, gte } from 'drizzle-orm'
+import { and, desc, eq, gte, ne } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { priceAlerts } from '../../db/schema'
 import {
@@ -37,26 +37,45 @@ export async function createAlert(input: CreateAlertInput): Promise<PriceAlert> 
   return shapeAlertRow(inserted[0])
 }
 
+/**
+ * Without a status: every armed alert plus the newest settled ones. Capping
+ * the whole list would let a pile of newer fired or cancelled alerts push an
+ * old armed one out of view while it can still fire.
+ */
 export async function listAlerts(opts: { status?: AlertStatus } = {}): Promise<PriceAlert[]> {
   const db = getDb()
-  const rows = await db
+  const newest = (status: AlertStatus | undefined, settled = false) => db
     .select()
     .from(priceAlerts)
-    .where(opts.status ? eq(priceAlerts.status, opts.status) : undefined)
+    .where(settled ? ne(priceAlerts.status, 'active') : status ? eq(priceAlerts.status, status) : undefined)
     .orderBy(desc(priceAlerts.createdAt))
-    .limit(LIST_LIMIT)
-  return rows.map(shapeAlertRow)
+  if (opts.status) return (await newest(opts.status).limit(LIST_LIMIT)).map(shapeAlertRow)
+  const [active, settled] = await Promise.all([newest('active'), newest(undefined, true).limit(LIST_LIMIT)])
+  return [...active, ...settled]
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .map(shapeAlertRow)
 }
 
-/** Cancel an active alert. Null when the id doesn't exist or isn't active. */
-export async function cancelAlert(id: string): Promise<PriceAlert | null> {
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export type CancelAlertResult = { alert: PriceAlert } | { error: string }
+
+/** Cancel an active alert, or say why it can't be: unknown id, already fired, already cancelled. */
+export async function cancelAlert(id: string): Promise<CancelAlertResult> {
+  if (!UUID.test(id)) return { error: 'alert not found' }
   const db = getDb()
   const updated = await db
     .update(priceAlerts)
     .set({ status: 'cancelled' })
     .where(and(eq(priceAlerts.id, id), eq(priceAlerts.status, 'active')))
     .returning()
-  return updated[0] ? shapeAlertRow(updated[0]) : null
+  if (updated[0]) return { alert: shapeAlertRow(updated[0]) }
+  const [row] = await db.select().from(priceAlerts).where(eq(priceAlerts.id, id)).limit(1)
+  if (!row) return { error: 'alert not found' }
+  const alert = shapeAlertRow(row)
+  return alert.status === 'triggered'
+    ? { error: `alert already triggered at ${alert.triggeredPrice} on ${alert.triggeredAt}, nothing to cancel` }
+    : { error: `alert already ${alert.status}` }
 }
 
 /** Alerts the evaluation loop needs to look at. */

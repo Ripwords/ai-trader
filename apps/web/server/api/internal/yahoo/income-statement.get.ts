@@ -23,6 +23,7 @@ export default defineEventHandler(async (event) => {
     symbol: bundle.symbol,
     income_statement: bundle.income_statement ?? null,
   }
-  cacheSet(cacheKey, out)
+  // getHistorical returns [] when Yahoo fails; caching that would hide the data for a day.
+  if (bundle.history.length > 0) cacheSet(cacheKey, out)
   return out
 })

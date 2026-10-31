@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const ofetch = vi.fn()
 vi.mock('ofetch', () => ({ ofetch: (...args: unknown[]) => ofetch(...args) }))
+const quoteSummary = vi.fn()
+vi.mock('../../server/lib/yahoo', () => ({ yahooClient: { quoteSummary: (...args: unknown[]) => quoteSummary(...args) } }))
+const fiscalYearEnd = (iso: string) => ({ defaultKeyStatistics: { nextFiscalYearEnd: new Date(iso) } })
 
 type Av = typeof import('../../server/lib/alpha-vantage')
 let av: Av
@@ -11,6 +14,8 @@ let ttls: Map<string, number | undefined>
 beforeEach(async () => {
   vi.resetModules()
   ofetch.mockReset()
+  quoteSummary.mockReset()
+  quoteSummary.mockResolvedValue(fiscalYearEnd('2026-12-31T00:00:00Z'))
   vi.stubEnv('ALPHA_VANTAGE_API_KEY', 'test-key')
   store = new Map()
   ttls = new Map()
@@ -179,6 +184,15 @@ describe('quota', () => {
 })
 
 describe('getEstimateRevisions', () => {
+  it('spends one request when two analysts ask for the same cold symbol at once', async () => {
+    ofetch.mockResolvedValue(ESTIMATES)
+    const [a, b] = await Promise.all([av.getEstimateRevisions('AMZN', NOW), av.getEstimateRevisions('US.AMZN', NOW)])
+    expect(a.status).toBe('ok')
+    expect(b.status).toBe('ok')
+    expect(calls('EARNINGS_ESTIMATES')).toBe(1)
+    expect((await av.getAlphaVantageQuota(NOW)).used).toBe(1)
+  })
+
   it('keeps forward periods and the last four reported quarters, as numbers', async () => {
     ofetch.mockResolvedValue(ESTIMATES)
     const r = await av.getEstimateRevisions('AMZN', NOW)
@@ -197,8 +211,53 @@ describe('getEstimateRevisions', () => {
   })
 })
 
+describe('recentQuarters', () => {
+  // Alpha Vantage keys transcripts by FISCAL quarter, named for the year the fiscal year ends in.
+  it.each([
+    [12, ['2026Q3', '2026Q2']], // AMZN: calendar year
+    [9, ['2026Q4', '2026Q3']], // AAPL: the July-September quarter closes fiscal 2026
+    [6, ['2027Q1', '2026Q4']], // MSFT: fiscal 2027 began in July
+    [1, ['2027Q2', '2027Q1']], // WMT: May-July is Q2 of the year ending January 2027; Q3 ends tonight
+  ])('fiscal year ending in month %i', (month, expected) => {
+    expect(av.recentQuarters(NOW, month)).toEqual(expected)
+  })
+})
+
+describe('fiscalYearEndMonth', () => {
+  it('reads the month from Yahoo and treats a 52/53-week year ending in the first days of a month as the month before', async () => {
+    quoteSummary.mockResolvedValueOnce(fiscalYearEnd('2026-09-27T00:00:00Z'))
+    expect(await av.fiscalYearEndMonth('US.AAPL')).toBe(9)
+    quoteSummary.mockResolvedValueOnce(fiscalYearEnd('2027-01-02T00:00:00Z'))
+    expect(await av.fiscalYearEndMonth('US.XYZ')).toBe(12)
+  })
+
+  it('falls back to December when Yahoo fails, and caches a real answer', async () => {
+    quoteSummary.mockRejectedValueOnce(new Error('ETIMEDOUT'))
+    expect(await av.fiscalYearEndMonth('US.MSFT')).toBe(12)
+    quoteSummary.mockResolvedValueOnce(fiscalYearEnd('2027-06-30T00:00:00Z'))
+    expect(await av.fiscalYearEndMonth('US.MSFT')).toBe(6)
+    expect(await av.fiscalYearEndMonth('US.MSFT')).toBe(6)
+    expect(quoteSummary).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('getEarningsCallTranscript', () => {
-  it('defaults to the latest calendar quarter and falls back one when it is not published yet', async () => {
+  it('asks for the fiscal quarter, not the calendar one', async () => {
+    quoteSummary.mockResolvedValue(fiscalYearEnd('2026-09-27T00:00:00Z'))
+    ofetch.mockResolvedValue({ ...TRANSCRIPT, symbol: 'AAPL', quarter: '2026Q4' })
+    const r = await av.getEarningsCallTranscript('AAPL', undefined, NOW)
+    if (r.status !== 'ok') throw new Error('expected ok')
+    expect(r.data.quarter).toBe('2026Q4')
+    expect(ofetch.mock.calls[0]![1]).toMatchObject({ query: { quarter: '2026Q4' } })
+  })
+
+  it('does not look up the fiscal year when the quarter is given', async () => {
+    ofetch.mockResolvedValue(TRANSCRIPT)
+    await av.getEarningsCallTranscript('AMZN', '2026Q2', NOW)
+    expect(quoteSummary).not.toHaveBeenCalled()
+  })
+
+  it('defaults to the latest fiscal quarter and falls back one when it is not published yet', async () => {
     ofetch.mockImplementation(async (_u: string, o: { query: { quarter: string } }) =>
       o.query.quarter === '2026Q3' ? { symbol: 'AMZN', quarter: '2026Q3', transcript: [] } : TRANSCRIPT)
     const r = await av.getEarningsCallTranscript('AMZN', undefined, NOW)

@@ -14,7 +14,7 @@ import type {
 } from '../../../server/llm/http'
 import { assessAlgoMaturity, type AlgoMaturityStatus } from '../../../server/lib/algo-risk'
 import { buildHunks, type DiffPayload } from '../../components/algo/diff-hunks'
-import { SIZING_MODES, foldChecks, sizingMeta } from '../../utils/algo-view'
+import { SIZING_MODES, backtestOutlivesSave, foldChecks, sizingMeta } from '../../utils/algo-view'
 
 const route = useRoute()
 const id = computed(() => route.params.id as string)
@@ -44,18 +44,24 @@ if (!strategy.value) {
   throw createError({ statusCode: 404, statusMessage: 'strategy not found' })
 }
 
-const draft = ref({
-  name: strategy.value.name,
-  symbol: strategy.value.symbol,
-  cadence: strategy.value.cadence,
-  code: strategy.value.code,
-  initial_capital: strategy.value.initial_capital,
-  commission_bps: strategy.value.commission_bps,
-  slippage_bps: strategy.value.slippage_bps,
-  sizing_mode: strategy.value.sizing_mode,
-  sizing_value: strategy.value.sizing_value,
-  pyramiding_max: strategy.value.pyramiding_max,
-})
+type Strategy = NonNullable<typeof strategy.value>
+/** The fields the page edits, and the ones a backtest depends on (all but the name). */
+function pickConfig(s: Strategy) {
+  return {
+    name: s.name,
+    symbol: s.symbol,
+    cadence: s.cadence,
+    code: s.code,
+    initial_capital: s.initial_capital,
+    commission_bps: s.commission_bps,
+    slippage_bps: s.slippage_bps,
+    sizing_mode: s.sizing_mode,
+    sizing_value: s.sizing_value,
+    pyramiding_max: s.pyramiding_max,
+  }
+}
+
+const draft = ref(pickConfig(strategy.value))
 
 const saveError = ref<string | null>(null)
 const saving = ref(false)
@@ -91,11 +97,13 @@ async function save() {
       saveError.value = probe.error ?? 'invalid code'
       return
     }
+    const before = pickConfig(strategy.value!)
     await $fetch(`/api/algo/strategies/${id.value}`, {
       method: 'PUT',
       body: draft.value,
     })
     await refresh()
+    if (!backtestOutlivesSave(before, pickConfig(strategy.value!))) backtest.value = null
   } catch (e) {
     saveError.value = formatApiError(e)
   } finally {

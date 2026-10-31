@@ -247,8 +247,10 @@ export async function* streamRiskReport({ symbol, signal, refresh }: StreamArgs)
   const risk_score = blendRiskScore(llm.valuation.score, llm.health.score, llm.growth.score)
   const generated_at = new Date().toISOString()
 
-  // A report missing the moomoo legs is degraded; don't pin it for hours.
-  if (snapshot && bars.length > 0) {
+  // A report missing the price/chart legs, or scored without fundamentals
+  // (getFinancialMetrics returns all-null on a Yahoo failure), is degraded;
+  // don't pin it for hours.
+  if (snapshot && bars.length > 0 && metrics.market_cap !== null) {
     await storeReport({
       symbol,
       name: snapshot.name ?? null,
@@ -343,12 +345,18 @@ export async function assembleRiskReport({ symbol }: AssembleArgs): Promise<Risk
 // Convert Yahoo quarterly rows into the page's QuarterlyRow shape, computing
 // YoY deltas by matching each quarter against the same calendar quarter four
 // rows back.
+const YEAR_MS = 365 * 86_400_000
+const SAME_QUARTER_MS = 20 * 86_400_000
+
 function buildQuarterlyRows(rows: Awaited<ReturnType<typeof getQuarterlyHistory>>): QuarterlyRow[] {
   const out: QuarterlyRow[] = []
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
     if (!r) continue
-    const prior = rows[i + 4] ?? null
+    // Match the prior-year quarter by date: a gap in the history would make
+    // the row four places down a different quarter.
+    const end = Date.parse(r.end_date)
+    const prior = rows.find(p => Math.abs(end - Date.parse(p.end_date) - YEAR_MS) <= SAME_QUARTER_MS) ?? null
     out.push({
       period: r.period,
       revenue: r.revenue,

@@ -36,6 +36,21 @@ describe('sendPush', () => {
     }
   })
 
+  it('reports a 4xx the push service will refuse again as rejected, not retryable', async () => {
+    // 400 malformed, 401/403 VAPID key mismatch after a key rotation, 413 payload too large.
+    for (const statusCode of [400, 403, 413]) {
+      webPush.sendNotification.mockRejectedValueOnce(Object.assign(new Error('nope'), { statusCode }))
+      expect(await sendPush(cfg, sub, payload)).toEqual({ result: 'rejected', error: `push ${statusCode}: nope` })
+    }
+  })
+
+  it('keeps 408 and 429 retryable', async () => {
+    for (const statusCode of [408, 429]) {
+      webPush.sendNotification.mockRejectedValueOnce(Object.assign(new Error('later'), { statusCode }))
+      expect(await sendPush(cfg, sub, payload)).toMatchObject({ result: 'error' })
+    }
+  })
+
   it('reports other failures as retryable', async () => {
     webPush.sendNotification.mockRejectedValueOnce(Object.assign(new Error('busy'), { statusCode: 503 }))
     expect(await sendPush(cfg, sub, payload)).toEqual({ result: 'error', error: 'push 503: busy' })

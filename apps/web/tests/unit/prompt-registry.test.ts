@@ -23,6 +23,7 @@ describe('prompt registry', () => {
     expect(ids).toEqual([
       'chat.system',
       'chat.moomoo_rules',
+      'chat.title',
       'research.risk_report',
       'news.contextual_angles',
       'algo.codegen',

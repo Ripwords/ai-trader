@@ -48,7 +48,12 @@ function isActive(s: Section): boolean {
         <span class="stack-label">{{ s.label }}</span>
         <span class="stack-blurb">{{ s.blurb }}</span>
       </span>
-      <UIcon name="i-lucide-arrow-right" class="stack-marker" aria-hidden="true" />
+      <!-- The drawer is teleported, and an icon inside a teleport renders empty
+           on the server; client-only keeps hydration consistent. -->
+      <ClientOnly>
+        <UIcon name="i-lucide-arrow-right" class="stack-marker" aria-hidden="true" />
+        <template #fallback><span class="stack-marker" aria-hidden="true" /></template>
+      </ClientOnly>
     </NuxtLink>
   </nav>
 </template>

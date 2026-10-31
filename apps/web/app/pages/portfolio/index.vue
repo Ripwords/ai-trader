@@ -54,6 +54,7 @@ const {
 const figures = computed(() => (data.value ? keyFigures(data.value, performance.value ?? null) : []))
 const attention = computed(() => (planning.value ? attentionItems(planning.value) : []))
 const ghostfolioStatus = computed(() => data.value?.ghostfolio_status)
+const moomooStatus = computed(() => data.value?.moomoo_status)
 const nothingHeld = computed(() => {
   const p = data.value
   return !!p && p.positions.length === 0 && p.moomoo_live.length === 0 && p.moomoo_paper.length === 0
@@ -158,6 +159,12 @@ async function savePlanningSettings(draft: PlanningSettings) {
           <p v-else-if="ghostfolioStatus === 'not_configured'" class="notice" role="status">
             Only moomoo positions are shown. Connect Ghostfolio to see every account in one place.
           </p>
+          <p v-if="moomooStatus === 'failing'" class="notice" role="status">
+            moomoo could not be reached, so no broker positions are shown. Check that OpenD is running, then refresh.
+          </p>
+          <p v-else-if="moomooStatus === 'partial'" class="notice" role="status">
+            One or more moomoo accounts could not be read, so their positions are missing below. Refresh to try again.
+          </p>
 
           <section class="surface-1 p-4 sm:p-6 grid grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-5" aria-label="key figures">
             <StatTile
@@ -209,7 +216,8 @@ async function savePlanningSettings(draft: PlanningSettings) {
             <RemindersPanel />
           </div>
 
-          <div v-else-if="tab === 'plan'">
+          <div v-else-if="tab === 'plan'" class="space-y-6">
+            <PortfolioAskAi />
             <PageState v-if="planningError" kind="error" :message="`plan failed to load: ${planningError.message}`" @retry="refreshPlanning()" />
             <PageState v-else-if="!planning" kind="loading" message="loading plan…" />
             <PortfolioPlan

@@ -20,6 +20,11 @@ export interface CombinedCaptureResult extends CaptureResult {
   investmentsError: string | null
 }
 
+// The auto capture in progress. Each layer checks for today's row, spends
+// seconds fetching, then inserts, so two page loads at once both found no
+// row and both inserted; a second load now waits for the first.
+let autoInFlight: Promise<CombinedCaptureResult> | null = null
+
 /**
  * Session-authed snapshot capture (auth handled by server/middleware/auth.ts
  * like every /api/portfolio route). Two callers:
@@ -36,7 +41,12 @@ export interface CombinedCaptureResult extends CaptureResult {
 export default defineEventHandler(async (event): Promise<CombinedCaptureResult> => {
   const body = await readBody<{ source?: string } | undefined>(event).catch(() => undefined)
   const source = body?.source === 'auto' ? 'auto' : 'manual'
+  if (source === 'manual') return capture('manual')
+  autoInFlight ??= capture('auto').finally(() => { autoInFlight = null })
+  return autoInFlight
+})
 
+async function capture(source: 'auto' | 'manual'): Promise<CombinedCaptureResult> {
   const investmentsResult = await captureInvestmentSnapshot(source).then(
     r => ({ ok: true as const, value: r }),
     (err: unknown) => ({ ok: false as const, message: err instanceof Error ? err.message : String(err) }),
@@ -60,4 +70,4 @@ export default defineEventHandler(async (event): Promise<CombinedCaptureResult> 
       statusMessage: err instanceof Error ? err.message : 'portfolio snapshot capture failed',
     })
   }
-})
+}

@@ -84,10 +84,11 @@ async function deliverEmail(row: OutboxRow, to: string, cfg: EmailConfig, deps: 
   }
 }
 
-/** Sent when any device took it; gone devices are deleted and dropped from `subs` for later rows. */
+/** Sent when any device took it; failed when every device rejected it; gone devices are deleted and dropped from `subs` for later rows. */
 async function deliverPush(row: OutboxRow, subs: StoredSubscription[], cfg: PushConfig, deps: DispatchDeps): Promise<ChannelOutcome> {
   const message = pushPayload(row)
   const errors: string[] = []
+  let retryable = false
   let delivered = false
   for (const sub of [...subs]) {
     let res: PushResult
@@ -109,10 +110,12 @@ async function deliverPush(row: OutboxRow, subs: StoredSubscription[], cfg: Push
     }
     else {
       errors.push(res.error)
+      if (res.result === 'error') retryable = true
     }
   }
   if (delivered) return { result: 'sent' }
-  if (errors.length) return { result: 'retry', error: errors.join(' | ') }
+  // Only rejections: every retry would be refused the same way.
+  if (errors.length) return retryable ? { result: 'retry', error: errors.join(' | ') } : { result: 'failed', error: errors.join(' | ') }
   return { result: 'skipped', reason: 'no device subscribed' }
 }
 
@@ -127,6 +130,7 @@ export async function dispatchNotifications(deps: DispatchDeps): Promise<Dispatc
 
   for (const row of rows) {
     summary.processed++
+    const outcomes: { email?: ChannelOutcome; push?: ChannelOutcome } = {}
     try {
       const plan = planDelivery(row, {
         settings,
@@ -134,8 +138,6 @@ export async function dispatchNotifications(deps: DispatchDeps): Promise<Dispatc
         pushConfigured: deps.pushConfig !== null,
         subscriptionCount: subs.length,
       })
-      const outcomes: { email?: ChannelOutcome; push?: ChannelOutcome } = {}
-
       if (plan.email.action === 'skip') outcomes.email = { result: 'skipped', reason: plan.email.reason }
       else if (plan.email.action === 'send' && deps.emailConfig && settings.email) {
         outcomes.email = await deliverEmail(row, settings.email, deps.emailConfig, deps)
@@ -151,8 +153,22 @@ export async function dispatchNotifications(deps: DispatchDeps): Promise<Dispatc
       summary[update.status]++
     }
     catch (err) {
-      // The lease expires and the next drain retries this row.
       console.error('[notify] delivery failed for', row.id, errText(err))
+      // Count the throw as a temporary failure on each channel it didn't
+      // finish, so a row that always throws backs off and gives up like any
+      // other, and a channel already delivered is not sent again.
+      const error = errText(err)
+      if (!outcomes.email && row.emailStatus === 'pending') outcomes.email = { result: 'retry', error }
+      if (!outcomes.push && row.pushStatus === 'pending') outcomes.push = { result: 'retry', error }
+      try {
+        const update = settleDelivery(row, outcomes, deps.now())
+        await deps.saveDelivery(row.id, update)
+        summary[update.status]++
+      }
+      catch (saveErr) {
+        // The lease expires and the next drain retries this row.
+        console.error('[notify] could not record the failure for', row.id, errText(saveErr))
+      }
     }
   }
   return summary

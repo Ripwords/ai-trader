@@ -6,8 +6,9 @@ import { requireInternalBearer } from '../_guard'
 /**
  * Inputs for the deterministic valuation. The DCF is computed in the
  * currency the statements are reported in, so when the quote trades in a
- * different currency (Tencent: HKD quote, CNY statements) the price series is
- * converted at the current FX rate before it leaves here. The api has no FX
+ * different currency (Tencent: HKD quote, CNY statements) the price series and
+ * the market cap (Yahoo quotes both in the trading currency) are converted at
+ * the current FX rate before they leave here. The api has no FX
  * source of its own; `price_conversion` tells it what was done.
  */
 export default defineEventHandler(async (event) => {
@@ -26,16 +27,18 @@ export default defineEventHandler(async (event) => {
   const priceCcy = metrics.currency
   const finCcy = metrics.financial_currency
   let dailyBars = bars
+  let convertedMetrics = metrics
   let price_conversion: { from: string; to: string; rate: number } | null = null
   let price_conversion_error: string | null = null
   if (priceCcy && finCcy && priceCcy !== finCcy) {
     const rate = await getFxRate(priceCcy, finCcy)
     if (rate != null && rate > 0) {
       dailyBars = bars.map(b => ({ ...b, open: b.open * rate, high: b.high * rate, low: b.low * rate, close: b.close * rate }))
+      convertedMetrics = { ...metrics, market_cap: metrics.market_cap == null ? null : metrics.market_cap * rate }
       price_conversion = { from: priceCcy, to: finCcy, rate }
     } else {
       price_conversion_error = `quote is in ${priceCcy} but statements are in ${finCcy} and no FX rate was available`
     }
   }
-  return { symbol, metrics, history, dailyBars, price_conversion, price_conversion_error, ttm_cashflow }
+  return { symbol, metrics: convertedMetrics, history, dailyBars, price_conversion, price_conversion_error, ttm_cashflow }
 })

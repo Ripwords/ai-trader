@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../server/lib/yahoo', () => ({
   getFundamentalsBundle: vi.fn().mockResolvedValue({
     symbol: 'NVDA',
+    history: [{ period: '2024' }],
     cashflow: { period: '2024', free_cash_flow: 12345 },
     metrics: { free_cash_flow: 3219124992 },
   }),
@@ -57,5 +58,35 @@ describe('/internal/yahoo/cashflow', () => {
     const result = (await handler(event)) as { cashflow: { free_cash_flow: number }; series: unknown }
     expect(result.cashflow.free_cash_flow).toBe(12345)
     expect(result.series).toBeNull()
+  })
+
+  it('does not cache a failed series, so the next call retries it', async () => {
+    getCashflowSeries.mockRejectedValueOnce(new Error('ETIMEDOUT'))
+    const auth = { authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }
+    expect(((await handler(makeEvent(auth, { symbol: 'AMZN' }))) as { series: unknown }).series).toBeNull()
+    const again = (await handler(makeEvent(auth, { symbol: 'AMZN' }))) as { series: { ttm: { fcf: number } } }
+    expect(again.series.ttm.fcf).toBe(-46.892e9)
+    expect(getCashflowSeries).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not cache an empty bundle, so a failed Yahoo fetch is retried', async () => {
+    const yahoo = await import('../../server/lib/yahoo')
+    const bundle = vi.mocked(yahoo.getFundamentalsBundle)
+    const calls = bundle.mock.calls.length
+    bundle.mockResolvedValueOnce({ symbol: 'NVDA', history: [], cashflow: null } as Awaited<ReturnType<typeof yahoo.getFundamentalsBundle>>)
+    const auth = { authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }
+    await handler(makeEvent(auth, { symbol: 'NVDA' }))
+    await handler(makeEvent(auth, { symbol: 'NVDA' }))
+    expect(bundle.mock.calls.length - calls).toBe(2)
+  })
+
+  it('caches a bundle with history', async () => {
+    const yahoo = await import('../../server/lib/yahoo')
+    const bundle = vi.mocked(yahoo.getFundamentalsBundle)
+    const calls = bundle.mock.calls.length
+    const auth = { authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }
+    await handler(makeEvent(auth, { symbol: 'CACHED' }))
+    await handler(makeEvent(auth, { symbol: 'CACHED' }))
+    expect(bundle.mock.calls.length - calls).toBe(1)
   })
 })

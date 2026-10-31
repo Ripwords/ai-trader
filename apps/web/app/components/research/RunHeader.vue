@@ -8,6 +8,8 @@ interface Props {
   elapsedSec: number
   symbol: string
   runId: string | null
+  cancelling?: boolean
+  cancelError?: string | null
 }
 const props = defineProps<Props>()
 const emit = defineEmits<{ cancel: [] }>()
@@ -144,12 +146,17 @@ const statusLabel = computed(() => {
           type="button"
           class="run-header__cancel"
           :data-urgent="stuckLevel === 'hard'"
+          :disabled="cancelling"
           @click="emit('cancel')"
         >
-          cancel
+          {{ cancelling ? 'cancelling…' : 'cancel' }}
         </button>
       </div>
     </div>
+
+    <p v-if="cancelError" class="run-header__cancel-error" role="alert" data-testid="run-cancel-error">
+      {{ cancelError }}
+    </p>
 
     <!-- Activity line: who's working, what they're doing, when we last heard. -->
     <div class="run-header__activity" :data-quiet="status !== 'running'">
@@ -386,6 +393,12 @@ const statusLabel = computed(() => {
 .run-header__since[data-stuck="soft"] { color: var(--accent); }
 .run-header__since[data-stuck="hard"] { color: var(--tape-down); font-weight: 500; }
 
+.run-header__cancel-error {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--tape-down);
+  margin: 0;
+}
 .run-header__stuck {
   font-family: var(--font-mono);
   font-size: 0.72rem;

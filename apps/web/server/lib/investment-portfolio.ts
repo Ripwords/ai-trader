@@ -54,6 +54,8 @@ export interface InvestmentPortfolio {
   as_of: string
   /** acc_ids that actually contributed data. */
   accounts: string[]
+  /** Live acc_ids whose read failed; their holdings are missing from the totals. */
+  unread_accounts: string[]
   reporting_currency: string
   positions: InvestmentPosition[]
   by_currency: CurrencyTotals[]
@@ -98,6 +100,7 @@ function empty(status: InvestmentPortfolio['status'], caveats: string[]): Invest
     status,
     as_of: new Date().toISOString(),
     accounts: [],
+    unread_accounts: [],
     reporting_currency: REPORTING_CURRENCY,
     positions: [],
     by_currency: [],
@@ -196,12 +199,14 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
   )
   const portfolios: Portfolio[] = []
   const usedAccounts: string[] = []
+  const unreadAccounts: string[] = []
   settled.forEach((res, i) => {
     const accId = live[i]!.acc_id
     if (res.status === 'fulfilled') {
       portfolios.push(res.value)
       usedAccounts.push(accId)
     } else {
+      unreadAccounts.push(accId)
       caveats.push(`Account ${accId} could not be read: ${errMessage(res.reason)}.`)
     }
   })
@@ -220,6 +225,7 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
     return {
       ...empty('no_positions', caveats),
       accounts: usedAccounts,
+      unread_accounts: unreadAccounts,
       cash_by_currency,
     }
   }
@@ -365,6 +371,7 @@ export async function getInvestmentPortfolio(): Promise<InvestmentPortfolio> {
     status: 'ok',
     as_of: new Date().toISOString(),
     accounts: usedAccounts,
+    unread_accounts: unreadAccounts,
     reporting_currency: REPORTING_CURRENCY,
     positions,
     by_currency,

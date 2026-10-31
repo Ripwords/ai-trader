@@ -56,6 +56,8 @@ export const SOURCE_LABEL: Record<HoldingSource, string> = {
 }
 
 export interface HoldingRow {
+  /** Unique per row: two moomoo accounts can hold the same symbol. */
+  key: string
   symbol: string
   name: string | null
   quantity: number
@@ -76,7 +78,8 @@ export function holdingSources(p: FullPortfolio): HoldingSource[] {
 
 export function holdingRows(p: FullPortfolio, source: HoldingSource): HoldingRow[] {
   if (source === 'all') {
-    return p.positions.map(pos => ({
+    return p.positions.map((pos, i) => ({
+      key: `${i}:${pos.symbol}`,
       symbol: pos.symbol,
       name: pos.name,
       quantity: pos.quantity,
@@ -88,6 +91,7 @@ export function holdingRows(p: FullPortfolio, source: HoldingSource): HoldingRow
   }
   const list = source === 'live' ? p.moomoo_live : p.moomoo_paper
   return list.map(pos => ({
+    key: `${pos.account_id}:${pos.symbol}`,
     symbol: pos.symbol,
     name: null,
     quantity: pos.quantity,
@@ -152,7 +156,7 @@ export function keyFigures(p: FullPortfolio, perf: PortfolioPerformance | null):
     {
       label: '1-day change',
       value: fmtPct(d1),
-      sub: d1 == null ? 'needs two daily snapshots' : 'net worth since yesterday',
+      sub: d1 == null ? 'needs a snapshot from the last few days' : 'net worth since yesterday, deposits included',
       tone: pnlTone(d1),
     },
     {

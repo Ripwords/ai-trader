@@ -36,6 +36,7 @@ useHead({ title: () => `research · ${symbol.value}` })
 const {
   events, status, verdict, runId, error, resolution, startedAt, connection,
   start, resume, cancel, follow, reconnect, reset, resuming,
+  cancelling: runCancelling, cancelError: runCancelError,
 } = useAgentsRun()
 
 // Candidates to offer when the symbol couldn't be uniquely resolved (422).
@@ -51,7 +52,8 @@ const {
   query: { symbol },
 })
 
-const canResume = computed(() => status.value === 'failed' && runId.value !== null)
+// The api resumes a cancelled run from its checkpoint as well as a failed one.
+const canResume = computed(() => (status.value === 'failed' || status.value === 'cancelled') && runId.value !== null)
 
 const historyRows = computed(() =>
   (runHistory.value?.rows ?? []).map(r => ({
@@ -286,6 +288,8 @@ watch(
         :elapsed-sec="elapsedSec"
         :symbol="symbol"
         :run-id="runId"
+        :cancelling="runCancelling"
+        :cancel-error="runCancelError"
         @cancel="cancel"
       />
 
@@ -301,11 +305,11 @@ watch(
             <header class="resume-card__head">
               <span class="resume-card__eyebrow">
                 <span class="resume-card__dot" />
-                run halted
+                {{ status === 'cancelled' ? 'run cancelled' : 'run halted' }}
               </span>
             </header>
             <p class="resume-card__error" data-mono>
-              {{ error ?? 'unknown error' }}
+              {{ error ?? (status === 'cancelled' ? 'you cancelled this run' : 'unknown error') }}
             </p>
             <button
               type="button"

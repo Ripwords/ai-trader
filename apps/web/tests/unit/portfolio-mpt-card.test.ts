@@ -40,7 +40,7 @@ describe('PortfolioMptCard', () => {
               [-0.4, 1],
             ],
           },
-          excluded: [{ symbol: 'MISSING', reason: 'ticker_not_found' }],
+          excluded: [{ symbol: 'MISSING', reason: 'ticker_not_found' }, { symbol: 'USD', reason: 'cash' }, { symbol: 'GF_KWSP', reason: 'manual_asset' }],
         },
       },
     })
@@ -50,6 +50,9 @@ describe('PortfolioMptCard', () => {
     expect(wrapper.text()).toContain('requested symbols')
     expect(wrapper.text()).toContain('-0.40')
     expect(wrapper.text()).toContain('MISSING')
+    const notes = wrapper.findAll('.mpt-note').map(n => n.text())
+    expect(notes).toContain('excluded invalid tickers: MISSING')
+    expect(notes).toContain('left out, no market price: USD (cash), GF_KWSP (manual)')
     expect(wrapper.find('svg[aria-label="Portfolio efficient frontier"]').exists()).toBe(true)
   })
 })

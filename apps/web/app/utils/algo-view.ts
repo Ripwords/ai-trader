@@ -63,3 +63,14 @@ export function sizingMeta(mode: AlgoSizingMode): SizingModeMeta {
 export function describeSizing(mode: AlgoSizingMode, value: number): string {
   return SIZING[mode].describe(value)
 }
+
+/**
+ * Whether a backtest of the strategy as it was still describes it after a save.
+ * The backtest runs on the saved strategy, so any change other than the name
+ * makes it a result for different code or settings.
+ */
+export function backtestOutlivesSave<T extends { name: string }>(before: T, after: T): boolean {
+  const { name: _a, ...was } = before
+  const { name: _b, ...now } = after
+  return JSON.stringify(was) === JSON.stringify(now)
+}

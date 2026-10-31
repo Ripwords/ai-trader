@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AlgoMaturityCheck, AlgoMaturityStatus } from '../../server/lib/algo-risk'
-import { SIZING_MODES, describeSizing, foldChecks } from '../../app/utils/algo-view'
+import { SIZING_MODES, backtestOutlivesSave, describeSizing, foldChecks } from '../../app/utils/algo-view'
 
 function check(key: string, status: AlgoMaturityStatus): AlgoMaturityCheck {
   return { key, label: key, status, note: `${key} note` }
@@ -55,5 +55,22 @@ describe('describeSizing', () => {
   it('covers every sizing mode with a select label', () => {
     expect(SIZING_MODES.map(m => m.value)).toEqual(['fixed_qty', 'pct_equity', 'fixed_cash'])
     for (const m of SIZING_MODES) expect(m.label).toMatch(/^[a-z$% ]+$/)
+  })
+})
+
+describe('backtestOutlivesSave', () => {
+  const s = { name: 'MA cross', symbol: 'US.AAPL', cadence: '1d', code: 'def on_bar(c): pass', initial_capital: 10000, commission_bps: 5, slippage_bps: 5, sizing_mode: 'fixed_qty', sizing_value: 1, pyramiding_max: 1 }
+
+  it('keeps the backtest through a rename', () => {
+    expect(backtestOutlivesSave(s, { ...s, name: 'renamed' })).toBe(true)
+  })
+
+  it('drops it when the code changed, so a backtest of the old code does not clear the new code to go live', () => {
+    expect(backtestOutlivesSave(s, { ...s, code: 'def on_bar(c): c.buy()' })).toBe(false)
+  })
+
+  it('drops it when any setting the backtest used changed', () => {
+    expect(backtestOutlivesSave(s, { ...s, slippage_bps: 20 })).toBe(false)
+    expect(backtestOutlivesSave(s, { ...s, symbol: 'US.MSFT' })).toBe(false)
   })
 })

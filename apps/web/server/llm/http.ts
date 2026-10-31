@@ -2,6 +2,10 @@ import { ofetch } from 'ofetch'
 
 // The api's own OpenD connect attempt can take 20 s, plus a query.
 export const API_TIMEOUT_MS = 30_000
+// Placing a REAL order opens a fresh OpenD connection for the order list, the
+// snapshots that price it and the order itself. Giving up early reports a
+// failure for an order the broker may still accept.
+export const ORDER_TIMEOUT_MS = 120_000
 // The api caps one backtest at ALGO_BACKTEST_TIMEOUT_SEC (120 s by default).
 export const BACKTEST_TIMEOUT_MS = 150_000
 // One Yahoo-backed valuation per watchlist symbol.
@@ -227,7 +231,7 @@ export class ApiClient {
     trd_env?: 'SIMULATE' | 'REAL'
     acc_id?: string
   }): Promise<PlaceOrderResult> {
-    return this.fetch('/trade/order/place', { method: 'POST', body: args })
+    return this.fetch('/trade/order/place', { method: 'POST', body: args, timeout: ORDER_TIMEOUT_MS })
   }
 
   modifyOrder(args: {
@@ -238,7 +242,7 @@ export class ApiClient {
     trigger_price?: number
     trd_env?: 'SIMULATE' | 'REAL'
   }): Promise<{ order_id: string; status: string }> {
-    return this.fetch('/trade/order/modify', { method: 'POST', body: args })
+    return this.fetch('/trade/order/modify', { method: 'POST', body: args, timeout: ORDER_TIMEOUT_MS })
   }
 
   cancelOrder(args: {
@@ -246,7 +250,7 @@ export class ApiClient {
     acc_id: string
     trd_env?: 'SIMULATE' | 'REAL'
   }): Promise<{ order_id: string; status: string }> {
-    return this.fetch('/trade/order/cancel', { method: 'POST', body: args })
+    return this.fetch('/trade/order/cancel', { method: 'POST', body: args, timeout: ORDER_TIMEOUT_MS })
   }
 
   valuationScreen(args: { symbols?: string[] } = {}): Promise<ValuationScreenResponse> {

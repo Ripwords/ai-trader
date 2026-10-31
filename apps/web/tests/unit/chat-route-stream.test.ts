@@ -9,7 +9,7 @@ const repo = vi.hoisted(() => ({
   appendMessages: vi.fn(async () => {}),
   createThread: vi.fn(async () => 'th-new'),
   getThread: vi.fn(async (_u: string, id: string) => (id === 'th-1' ? { id, title: 'Earnings chat' } : null)),
-  lastMessageId: vi.fn(async (_thread: string): Promise<string | null> => null),
+  keepThrough: vi.fn(async (_thread: string, _message: { id: string }): Promise<boolean> => false),
 }))
 
 /** The model's token stream, fed by the test. */
@@ -68,6 +68,8 @@ vi.mock('../../server/llm/chat-context', () => ({ buildSystemPrompt: (s: string,
 vi.mock('../../server/llm/tools', () => ({ makeTools: () => deps.makeTools() }))
 vi.mock('../../server/lib/prompts/chat-runtime', () => ({ loadChatPromptInputs: async () => ({}) }))
 vi.mock('../../server/llm/recall', () => ({ buildRecallContext: async () => '' }))
+const nameThread = vi.fn(async (_id: string, _q: string, _t: string) => {})
+vi.mock('../../server/lib/chat-title', () => ({ nameThread }))
 vi.mock('../../server/lib/llm-cost', () => ({ recordUsageSafely: vi.fn(async () => {}) }))
 vi.mock('../../server/llm/model', () => ({
   resolveModel: async () => ({ model: makeModel(), spec: 'mock/model', providerKind: 'openai', modelId: 'model' }),
@@ -75,7 +77,6 @@ vi.mock('../../server/llm/model', () => ({
 }))
 const notify = vi.hoisted(() => ({
   enqueueNotificationSafely: vi.fn(async (_m: { kind: string; dedupeKey: string; subject: string; bodyText: string; url: string | null }) => {}),
-  kickNotifications: vi.fn(),
 }))
 vi.mock('../../server/lib/notifications', () => ({ ...notify, appPublicUrl: () => null }))
 vi.mock('h3', async (orig) => {
@@ -111,7 +112,6 @@ function assistantSaves() {
 
 beforeEach(() => {
   notify.enqueueNotificationSafely.mockClear()
-  notify.kickNotifications.mockClear()
   repo.appendMessages.mockClear()
   repo.createThread.mockClear()
   feeder = undefined
@@ -136,6 +136,16 @@ describe('POST /api/chat', () => {
     expect(body).toContain('"delta":"Hello"')
     expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true)
     expect(assistantSaves()).toHaveLength(1)
+    expect(nameThread).toHaveBeenCalledWith('th-new', 'hi', 'hi')
+  })
+
+  it('names only a thread it just created', async () => {
+    nameThread.mockClear()
+    const res = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => chatStreams.isActive('th-1') && feeder !== undefined)
+    finish()
+    await res.text()
+    expect(nameThread).not.toHaveBeenCalled()
   })
 
   it('saves a reply that ended on an error with the error on it', async () => {
@@ -212,6 +222,38 @@ describe('POST /api/chat', () => {
   })
 })
 
+describe('POST /api/chat usage', () => {
+  it('records the tokens of the steps that finished when a later step fails', async () => {
+    const { recordUsageSafely } = await import('../../server/lib/llm-cost')
+    vi.mocked(recordUsageSafely).mockClear()
+    deps.makeTools = () => ({ echo: tool({ inputSchema: z.object({}), execute: async () => 'ok' }) })
+    try {
+      const res = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+      await until(() => feeder !== undefined)
+      const first = feeder
+      feed.enqueue({ type: 'text-end', id: 'x' })
+      feed.enqueue({ type: 'tool-call', toolCallId: 'c1', toolName: 'echo', input: '{}' })
+      feed.enqueue({
+        type: 'finish',
+        finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+        usage: {
+          inputTokens: { total: 900, noCache: 900, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 40, text: 40, reasoning: 0 },
+        },
+      })
+      providerFailure = new Error('rate limited')
+      feed.close()
+      expect(first).toBeDefined()
+      await res.text()
+      await until(() => vi.mocked(recordUsageSafely).mock.calls.length > 0)
+      expect(vi.mocked(recordUsageSafely).mock.calls[0]?.[0]).toMatchObject({ inputTokens: 900, outputTokens: 40 })
+    } finally {
+      providerFailure = null
+      deps.makeTools = () => ({})
+    }
+  })
+})
+
 describe('POST /api/chat /tools', () => {
   it('answers with the tool guide without resolving or calling a model', async () => {
     lastModel = undefined
@@ -240,7 +282,7 @@ describe('POST /api/chat /tools', () => {
 describe('POST /api/chat concurrent sends', () => {
   it('refuses the second of two near-simultaneous sends before saving its question', async () => {
     let release!: () => void
-    repo.lastMessageId.mockImplementationOnce(() => new Promise(r => { release = () => r(null) }))
+    repo.keepThrough.mockImplementationOnce(() => new Promise(r => { release = () => r(false) }))
     const first = post(event({ messages: [userMessage('one')], chatId: 'th-1' }))
     const second = post(event({ messages: [{ ...userMessage('two'), id: 'u2' }], chatId: 'th-1' }))
 
@@ -260,7 +302,8 @@ describe('POST /api/chat concurrent sends', () => {
 
 describe('POST /api/chat retry', () => {
   it('does not save the question again when retrying its reply', async () => {
-    repo.lastMessageId.mockResolvedValueOnce('u1')
+    repo.keepThrough.mockClear()
+    repo.keepThrough.mockResolvedValueOnce(true)
     await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
     await until(() => feeder !== undefined)
     finish()
@@ -269,6 +312,8 @@ describe('POST /api/chat retry', () => {
     const roles = (repo.appendMessages.mock.calls as unknown as Array<[string, Array<{ role: string }>]>)
       .flatMap(([, msgs]) => msgs.map(m => m.role))
     expect(roles).toEqual(['assistant'])
+    // The saved question is the cut point: the failed reply after it goes.
+    expect(repo.keepThrough).toHaveBeenCalledWith('th-1', expect.objectContaining({ id: 'u1', role: 'user' }))
   })
 })
 
@@ -342,7 +387,7 @@ describe('chat reply notification', () => {
     await until(() => feeder !== undefined)
     feed.enqueue({ type: 'text-delta', id: 'x', delta: '**Hello** there' })
     finish()
-    await until(() => notify.kickNotifications.mock.calls.length > 0)
+    await until(() => notify.enqueueNotificationSafely.mock.calls.length > 0)
 
     const [saved] = assistantSaves() as Array<{ id?: string }>
     expect(queued()).toHaveLength(1)
@@ -377,7 +422,7 @@ describe('chat reply notification', () => {
     await until(() => feeder !== undefined)
     feed.enqueue({ type: 'error', error: new Error('context window exceeded') })
     feed.close()
-    await until(() => notify.kickNotifications.mock.calls.length > 0)
+    await until(() => notify.enqueueNotificationSafely.mock.calls.length > 0)
 
     expect(queued()[0]?.bodyText).toBe('Reply failed. The assistant stopped early: context window exceeded')
   })

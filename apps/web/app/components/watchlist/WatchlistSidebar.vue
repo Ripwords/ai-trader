@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useOpendStatus } from '~/composables/useOpendStatus'
+import { apiErrorMessage } from '../../lib/api-error'
 
 interface Item { code: string; name: string | null; group: string }
 
@@ -14,15 +15,18 @@ const emit = defineEmits<{ select: [code: string] }>()
 
 async function refresh() {
   loading.value = true
-  error.value = null
   try {
     items.value = await $fetch<Item[]>('/api/watchlist')
+    error.value = null
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'failed to load'
+    error.value = apiErrorMessage(e, 'failed to load')
   } finally {
     loading.value = false
   }
 }
+
+// The chat adds and removes codes too; the page reloads the list after it does.
+defineExpose({ refresh })
 
 const statusLabel = computed(() => {
   if (status.value === null) return 'opend checking'
@@ -47,7 +51,7 @@ async function add() {
     newCode.value = ''
     await refresh()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'failed to add'
+    error.value = apiErrorMessage(e, 'failed to add')
   }
 }
 
@@ -57,7 +61,7 @@ async function remove(code: string) {
     await $fetch('/api/watchlist/remove', { method: 'POST', body: { code } })
     await refresh()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'failed to remove'
+    error.value = apiErrorMessage(e, 'failed to remove')
   }
 }
 
@@ -104,13 +108,14 @@ onMounted(() => {
 
     <!-- Body -->
     <div class="flex-1 overflow-y-auto">
-      <div v-if="loading" class="px-5 py-10 font-mono text-sm text-[var(--paper-3)] text-center">
-        loading…
-      </div>
-      <div v-if="error" class="px-5 py-3 font-mono text-sm text-[var(--tape-down)]">
+      <!-- An error sits above the list rather than replacing it: a rejected add should not hide the codes already there. -->
+      <div v-if="error" class="px-5 py-3 font-mono text-sm text-[var(--tape-down)]" role="alert" data-testid="watchlist-error">
         {{ error }}
       </div>
-      <ul v-if="!loading && !error" class="py-1">
+      <div v-if="loading && items.length === 0" class="px-5 py-10 font-mono text-sm text-[var(--paper-3)] text-center">
+        loading…
+      </div>
+      <ul v-if="items.length > 0" class="py-1">
         <li
           v-for="i in items"
           :key="i.code"
@@ -131,8 +136,9 @@ onMounted(() => {
             </div>
           </div>
           <button
-            class="opacity-0 group-hover:opacity-100 font-mono text-lg text-[var(--paper-3)] hover:text-[var(--tape-down)] transition leading-none"
+            class="opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 focus-visible:opacity-100 font-mono text-lg text-[var(--paper-3)] hover:text-[var(--tape-down)] transition leading-none"
             title="Remove"
+            :aria-label="`Remove ${i.code}`"
             @click.stop="remove(i.code)"
           >
             ×

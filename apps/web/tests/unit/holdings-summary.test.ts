@@ -5,6 +5,41 @@ describe('holdings summary', () => {
     vi.resetModules()
   })
 
+  it('says moomoo is offline instead of showing an empty broker list', async () => {
+    vi.doMock('../../server/llm/mcp', () => ({
+      getGhostfolioStatus: vi.fn(async () => 'not_configured'),
+      callGhostfolioTool: vi.fn(async () => null),
+    }))
+    vi.doMock('../../server/llm/http', () => ({
+      getApiClient: () => ({ listAccounts: vi.fn(async () => { throw new Error('OpenD down') }) }),
+    }))
+    const { getFullPortfolio } = await import('../../server/lib/holdings')
+    const full = await getFullPortfolio()
+    expect(full.moomoo_live).toEqual([])
+    expect(full.moomoo_status).toBe('failing')
+  })
+
+  it('says when one moomoo account could not be read', async () => {
+    vi.doMock('../../server/llm/mcp', () => ({
+      getGhostfolioStatus: vi.fn(async () => 'not_configured'),
+      callGhostfolioTool: vi.fn(async () => null),
+    }))
+    vi.doMock('../../server/llm/http', () => ({
+      getApiClient: () => ({
+        listAccounts: vi.fn(async () => [
+          { acc_id: 'live', trd_env: 'REAL', acc_role: 'OWNER' },
+          { acc_id: 'paper', trd_env: 'SIMULATE', acc_role: 'OWNER' },
+        ]),
+        getPortfolio: vi.fn(async ({ trd_env }: { trd_env: string }) => {
+          if (trd_env === 'REAL') throw new Error('timeout')
+          return { cash: 0, market_val: 0, total_assets: 0, positions: [] }
+        }),
+      }),
+    }))
+    const { getFullPortfolio } = await import('../../server/lib/holdings')
+    expect((await getFullPortfolio()).moomoo_status).toBe('partial')
+  })
+
   it('does not add Ghostfolio tracker quantity to moomoo broker quantity', async () => {
     vi.doMock('../../server/llm/mcp', () => ({
       getGhostfolioStatus: vi.fn(async () => 'ok'),

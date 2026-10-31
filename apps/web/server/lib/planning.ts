@@ -274,9 +274,9 @@ function roundPct(value: number): number {
   return Math.round(value * 100) / 100
 }
 
-function normalizeAssetClass(value: string | null | undefined): PlanningBucketKey {
+export function normalizeAssetClass(value: string | null | undefined): PlanningBucketKey {
   const v = (value ?? '').trim().toUpperCase().replace(/[\s-]+/g, '_')
-  if (['CASH', 'MONEY_MARKET'].includes(v)) return 'cash'
+  if (['CASH', 'LIQUIDITY', 'MONEY_MARKET'].includes(v)) return 'cash'
   if (['EQUITY', 'STOCK', 'STOCKS', 'ETF', 'ETFS', 'MUTUAL_FUND', 'FUND'].includes(v)) return 'equity'
   if (['BOND', 'BONDS', 'FIXED_INCOME'].includes(v)) return 'bond'
   if (['CRYPTO', 'CRYPTOCURRENCY'].includes(v)) return 'crypto'
@@ -299,8 +299,12 @@ function concentrationSeverity(allocationPct: number): PlanningSeverity {
 }
 
 function currentValuesByBucket(portfolio: FullPortfolio): Record<PlanningBucketKey, number> {
+  // Ghostfolio lists cash as LIQUIDITY holdings, and those holdings already
+  // add up to net worth. Adding cash_total on top made the rows sum past
+  // 100%, so cash_total is used only when no holding is cash.
+  const holdsCash = portfolio.positions.some(p => normalizeAssetClass(p.asset_class) === 'cash')
   const values: Record<PlanningBucketKey, number> = {
-    cash: Math.max(0, portfolio.cash_total ?? 0),
+    cash: holdsCash ? 0 : Math.max(0, portfolio.cash_total ?? 0),
     equity: 0,
     bond: 0,
     crypto: 0,
@@ -458,7 +462,8 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
     ? Math.min(100, roundPct(settings.monthly_contribution / cashReserveTargetValue * 100))
     : 0
 
-  const sortedPositions = [...portfolio.positions]
+  const sortedPositions = portfolio.positions
+    .filter(p => normalizeAssetClass(p.asset_class) !== 'cash')
     .map(p => ({ symbol: p.symbol, allocation_pct: roundPct(positionAllocationPct(p, netWorth)) }))
     .sort((a, b) => b.allocation_pct - a.allocation_pct)
   const top = sortedPositions[0] ?? null

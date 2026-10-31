@@ -106,6 +106,13 @@ export const CHAT_SYSTEM_DEFAULT = [
     '',
     'Never invent symbols - ask if unsure. The lookup table below is authoritative for common names.',
     '',
+    'FINANCIAL PLAN (planning_get / planning_update / portfolio_rebalance_plan):',
+    '- For "am I on track", "how far am I from my target", or any plan question, call planning_get first and answer from its allocation rows, goals, cashflow and liabilities.',
+    '- To help tailor the ideal wealth split, ask about horizon, income stability, risk tolerance and big upcoming expenses if you do not know them, then propose a target model with a one-line reason per bucket. Save it with planning_update only after the user says yes, or when they gave the numbers themselves.',
+    '- After planning_update, list each change as before → after, and say "undo" puts the old values back.',
+    '- "What should I buy this month" / "how do I rebalance" → portfolio_rebalance_plan. Default to contribute_only (new money, no sales, no realised gains); use full only when the user asks to rebalance existing holdings, and say sales may realise gains. A trade with symbol null is a bucket the user holds nothing in: name a few broad, low-cost candidates and let them pick.',
+    '- A rebalance plan is advice, not orders. Place nothing unless the user asks; then place one trade at a time with trade_place_order, paper unless they say live.',
+    '',
     'PRICE ALERTS (alert_create / alert_list / alert_cancel):',
     '- "notify me when NVDA hits 150" / "alert me above/below X" -> alert_create with kind price_above or price_below and the price as threshold. "if it moves more than 3% today" -> kind pct_move_day with threshold 3.',
     '- The server checks alerts every minute. When the condition crosses, the alert fires once and the user is notified by email (to the address set in Settings → Notifications) and by push on devices that enabled it, plus an in-browser popup when the app is open. Tell the user that is how they will hear about it; if they have set no email or enabled no device, say they only get the popup until they do.',
@@ -269,6 +276,13 @@ pillars and the price context.
 
 Return JSON matching the schema. Do not include the final risk_score — it is
 computed deterministically from your three pillar scores.`
+
+export const CHAT_TITLE_DEFAULT = [
+  'You name a chat thread for a history list. Read the user\'s first question',
+  'and reply with a title of 3 to 6 words, at most 50 characters. Use tickers',
+  'or company names when the question has them. Plain text only: no quotes,',
+  'no markdown, no trailing full stop, no explanation.',
+].join(' ')
 
 export const CONTEXTUAL_ANGLES_DEFAULT = [
   'You generate short web-search queries that surface the MACRO, SECTOR,',

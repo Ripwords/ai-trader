@@ -5,7 +5,7 @@ import {
   createThread,
   getOwnerId,
   getThread,
-  lastMessageId,
+  keepThrough,
   titleFromText,
 } from '../db/repo'
 import { getApiClient } from '../llm/http'
@@ -22,8 +22,9 @@ import { watchReplyEnding } from '../llm/chat-ending'
 import { ChatStreamBusyError, chatSseResponse, chatStreams } from '../lib/chat-streams'
 import { within } from '../lib/within'
 import { chatPresence } from '../lib/chat-presence'
-import { appPublicUrl, enqueueNotificationSafely, kickNotifications } from '../lib/notifications'
+import { appPublicUrl, enqueueNotificationSafely } from '../lib/notifications'
 import { chatReplyMessage } from '../lib/notifications-messages'
+import { trimHistory } from '../llm/chat-history'
 
 interface ChatBody {
   messages?: Array<{ id?: string; role: string; parts?: unknown[]; [k: string]: unknown }>
@@ -60,7 +61,14 @@ export default defineEventHandler(async (event) => {
     if (!existing) threadId = undefined
   }
   if (!threadId) {
-    threadId = await createThread(ownerId, titleFromText(newestUserText || 'New chat'))
+    const title = titleFromText(newestUserText || 'New chat')
+    threadId = await createThread(ownerId, title)
+    // A short name from the quick model replaces the truncated question,
+    // alongside the reply. /tools is not a question worth naming.
+    if (resolved && newestUserText) {
+      const named = threadId
+      void import('../lib/chat-title').then(m => m.nameThread(named, newestUserText, title))
+    }
   }
 
   const thread = threadId
@@ -74,6 +82,18 @@ export default defineEventHandler(async (event) => {
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
     })
+  }
+  // Summed per step and recorded once however the reply ends. When a later
+  // step fails, streamText's totalUsage reads 0 although the finished steps
+  // were billed, so the outer stream's finish records what was counted.
+  const spent = { inputTokens: 0, outputTokens: 0 }
+  let recorded = false
+  const recordSpent = async () => {
+    if (recorded) return
+    recorded = true
+    // Stopped before the model was called: nothing was billed.
+    if (spent.inputTokens === 0 && spent.outputTokens === 0) return
+    await recordUsage(spent)
   }
   // The model stream's error reaches this handler again from the outer
   // stream, already described; keep the first description.
@@ -89,8 +109,9 @@ export default defineEventHandler(async (event) => {
         // Saved here, once the thread is reserved, so a send refused as busy
         // leaves no question behind. Still before any model work, so it
         // survives a refresh during streaming. A retry resends the question;
-        // it is saved already unless its first send never reached us.
-        if (newestUser && (!newestUser.id || newestUser.id !== await lastMessageId(thread))) {
+        // it is saved already unless its first send never reached us, and
+        // the failed reply saved after it is dropped.
+        if (newestUser && (!newestUser.id || !await keepThrough(thread, { ...newestUser, id: newestUser.id }))) {
           await appendMessages(thread, [newestUser])
         }
         // Stop pressed before the model was called: end as stopped without calling it.
@@ -121,12 +142,12 @@ export default defineEventHandler(async (event) => {
           // Missing parts fall back to the default text, without the current time.
           within<Partial<ChatPromptInputs>>(loadChatPromptInputs(), PROMPT_PREP_MS, {}),
         ])
-        const tools = stopOnAbort({ ...makeTools(client, { event, latestUserText: newestUserText }), ...ghostfolioTools })
+        const tools = stopOnAbort({ ...makeTools(client, { event, latestUserText: newestUserText, latestUserMessageId: newestUser?.id }), ...ghostfolioTools })
 
-        const modelMessages = await convertToModelMessages(
+        const modelMessages = trimHistory(await convertToModelMessages(
           body.messages as Parameters<typeof convertToModelMessages>[0],
           { ignoreIncompleteToolCalls: true },
-        )
+        ))
 
         if (stoppedEarly()) return
 
@@ -157,17 +178,19 @@ export default defineEventHandler(async (event) => {
                 },
               }
             : {}),
-          onFinish: ({ totalUsage }) => recordUsage(totalUsage),
-          onAbort: ({ steps }) => recordUsage({
-            inputTokens: steps.reduce((n, s) => n + (s.usage.inputTokens ?? 0), 0),
-            outputTokens: steps.reduce((n, s) => n + (s.usage.outputTokens ?? 0), 0),
-          }),
+          onStepFinish: ({ usage }) => {
+            spent.inputTokens += usage.inputTokens ?? 0
+            spent.outputTokens += usage.outputTokens ?? 0
+          },
+          onFinish: recordSpent,
+          onAbort: recordSpent,
         })
         const replyEnding = watchReplyEnding(maxSteps)
         writer.merge(result.toUIMessageStream({ onError, messageMetadata: ({ part }) => replyEnding(part) }))
       },
       onError,
       onFinish: async ({ responseMessage, isAborted }) => {
+        await recordSpent()
         // A reply that ended early says so on reload, where the live error is gone.
         const ending = isAborted ? { stopped: true } : failure ? { error: failure } : null
         const saved = ending
@@ -207,7 +230,6 @@ async function notifyReply(ownerId: string, threadId: string, reply: { id: strin
       text: lastText(reply.parts),
       error: typeof meta.error === 'string' ? meta.error : null,
     }, appPublicUrl()))
-    kickNotifications()
   }
   catch (err) {
     console.error('[chat] reply notification failed', err instanceof Error ? err.message : err)

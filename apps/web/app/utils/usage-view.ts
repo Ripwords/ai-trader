@@ -14,3 +14,8 @@ export function formatUsdCost(n: number | null): string {
   if (rounded >= 0.01) return CENTS.format(rounded)
   return `$${rounded.toFixed(decimals).replace(/0+$/, '')}`
 }
+
+/** Appends how many calls had no price; their spend is not in the dollar figure beside it. */
+export function withUnpriced(text: string, unpricedCalls: number): string {
+  return unpricedCalls > 0 ? `${text} · ${unpricedCalls} unpriced` : text
+}

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { checkNewAlert } from '../../lib/alert-quote'
 import { createAlert } from '../../lib/alerts'
 import { resolveSymbol } from '../../lib/yahoo'
 
@@ -19,6 +20,8 @@ export default defineEventHandler(async (event) => {
       data: resolution.status === 'ambiguous' ? { candidates: resolution.candidates } : undefined,
     })
   }
+  const problem = await checkNewAlert(resolution.symbol, { kind: body.kind, threshold: body.threshold })
+  if (problem) throw createError({ statusCode: 400, statusMessage: problem })
   const alert = await createAlert({
     symbol: resolution.symbol,
     kind: body.kind,

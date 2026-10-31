@@ -46,6 +46,37 @@ function portfolio(overrides: Partial<FullPortfolio> = {}): FullPortfolio {
 }
 
 describe('planning summary', () => {
+  it('takes the cash bucket from LIQUIDITY holdings, which already add up to net worth, rather than the smaller cash total', () => {
+    const out = buildPlanningSummary(portfolio({
+      net_worth_total: 100_000,
+      cash_total: 5_000,
+      positions_value: 95_000,
+      positions: [
+        { symbol: 'VOO', name: 'VOO', quantity: 100, market_price: 800, market_value: 80_000, investment: 70_000, allocation_pct: 80, pnl_pct: 7, asset_class: 'EQUITY', sectors: [], currency: 'USD' },
+        { symbol: 'MMF', name: 'Money market', quantity: 20_000, market_price: 1, market_value: 20_000, investment: 20_000, allocation_pct: 20, pnl_pct: 0, asset_class: 'LIQUIDITY', sectors: [], currency: 'MYR' },
+      ],
+    }))
+    expect(out.allocation_rows.reduce((sum, row) => sum + row.actual_pct, 0)).toBeCloseTo(100)
+    expect(out.allocation_rows.find(r => r.key === 'cash')?.current_value).toBe(20_000)
+  })
+
+  it('counts cash once when Ghostfolio lists it as a LIQUIDITY holding as well as in the cash total', () => {
+    const out = buildPlanningSummary(portfolio({
+      net_worth_total: 100_000,
+      cash_total: 25_000,
+      positions_value: 75_000,
+      positions: [
+        { symbol: 'VOO', name: 'VOO', quantity: 100, market_price: 750, market_value: 75_000, investment: 70_000, allocation_pct: 75, pnl_pct: 7, asset_class: 'EQUITY', sectors: [], currency: 'USD' },
+        { symbol: 'USD', name: 'USD', quantity: 25_000, market_price: 1, market_value: 25_000, investment: 25_000, allocation_pct: 25, pnl_pct: 0, asset_class: 'LIQUIDITY', sectors: [], currency: 'USD' },
+      ],
+    }))
+    const total = out.allocation_rows.reduce((sum, row) => sum + row.actual_pct, 0)
+    expect(total).toBeCloseTo(100)
+    expect(out.allocation_rows.find(r => r.key === 'cash')?.current_value).toBe(25_000)
+    expect(out.allocation_rows.find(r => r.key === 'other')).toBeUndefined()
+    expect(out.concentration.top_position?.symbol).toBe('VOO')
+  })
+
   it('computes allocation drift and rebalance values from the full portfolio', () => {
     const out = buildPlanningSummary(portfolio())
 

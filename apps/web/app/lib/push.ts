@@ -30,6 +30,18 @@ export function urlBase64ToUint8Array(base64Url: string): Uint8Array<ArrayBuffer
   return out
 }
 
+/**
+ * Whether a subscription was made with the server's current VAPID key. One made
+ * with an older key is refused on every push, so it has to be replaced. Browsers
+ * that do not report the key get the benefit of the doubt.
+ */
+export function subscribedWithKey(applicationServerKey: ArrayBuffer | null, publicKey: string): boolean {
+  if (!applicationServerKey) return true
+  const have = new Uint8Array(applicationServerKey)
+  const want = urlBase64ToUint8Array(publicKey)
+  return have.length === want.length && have.every((b, i) => b === want[i])
+}
+
 async function registration(): Promise<ServiceWorkerRegistration> {
   await navigator.serviceWorker.register('/sw.js', { scope: '/' })
   return navigator.serviceWorker.ready
@@ -53,7 +65,13 @@ export async function enablePush(): Promise<{ endpoint: string }> {
   if (permission !== 'granted') throw new Error(permission === 'denied' ? 'notifications are blocked for this site in the browser settings' : 'permission was not granted')
   const { publicKey } = await $fetch<{ publicKey: string }>('/api/push/vapid-key')
   const reg = await registration()
-  const sub = await reg.pushManager.getSubscription()
+  let existing = await reg.pushManager.getSubscription()
+  if (existing && !subscribedWithKey(existing.options.applicationServerKey, publicKey)) {
+    await $fetch('/api/push/subscribe', { method: 'DELETE', body: { endpoint: existing.endpoint } }).catch(() => {})
+    await existing.unsubscribe()
+    existing = null
+  }
+  const sub = existing
     ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) })
   const json = sub.toJSON()
   await $fetch('/api/push/subscribe', {

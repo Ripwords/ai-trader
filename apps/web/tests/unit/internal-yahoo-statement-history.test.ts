@@ -101,4 +101,13 @@ describe('/internal/yahoo/statement-history', () => {
     await handler(makeEvent(auth, { symbol: 'AMD', freq: 'annual', periods: '3' }))
     expect(vi.mocked(yahoo.getHistorical)).toHaveBeenCalledWith('AMD', 3)
   })
+
+  it('does not cache an empty history, so a failed Yahoo fetch is retried', async () => {
+    const historical = vi.mocked(yahoo.getHistorical)
+    const calls = historical.mock.calls.length
+    historical.mockResolvedValueOnce([])
+    await handler(makeEvent(auth, { symbol: 'EMPTY' }))
+    await handler(makeEvent(auth, { symbol: 'EMPTY' }))
+    expect(historical.mock.calls.length - calls).toBe(2)
+  })
 })

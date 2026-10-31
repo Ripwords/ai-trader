@@ -71,9 +71,16 @@ const sharpeCheck = computed(() => {
 })
 const footnote = computed(() => {
   const excluded = props.correlation?.excluded ?? []
-  if (excluded.length === 0) return ''
-  const symbols = excluded.map(row => row.symbol).join(', ')
-  return `Footnote: tickers Yahoo can't find or price with enough history are excluded: ${symbols}.`
+  const symbols = (reasons: string[]) => excluded.filter(row => reasons.includes(row.reason)).map(row => row.symbol).join(', ')
+  const cash = symbols(['cash'])
+  const manual = symbols(['manual_asset'])
+  const missing = symbols(['ticker_not_found', 'insufficient_price_history'])
+  const notes = [
+    missing && `tickers Yahoo can't find or price with enough history are excluded: ${missing}.`,
+    cash && `Cash is left out: ${cash}.`,
+    manual && `Manual assets without a market price are left out: ${manual}.`,
+  ].filter(Boolean)
+  return notes.length ? `Footnote: ${notes.join(' ')}` : ''
 })
 
 function formatPct(value: number | null | undefined, digits = 1): string {

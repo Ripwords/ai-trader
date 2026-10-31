@@ -89,6 +89,11 @@ export function buildInvestmentSnapshotRow(p: InvestmentPortfolio): InvestmentSn
       'investments layer is unavailable — refusing to record a snapshot rather than store a phantom zero',
     )
   }
+  if (p.unread_accounts?.length) {
+    throw new Error(
+      `live account ${p.unread_accounts.join(', ')} could not be read — refusing to record a snapshot of the other accounts alone`,
+    )
+  }
   if (p.total_market_value_reporting == null || p.total_cost_basis_reporting == null) {
     throw new Error(
       'investments total is unknown (FX unresolved) — refusing to record a partial snapshot',

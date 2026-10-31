@@ -2,6 +2,7 @@ import type { PromptGroup } from '../../../types/prompts'
 import {
   ALGO_CODEGEN_DEFAULT,
   CHAT_SYSTEM_DEFAULT,
+  CHAT_TITLE_DEFAULT,
   CONTEXTUAL_ANGLES_DEFAULT,
   MOOMOO_RULES_DEFAULT,
   RISK_REPORT_DEFAULT,
@@ -50,6 +51,14 @@ const WEB_PROMPTS = [
     description: 'Stock-code formats, the name-to-code lookup table, and broker rules. Appended to the chat system prompt.',
     engine: 'web',
     default: MOOMOO_RULES_DEFAULT,
+  },
+  {
+    id: 'chat.title',
+    group: 'chat',
+    label: 'Chat titles',
+    description: 'Names a new chat thread from its first question, for the History list and notifications. Runs on the quick model; if it fails the question itself stays as the title.',
+    engine: 'web',
+    default: CHAT_TITLE_DEFAULT,
   },
   {
     id: 'research.risk_report',

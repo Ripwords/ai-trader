@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { agentRuns, agentMessages, agentDecisions } from '../../db/schema'
 import type { AgentEvent } from '../../types/agents'
@@ -15,6 +15,22 @@ export type RunOrigin = 'chat' | 'research'
  *  one leaves the run "running" forever, which 409s every later run on the
  *  same symbol, so they bypass the queue cap. */
 const TERMINAL_EVENTS = new Set(['run-end', 'error', 'final-state', 'decision'])
+
+/**
+ * Add one attempt's tokens and cost to the run. A resume reports only what it
+ * spent itself, so writing it over the first attempt's figures would hide that
+ * spend from the daily cost cap and from /usage.
+ */
+export async function addRunUsage(runId: string, usage: { tokens_in: number; tokens_out: number; cost_usd: number }): Promise<void> {
+  await getDb()
+    .update(agentRuns)
+    .set({
+      tokensIn: sql`coalesce(${agentRuns.tokensIn}, 0) + ${usage.tokens_in}`,
+      tokensOut: sql`coalesce(${agentRuns.tokensOut}, 0) + ${usage.tokens_out}`,
+      costUsd: sql`coalesce(${agentRuns.costUsd}, 0) + ${usage.cost_usd}`,
+    })
+    .where(eq(agentRuns.id, runId))
+}
 
 export class AgentRunTee {
   private queue: AgentEvent[] = []
@@ -146,10 +162,7 @@ export class AgentRunTee {
           }
           if (ev.type === 'error') this.errorMessage ??= ev.message
           if (ev.type === 'run-end') {
-            await db
-              .update(agentRuns)
-              .set({ tokensIn: ev.tokens_in, tokensOut: ev.tokens_out, costUsd: ev.cost_usd.toString() })
-              .where(eq(agentRuns.id, this.runId))
+            await addRunUsage(this.runId, ev)
             await this.writeTerminal()
           }
           if (ev.type === 'final-state') {

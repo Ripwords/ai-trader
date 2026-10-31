@@ -93,7 +93,11 @@ export function buildResearchIntelligence(rows: ResearchRunSignal[], now = new D
     const daysSinceComplete = latestCompleteTime === null
       ? null
       : Math.floor((nowMs - latestCompleteTime) / (24 * 60 * 60 * 1000))
-    const failedRecent = sorted.some(row => row.status === 'failed' && (toTime(row.startedAt) ?? 0) >= sevenDaysAgo)
+    // Only a failure since the last good verdict needs a rerun; one already rerun does not.
+    const failedRecent = sorted.some(row => {
+      const started = toTime(row.startedAt) ?? 0
+      return row.status === 'failed' && started >= sevenDaysAgo && (latestCompleteTime === null || started > latestCompleteTime)
+    })
     const isRunning = sorted.some(row => row.status === 'running')
     const isStale = daysSinceComplete !== null && daysSinceComplete > STALE_DAYS
 

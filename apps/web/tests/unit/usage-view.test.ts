@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatUsdCost } from '../../app/utils/usage-view'
+import { formatUsdCost, withUnpriced } from '../../app/utils/usage-view'
 
 describe('formatUsdCost', () => {
   it('marks a missing price as unpriced', () => {
@@ -25,5 +25,15 @@ describe('formatUsdCost', () => {
 
   it('does not print a sub-cent value that rounds up as $0.010', () => {
     expect(formatUsdCost(0.00999)).toBe('$0.01')
+  })
+})
+
+describe('withUnpriced', () => {
+  it('says how many calls the cost leaves out, so real spend does not read as $0', () => {
+    expect(withUnpriced('3 calls', 2)).toBe('3 calls · 2 unpriced')
+  })
+
+  it('adds nothing when every call has a price', () => {
+    expect(withUnpriced('3 calls', 0)).toBe('3 calls')
   })
 })

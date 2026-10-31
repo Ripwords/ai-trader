@@ -1,5 +1,6 @@
 import YahooFinance from 'yahoo-finance2'
 import type { SymbolResolution } from '../../types/symbol'
+import { getSecQuarterlyOperatingIncome } from './sec-edgar'
 
 export const yahooClient = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
 const yahoo = yahooClient
@@ -27,6 +28,8 @@ export interface FinancialMetrics {
   currency: string | null
   /** Currency the financial statements are reported in (`financialData.financialCurrency`). */
   financial_currency: string | null
+  /** Yahoo `assetProfile.industry`, e.g. "Banks - Diversified". */
+  industry: string | null
 }
 
 export interface HistoricalPeriod {
@@ -125,7 +128,7 @@ const EMPTY_METRICS = (symbol: string): FinancialMetrics => ({
   revenue_growth: null, earnings_growth: null,
   debt_to_equity: null, current_ratio: null,
   free_cash_flow: null, beta: null, shares_outstanding: null,
-  currency: null, financial_currency: null,
+  currency: null, financial_currency: null, industry: null,
 })
 
 export function toYahooSymbol(s: string): string {
@@ -160,22 +163,97 @@ function num(v: unknown): number | null {
   return null
 }
 
+// Yahoo's beta is 5 years of monthly returns against the local index; some
+// listings (Amazon, at times) come back without one.
+const BETA_BENCHMARK: Record<string, string> = { US: '^GSPC', HK: '^HSI' }
+const BETA_MONTHS = 60
+const BETA_MIN_MONTHS = 24
+
+interface MonthClose { time: string, close: number }
+
+function previousMonth(ym: string): string {
+  const [y, m] = ym.split('-').map(Number)
+  const d = new Date(Date.UTC(y ?? 0, (m ?? 1) - 2, 1))
+  return d.toISOString().slice(0, 7)
+}
+
+/** Slope of the stock's monthly returns on the index's, over months both have. */
+export function betaFromCloses(stock: MonthClose[], index: MonthClose[]): number | null {
+  const byMonth = (rows: MonthClose[]) => new Map(rows.map(r => [r.time.slice(0, 7), r.close]))
+  const s = byMonth(stock)
+  const i = byMonth(index)
+  const pairs: [number, number][] = []
+  for (const [month, close] of s) {
+    const prev = previousMonth(month)
+    const sPrev = s.get(prev)
+    const iNow = i.get(month)
+    const iPrev = i.get(prev)
+    if (!sPrev || !iNow || !iPrev) continue
+    pairs.push([close / sPrev - 1, iNow / iPrev - 1])
+  }
+  if (pairs.length < BETA_MIN_MONTHS) return null
+  const meanS = pairs.reduce((a, [x]) => a + x, 0) / pairs.length
+  const meanI = pairs.reduce((a, [, y]) => a + y, 0) / pairs.length
+  let cov = 0
+  let varI = 0
+  for (const [x, y] of pairs) {
+    cov += (x - meanS) * (y - meanI)
+    varI += (y - meanI) ** 2
+  }
+  return varI > 0 ? cov / varI : null
+}
+
+async function monthlyCloses(yfSym: string): Promise<MonthClose[]> {
+  const period1 = new Date(Date.now() - (BETA_MONTHS + 2) * 31 * 86_400_000)
+  const chart = await yahoo.chart(yfSym, { period1, interval: '1mo' })
+  return (chart.quotes ?? [])
+    .filter(q => typeof q.close === 'number')
+    .map(q => ({ time: q.date.toISOString().slice(0, 10), close: q.close as number }))
+}
+
+async function computedBeta(symbol: string): Promise<number | null> {
+  const benchmark = BETA_BENCHMARK[symbol.split('.')[0] ?? '']
+  if (!benchmark) return null
+  try {
+    const [stock, index] = await Promise.all([monthlyCloses(toYahooSymbol(symbol)), monthlyCloses(benchmark)])
+    const b = betaFromCloses(stock, index)
+    return b === null ? null : Math.round(b * 1000) / 1000
+  } catch (err) {
+    console.error('[yahoo] beta from prices failed', symbol, err)
+    return null
+  }
+}
+
+/**
+ * Yahoo's P/S divides the market cap in the trading currency by revenue in the
+ * reporting currency (HSBC: HKD over USD, 7.8x too high). P/E and P/B are
+ * consistent because EPS and book value per share are quoted in the trading
+ * currency. Null when the rate is unknown, rather than a mixed-currency ratio.
+ */
+async function priceToSales(ps: number | null, currency: string | null, financialCurrency: string | null): Promise<number | null> {
+  if (ps === null || !currency || !financialCurrency || currency === financialCurrency) return ps
+  const rate = await getFxRate(currency, financialCurrency)
+  return rate === null ? null : ps * rate
+}
+
 const fetchFinancialMetrics = defineCachedFunction(
   async (symbol: string): Promise<FinancialMetrics> => {
     const yfSym = toYahooSymbol(symbol)
     const q = await yahoo.quoteSummary(yfSym, {
-      modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData', 'price'],
+      modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData', 'price', 'assetProfile'],
     })
     const sd = q.summaryDetail
     const ks = q.defaultKeyStatistics
     const fd = q.financialData
     const p = q.price
+    const currency = typeof p?.currency === 'string' ? p.currency : null
+    const financialCurrency = typeof fd?.financialCurrency === 'string' ? fd.financialCurrency : null
     return {
       symbol,
       market_cap: num(sd?.marketCap) ?? num(p?.marketCap),
       pe_ratio: num(sd?.trailingPE),
       pb_ratio: num(ks?.priceToBook),
-      ps_ratio: num(sd?.priceToSalesTrailing12Months),
+      ps_ratio: await priceToSales(num(sd?.priceToSalesTrailing12Months), currency, financialCurrency),
       eps: num(ks?.trailingEps),
       dividend_yield: num(sd?.dividendYield),
       return_on_equity: num(fd?.returnOnEquity),
@@ -187,15 +265,19 @@ const fetchFinancialMetrics = defineCachedFunction(
       debt_to_equity: num(fd?.debtToEquity),
       current_ratio: num(fd?.currentRatio),
       free_cash_flow: num(fd?.freeCashflow),
-      beta: num(sd?.beta) ?? num(ks?.beta),
+      beta: num(sd?.beta) ?? num(ks?.beta) ?? await computedBeta(symbol),
       shares_outstanding: num(ks?.sharesOutstanding),
-      currency: typeof p?.currency === 'string' ? p.currency : null,
-      financial_currency: typeof fd?.financialCurrency === 'string' ? fd.financialCurrency : null,
+      currency,
+      financial_currency: financialCurrency,
+      industry: typeof q.assetProfile?.industry === 'string' ? q.assetProfile.industry : null,
     }
   },
   {
     name: 'yahoo',
-    group: 'metrics',
+    // v4: v3 entries have no industry.
+    // v3: v2 entries hold a mixed-currency P/S for cross-listed companies.
+    // v2: v1 entries hold a null beta where it is now computed.
+    group: 'metrics-v4',
     maxAge: 60 * 60 * 6,
     swr: true,
     getKey: (symbol: string) => symbol,
@@ -211,12 +293,49 @@ export async function getFinancialMetrics(symbol: string): Promise<FinancialMetr
   }
 }
 
+type SeriesRow = Record<string, unknown> & { date: Date }
+
+/** fundamentalsTimeSeries rows for one statement; [] when Yahoo fails. */
+async function statementSeries(
+  yfSym: string,
+  module: 'balance-sheet' | 'cash-flow' | 'financials',
+  type: 'annual' | 'quarterly',
+): Promise<SeriesRow[]> {
+  const period1 = `${new Date().getUTCFullYear() - 6}-01-01`
+  const raw: unknown = await yahoo.fundamentalsTimeSeries(yfSym, { period1, type, module }, { validateResult: false })
+    .catch((err: unknown) => {
+      console.error('[yahoo] fundamentalsTimeSeries failed', yfSym, module, err)
+      return []
+    })
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((r: unknown) => {
+    if (!r || typeof r !== 'object') return []
+    const date = new Date((r as { date?: unknown }).date as string)
+    return Number.isNaN(date.getTime()) ? [] : [{ ...(r as Record<string, unknown>), date }]
+  })
+}
+
+// Yahoo dates a period by its nominal month end (2025-09-30) while the
+// statements carry the real one (2025-09-27, a 52/53-week year).
+const SAME_PERIOD_MS = 20 * 86_400_000
+
+function rowFor(rows: SeriesRow[], end: Date | null): SeriesRow | undefined {
+  if (!end) return undefined
+  return rows.find(r => Math.abs(r.date.getTime() - end.getTime()) <= SAME_PERIOD_MS)
+}
+
 const fetchHistorical = defineCachedFunction(
   async (symbol: string, limit: number): Promise<HistoricalPeriod[]> => {
     const yfSym = toYahooSymbol(symbol)
-    const q = await yahoo.quoteSummary(yfSym, {
-      modules: ['incomeStatementHistory', 'balanceSheetHistory', 'cashflowStatementHistory'],
-    })
+    // quoteSummary's balance-sheet and cash-flow modules have been stubs since
+    // late 2024 (income still works), so those come from the time series.
+    const [q, balanceSeries, cashflowSeries] = await Promise.all([
+      yahoo.quoteSummary(yfSym, {
+        modules: ['incomeStatementHistory', 'balanceSheetHistory', 'cashflowStatementHistory'],
+      }),
+      statementSeries(yfSym, 'balance-sheet', 'annual'),
+      statementSeries(yfSym, 'cash-flow', 'annual'),
+    ])
     const income = q.incomeStatementHistory?.incomeStatementHistory ?? []
     const balance = q.balanceSheetHistory?.balanceSheetStatements ?? []
     const cashflow = q.cashflowStatementHistory?.cashflowStatements ?? []
@@ -228,15 +347,22 @@ const fetchHistorical = defineCachedFunction(
       const cf = cashflow[i]
       if (!inc) continue
       const endDate = (inc as { endDate?: Date | string | null }).endDate
-      const period = endDate ? new Date(endDate).getFullYear().toString() : `period_${i}`
+      const end = endDate ? new Date(endDate) : null
+      const period = end ? end.getFullYear().toString() : `period_${i}`
+      const tsBal = rowFor(balanceSeries, end)
+      const tsCf = rowFor(cashflowSeries, end)
+      const tsOcf = f(tsCf, 'operatingCashFlow')
+      const tsCapex = f(tsCf, 'capitalExpenditure')
       const opCf = f(cf, 'totalCashFromOperatingActivities')
       const capex = f(cf, 'capitalExpenditures')
-      const fcf = opCf !== null ? opCf + (capex ?? 0) : null
+      const fcf = tsOcf !== null && tsCapex !== null
+        ? tsOcf - Math.abs(tsCapex)
+        : opCf !== null ? opCf + (capex ?? 0) : null
       const shortDebt = f(bal, 'shortLongTermDebt')
       const longDebt = f(bal, 'longTermDebt')
-      const totalDebt = shortDebt !== null || longDebt !== null
+      const totalDebt = f(tsBal, 'totalDebt') ?? (shortDebt !== null || longDebt !== null
         ? (shortDebt ?? 0) + (longDebt ?? 0)
-        : null
+        : null)
       out.push({
         period,
         revenue: f(inc, 'totalRevenue'),
@@ -244,16 +370,17 @@ const fetchHistorical = defineCachedFunction(
         eps: null,
         fcf,
         total_debt: totalDebt,
-        cash: f(bal, 'cash') ?? f(bal, 'cashAndCashEquivalents'),
-        total_assets: f(bal, 'totalAssets'),
-        shareholders_equity: f(bal, 'totalStockholderEquity'),
+        cash: f(tsBal, 'cashAndCashEquivalents') ?? f(bal, 'cash') ?? f(bal, 'cashAndCashEquivalents'),
+        total_assets: f(tsBal, 'totalAssets') ?? f(bal, 'totalAssets'),
+        shareholders_equity: f(tsBal, 'stockholdersEquity') ?? f(bal, 'totalStockholderEquity'),
       })
     }
     return out
   },
   {
     name: 'yahoo',
-    group: 'historical',
+    // v2: entries cached before the time-series fill hold null balance sheets.
+    group: 'historical-v2',
     maxAge: 60 * 60 * 24,
     swr: true,
     getKey: (symbol: string, limit: number) => `${symbol}:${limit}`,
@@ -589,9 +716,19 @@ export interface QuarterlyPeriod {
 const fetchQuarterlyHistorical = defineCachedFunction(
   async (symbol: string, limit: number): Promise<QuarterlyPeriod[]> => {
     const yfSym = toYahooSymbol(symbol)
-    const q = await yahoo.quoteSummary(yfSym, {
-      modules: ['incomeStatementHistoryQuarterly', 'earningsHistory'],
-    })
+    // quoteSummary's quarterly rows lost operatingIncome; SEC filings have it
+    // up to the latest 10-Q, Yahoo's series (which lags) covers non-filers.
+    const [q, financials, secOperating] = await Promise.all([
+      yahoo.quoteSummary(yfSym, {
+        modules: ['incomeStatementHistoryQuarterly', 'earningsHistory'],
+      }),
+      statementSeries(yfSym, 'financials', 'quarterly'),
+      getSecQuarterlyOperatingIncome(symbol).catch((err: unknown) => {
+        console.error('[yahoo] SEC operating income failed', symbol, err)
+        return null
+      }),
+    ])
+    const secRows: SeriesRow[] = (secOperating ?? []).map(p => ({ date: new Date(p.end), operatingIncome: p.val }))
     const income = q.incomeStatementHistoryQuarterly?.incomeStatementHistory ?? []
     const earningsRows = q.earningsHistory?.history ?? []
     const out: QuarterlyPeriod[] = []
@@ -617,15 +754,38 @@ const fetchQuarterlyHistorical = defineCachedFunction(
         end_date: isoDate,
         revenue: f(inc, 'totalRevenue'),
         net_income: f(inc, 'netIncome'),
-        operating_income: f(inc, 'operatingIncome'),
+        operating_income: f(inc, 'operatingIncome')
+          ?? f(rowFor(secRows, dt), 'operatingIncome')
+          ?? f(rowFor(financials, dt), 'operatingIncome'),
         eps,
+      })
+    }
+    // quoteSummary keeps only four quarters, too few for a year-on-year
+    // comparison; older quarters come from the series (no EPS there).
+    const oldest = out.at(-1)?.end_date
+    const cutoff = oldest ? new Date(oldest).getTime() - SAME_PERIOD_MS : Infinity
+    const older = financials
+      .filter(r => r.date.getTime() < cutoff && f(r, 'totalRevenue') !== null)
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+    for (const r of older) {
+      if (out.length >= limit) break
+      const dt = r.date
+      out.push({
+        period: `${dt.getUTCFullYear()} Q${Math.floor(dt.getUTCMonth() / 3) + 1}`,
+        end_date: dt.toISOString().slice(0, 10),
+        revenue: f(r, 'totalRevenue'),
+        net_income: f(r, 'netIncome'),
+        operating_income: f(rowFor(secRows, dt), 'operatingIncome') ?? f(r, 'operatingIncome'),
+        eps: null,
       })
     }
     return out
   },
   {
     name: 'yahoo',
-    group: 'historical-q',
+    // v3: v2 entries hold only the four quoteSummary quarters.
+    // v2: entries cached before the operating-income fill hold nulls.
+    group: 'historical-q-v3',
     maxAge: 60 * 60 * 12,
     swr: true,
     getKey: (symbol: string, limit: number) => `${symbol}:${limit}`,
@@ -637,6 +797,52 @@ export async function getQuarterlyHistory(symbol: string, limit = 8): Promise<Qu
     return await fetchQuarterlyHistorical(symbol, limit)
   } catch (err) {
     console.error('[yahoo] getQuarterlyHistory failed', symbol, err)
+    return []
+  }
+}
+
+export interface QuarterlyBalance {
+  period: string
+  end_date: string
+  total_assets: number | null
+  total_debt: number | null
+  cash: number | null
+  shareholders_equity: number | null
+}
+
+const fetchQuarterlyBalanceSheet = defineCachedFunction(
+  async (symbol: string, limit: number): Promise<QuarterlyBalance[]> => {
+    const rows = await statementSeries(toYahooSymbol(symbol), 'balance-sheet', 'quarterly')
+    return rows
+      .filter(r => f(r, 'totalAssets') !== null)
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, limit)
+      .map(r => ({
+        period: `${r.date.getUTCFullYear()} Q${Math.floor(r.date.getUTCMonth() / 3) + 1}`,
+        end_date: r.date.toISOString().slice(0, 10),
+        total_assets: f(r, 'totalAssets'),
+        total_debt: f(r, 'totalDebt'),
+        cash: f(r, 'cashAndCashEquivalents'),
+        shareholders_equity: f(r, 'stockholdersEquity'),
+      }))
+  },
+  {
+    name: 'yahoo',
+    group: 'balance-q',
+    maxAge: 60 * 60 * 12,
+    swr: true,
+    // statementSeries returns [] when Yahoo fails; don't keep that for 12h.
+    validate: entry => Array.isArray(entry.value) && entry.value.length > 0,
+    getKey: (symbol: string, limit: number) => `${symbol}:${limit}`,
+  },
+)
+
+/** Quarterly balance-sheet rows, newest first; [] when Yahoo fails. */
+export async function getQuarterlyBalanceSheet(symbol: string, limit = 8): Promise<QuarterlyBalance[]> {
+  try {
+    return await fetchQuarterlyBalanceSheet(symbol, limit)
+  } catch (err) {
+    console.error('[yahoo] getQuarterlyBalanceSheet failed', symbol, err)
     return []
   }
 }

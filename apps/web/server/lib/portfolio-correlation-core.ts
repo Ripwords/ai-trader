@@ -20,12 +20,25 @@ const defaultFxConverter: FxConverter = async (amount, from, to) => {
   return rate == null ? amount : amount * rate
 }
 
-export type PortfolioCorrelationExclusionReason = 'ticker_not_found' | 'insufficient_price_history'
+/** Holdings with no market price series: cash, and assets Ghostfolio prices by hand. */
+export type UnpricedHolding = 'cash' | 'manual_asset'
+
+export type PortfolioCorrelationExclusionReason = 'ticker_not_found' | 'insufficient_price_history' | UnpricedHolding
 
 export interface PortfolioCorrelationInput {
   symbol: string
   name: string
   market_value?: number
+  /** Set when the symbol is not a ticker, so no prices are fetched for it. */
+  unpriced?: UnpricedHolding
+}
+
+// Ghostfolio names a cash balance by its currency code, and "USD" on Yahoo
+// is a leveraged semiconductor ETF, so cash must never be looked up.
+function unpricedKind(position: { asset_class?: string, data_source?: string | null }): UnpricedHolding | null {
+  if (position.asset_class === 'LIQUIDITY') return 'cash'
+  if (position.data_source && position.data_source !== 'YAHOO') return 'manual_asset'
+  return null
 }
 
 export interface PortfolioCorrelationAsset {
@@ -128,10 +141,12 @@ export async function collectPortfolioMptInputs(
       if (!symbol) continue
       const existing = bySymbol.get(symbol)
       const marketValue = Number.isFinite(position.market_value) ? Math.max(0, position.market_value) : 0
+      const unpriced = unpricedKind(position)
       bySymbol.set(symbol, {
         symbol,
         name: existing?.name ?? position.name ?? symbol,
         market_value: (existing?.market_value ?? 0) + marketValue,
+        ...(unpriced ? { unpriced } : {}),
       })
     }
     return [...bySymbol.values()]
@@ -141,8 +156,12 @@ export async function collectPortfolioMptInputs(
   // (USD for US tickers, HKD for HK tickers). Convert every value to a single
   // base currency before summing so portfolio weights aren't distorted by
   // adding raw HKD to raw USD.
+  // Paper money is not the user's: adding it to the live weights let a large
+  // paper position dominate the risk figures. Paper is used only when there
+  // is no live position at all.
   const base = portfolio.net_worth_currency || 'USD'
-  for (const position of [...(portfolio.moomoo_live ?? []), ...(portfolio.moomoo_paper ?? [])]) {
+  const live = portfolio.moomoo_live ?? []
+  for (const position of live.length ? live : (portfolio.moomoo_paper ?? [])) {
     const symbol = normalizeTicker(position.symbol)
     if (!symbol) continue
     const existing = bySymbol.get(symbol)
@@ -391,6 +410,10 @@ export function buildPortfolioCorrelation(
   const excluded: PortfolioCorrelationExclusion[] = []
 
   for (const input of inputs) {
+    if (input.unpriced) {
+      excluded.push({ symbol: input.symbol, reason: input.unpriced })
+      continue
+    }
     const bars = barsBySymbol.get(input.symbol) ?? []
     const returns = buildReturnSeries(input, bars)
     if (!returns) {

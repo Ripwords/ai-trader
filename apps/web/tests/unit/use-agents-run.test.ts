@@ -269,4 +269,38 @@ describe('useAgentsRun.resume', () => {
     expect(run.resuming.value).toBe(false)
     expect(run.status.value).toBe('complete')
   })
+
+  it('says why a cancel failed instead of leaving the run billing unnoticed', async () => {
+    mockFetch((url, init) => {
+      if (init?.method === 'DELETE') return Response.json({ statusMessage: 'agents service refused the cancel' }, { status: 502, statusText: 'agents service refused the cancel' })
+      return sseResponse(sse(msg(1, runStart)), { hang: true })
+    })
+    const run = useAgentsRun()
+    void run.follow('r-7')
+    await vi.waitFor(() => expect(run.status.value).toBe('running'))
+
+    const pending = run.cancel()
+    expect(run.cancelling.value).toBe(true)
+    await pending
+    expect(run.cancelling.value).toBe(false)
+    expect(run.cancelError.value).toMatch(/refused the cancel/)
+    run.reset()
+  })
+
+  it('clears an earlier cancel error once a cancel goes through', async () => {
+    let refuse = true
+    mockFetch((url, init) => {
+      if (init?.method === 'DELETE') return refuse ? new Response(null, { status: 502 }) : Response.json({ ok: true })
+      return sseResponse(sse(msg(1, runStart)), { hang: true })
+    })
+    const run = useAgentsRun()
+    void run.follow('r-7')
+    await vi.waitFor(() => expect(run.status.value).toBe('running'))
+    await run.cancel()
+    expect(run.cancelError.value).toMatch(/502/)
+    refuse = false
+    await run.cancel()
+    expect(run.cancelError.value).toBeNull()
+    run.reset()
+  })
 })

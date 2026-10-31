@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiClient } from '../../server/llm/http'
-import { makeTools } from '../../server/llm/tools'
+import { containsPhrase, makeTools } from '../../server/llm/tools'
+import { resetLiveConfirmations } from '../../server/llm/live-confirmations'
+
+beforeEach(() => resetLiveConfirmations())
 
 const portfolioCorrelationMock = vi.hoisted(() => ({
   getPortfolioCorrelationCached: vi.fn(async () => ({
@@ -72,6 +75,7 @@ vi.mock('../../server/lib/paper-orders', () => ({
 }))
 
 const alertsMock = vi.hoisted(() => ({
+  checkNewAlert: vi.fn(async (): Promise<string | null> => null),
   createAlert: vi.fn(async (input: { symbol: string; kind: string; threshold: number; note?: string | null }) => ({
     id: 'alert-1',
     symbol: input.symbol,
@@ -84,7 +88,7 @@ const alertsMock = vi.hoisted(() => ({
     triggeredPrice: null,
   })),
   listAlerts: vi.fn(async () => [] as unknown[]),
-  cancelAlert: vi.fn(async () => null),
+  cancelAlert: vi.fn(async (): Promise<{ error: string }> => ({ error: 'alert not found' })),
   resolveSymbolMock: vi.fn(async () => ({
     status: 'resolved' as const,
     symbol: 'US.NVDA',
@@ -96,6 +100,7 @@ const alertsMock = vi.hoisted(() => ({
   })),
 }))
 
+vi.mock('../../server/lib/alert-quote', () => ({ checkNewAlert: alertsMock.checkNewAlert }))
 vi.mock('../../server/lib/alerts', () => ({
   createAlert: alertsMock.createAlert,
   listAlerts: alertsMock.listAlerts,
@@ -144,6 +149,31 @@ vi.mock('../../server/lib/notification-settings', () => ({
 
 vi.mock('../../server/lib/push/subscriptions', () => ({
   countPushSubscriptions: remindersMock.countPushSubscriptions,
+}))
+
+const planningMock = vi.hoisted(() => {
+  const portfolio = {
+    net_worth_total: 100_000, net_worth_currency: 'MYR', cash_total: 0, positions_value: 100_000, total_pnl_pct: 0,
+    accounts: [], moomoo_paper: [], moomoo_live: [], ghostfolio_status: 'ok', moomoo_status: 'ok',
+    positions: [
+      { symbol: 'MMF', name: 'MMF', quantity: 10_000, market_price: 1, market_value: 10_000, investment: 10_000, allocation_pct: 10, pnl_pct: 0, asset_class: 'LIQUIDITY', data_source: null, sectors: [], currency: 'MYR' },
+      { symbol: 'VOO', name: 'VOO', quantity: 100, market_price: 900, market_value: 90_000, investment: 80_000, allocation_pct: 90, pnl_pct: 12, asset_class: 'EQUITY', data_source: null, sectors: [], currency: 'USD' },
+    ],
+  }
+  return {
+    portfolio,
+    stored: { target_model: [{ key: 'cash', label: 'Cash', target_pct: 10 }, { key: 'equity', label: 'Equity', target_pct: 90 }, { key: 'bond', label: 'Bonds', target_pct: 0 }], monthly_expenses: 3000, emergency_fund_months: 6, monthly_contribution: 1000, liabilities: [], cashflow_items: [] } as Record<string, unknown>,
+    save: vi.fn(async (input: unknown) => input),
+  }
+})
+
+vi.mock('../../server/lib/planning-settings', () => ({
+  getPlanningSettings: async () => planningMock.stored,
+  savePlanningSettings: planningMock.save,
+}))
+
+vi.mock('../../server/lib/portfolio-cache', () => ({
+  getFullPortfolioCached: async () => planningMock.portfolio,
 }))
 
 // Stand-in for ApiClient — only the methods our tools call.
@@ -205,8 +235,11 @@ describe('tool catalogue', () => {
       'market_order_book',
       'market_snapshot',
       'news_pulse',
+      'planning_get',
+      'planning_update',
       'portfolio_mpt_analysis',
       'portfolio_performance',
+      'portfolio_rebalance_plan',
       'reminder_cancel',
       'reminder_create',
       'reminder_list',
@@ -362,6 +395,109 @@ describe('tool catalogue', () => {
     expect(c.placeOrder).not.toHaveBeenCalled()
   })
 
+  it('blocks a live order whose price is only a prefix of the confirmed one (typed @ 150, sent @ 15)', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient, {
+      latestUserText: 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 150',
+    })
+    await expect(
+      (tools['trade_place_order'] as { execute: (args: Record<string, unknown>) => Promise<unknown> }).execute({
+        code: 'US.NVDA', side: 'BUY', qty: 1, price: 15, order_type: 'NORMAL', trd_env: 'REAL',
+        live_confirmation: 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 15',
+      }),
+    ).rejects.toThrow(/Live trade blocked/)
+    expect(c.placeOrder).not.toHaveBeenCalled()
+  })
+
+  it('blocks a live cancel of order 12 when the user confirmed order 1234', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient, { latestUserText: 'LIVE CANCEL 1234' })
+    await expect(
+      (tools['trade_cancel_order'] as { execute: (args: Record<string, unknown>) => Promise<unknown> }).execute({
+        order_id: '12', trd_env: 'REAL', live_confirmation: 'LIVE CANCEL 12',
+      }),
+    ).rejects.toThrow(/Live trade blocked/)
+  })
+
+  it('blocks a live modify that drops a field the user confirmed (typed PRICE 15 QTY 10, sent PRICE 15)', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient, { latestUserText: 'LIVE MODIFY 77 PRICE 15 QTY 10' })
+    await expect(
+      (tools['trade_modify_order'] as { execute: (args: Record<string, unknown>) => Promise<unknown> }).execute({
+        order_id: '77', price: 15, trd_env: 'REAL', live_confirmation: 'LIVE MODIFY 77 PRICE 15',
+      }),
+    ).rejects.toThrow(/Live trade blocked/)
+  })
+
+  it('places a confirmed live order once, even when the model calls the tool twice in that turn', async () => {
+    const c = fakeClient()
+    const phrase = 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100'
+    const tools = makeTools(c as unknown as ApiClient, { latestUserText: phrase, latestUserMessageId: 'm1' })
+    const place = (tools['trade_place_order'] as { execute: (args: Record<string, unknown>) => Promise<unknown> }).execute
+    const args = { code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, order_type: 'NORMAL', trd_env: 'REAL', live_confirmation: phrase }
+    const results = await Promise.allSettled([place(args), place(args)])
+    expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect(c.placeOrder).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not place the order again when the reply is retried with the same message', async () => {
+    const phrase = 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100'
+    const args = { code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, order_type: 'NORMAL', trd_env: 'REAL', live_confirmation: phrase }
+    const first = fakeClient()
+    await (makeTools(first as unknown as ApiClient, { latestUserText: phrase, latestUserMessageId: 'm1' })['trade_place_order'] as { execute: (a: Record<string, unknown>) => Promise<unknown> }).execute(args)
+    const retry = fakeClient()
+    await expect(
+      (makeTools(retry as unknown as ApiClient, { latestUserText: phrase, latestUserMessageId: 'm1' })['trade_place_order'] as { execute: (a: Record<string, unknown>) => Promise<unknown> }).execute(args),
+    ).rejects.toThrow(/already used/)
+    expect(retry.placeOrder).not.toHaveBeenCalled()
+  })
+
+  it('places the same order again when the user types the phrase in a new message', async () => {
+    const phrase = 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100'
+    const args = { code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, order_type: 'NORMAL', trd_env: 'REAL', live_confirmation: phrase }
+    const c = fakeClient()
+    await (makeTools(c as unknown as ApiClient, { latestUserText: phrase, latestUserMessageId: 'm1' })['trade_place_order'] as { execute: (a: Record<string, unknown>) => Promise<unknown> }).execute(args)
+    await (makeTools(c as unknown as ApiClient, { latestUserText: phrase, latestUserMessageId: 'm2' })['trade_place_order'] as { execute: (a: Record<string, unknown>) => Promise<unknown> }).execute(args)
+    expect(c.placeOrder).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets the phrase be used again after the api refused the order outright', async () => {
+    const phrase = 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100'
+    const args = { code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, order_type: 'NORMAL', trd_env: 'REAL', live_confirmation: phrase }
+    const c = fakeClient()
+    c.placeOrder.mockRejectedValueOnce(Object.assign(new Error('cap'), { status: 409 }))
+    const place = (makeTools(c as unknown as ApiClient, { latestUserText: phrase, latestUserMessageId: 'm1' })['trade_place_order'] as { execute: (a: Record<string, unknown>) => Promise<unknown> }).execute
+    await expect(place(args)).rejects.toThrow(/cap/)
+    await place(args)
+    expect(c.placeOrder).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the phrase used after a timeout, because the order may have gone through', async () => {
+    const phrase = 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100'
+    const args = { code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, order_type: 'NORMAL', trd_env: 'REAL', live_confirmation: phrase }
+    const c = fakeClient()
+    c.placeOrder.mockRejectedValueOnce(new Error('request timed out'))
+    const place = (makeTools(c as unknown as ApiClient, { latestUserText: phrase, latestUserMessageId: 'm1' })['trade_place_order'] as { execute: (a: Record<string, unknown>) => Promise<unknown> }).execute
+    await expect(place(args)).rejects.toThrow(/timed out/)
+    await expect(place(args)).rejects.toThrow(/already used/)
+    expect(c.placeOrder).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not read a thousands separator as the end of the confirmed price (typed @ 1,000, sent @ 1)', () => {
+    expect(containsPhrase('LIVE PLACE SELL 5 US.NVDA NORMAL @ 1,000', 'LIVE PLACE SELL 5 US.NVDA NORMAL @ 1')).toBe(false)
+    expect(containsPhrase('LIVE PLACE SELL 5 US.NVDA NORMAL @ 1, THANKS', 'LIVE PLACE SELL 5 US.NVDA NORMAL @ 1')).toBe(true)
+  })
+
+  it('still accepts the confirmed phrase at the end of a sentence', async () => {
+    const c = fakeClient()
+    const phrase = 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100'
+    const tools = makeTools(c as unknown as ApiClient, { latestUserText: `ok, ${phrase}.` })
+    await (tools['trade_place_order'] as { execute: (args: Record<string, unknown>) => Promise<unknown> }).execute({
+      code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, order_type: 'NORMAL', trd_env: 'REAL', live_confirmation: phrase,
+    })
+    expect(c.placeOrder).toHaveBeenCalled()
+  })
+
   it('allows live order placement only when confirmation is copied from the latest user message', async () => {
     const c = fakeClient()
     const phrase = 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100'
@@ -501,6 +637,20 @@ describe('tool catalogue', () => {
     expect(out).toMatchObject({ alert: { id: 'alert-1', symbol: 'US.NVDA', status: 'active' } })
   })
 
+  it('alert_create refuses an alert whose condition already holds, so the model can flip the direction', async () => {
+    alertsMock.createAlert.mockClear()
+    alertsMock.checkNewAlert.mockResolvedValueOnce('US.NVDA is already at 180.00, at or above 150.00, so the alert would fire at once. Use price_below to be told when it falls to 150.00.')
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['alert_create'] as { execute: (args: {
+      symbol: string
+      kind: 'price_above'
+      threshold: number
+    }) => Promise<unknown> }).execute({ symbol: 'NVDA', kind: 'price_above', threshold: 150 })
+    expect(alertsMock.checkNewAlert).toHaveBeenCalledWith('US.NVDA', { kind: 'price_above', threshold: 150 })
+    expect(out).toEqual({ error: expect.stringContaining('price_below') })
+    expect(alertsMock.createAlert).not.toHaveBeenCalled()
+  })
+
   it('alert_create surfaces an unresolved symbol instead of guessing', async () => {
     alertsMock.createAlert.mockClear()
     alertsMock.resolveSymbolMock.mockResolvedValueOnce({
@@ -587,6 +737,9 @@ describe('tool catalogue', () => {
   })
   it('reminder_create stores the due time in UTC and reports it back in the settings timezone', async () => {
     remindersMock.createReminder.mockClear()
+    vi.stubEnv('VAPID_PUBLIC_KEY', 'pub')
+    vi.stubEnv('VAPID_PRIVATE_KEY', 'priv')
+    vi.stubEnv('VAPID_SUBJECT', 'mailto:me@example.com')
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2099-10-16T00:00:00.000Z'))
     const tools = makeTools(fakeClient() as unknown as ApiClient)
@@ -605,6 +758,18 @@ describe('tool catalogue', () => {
       delivery: { email: false, pushDevices: 2 },
     })
     expect((out as { dueAtLocal: string }).dueAtLocal).toContain('09:00')
+    vi.unstubAllEnvs()
+  })
+
+  it('reminder_create does not promise an email or push the server has no keys to send', async () => {
+    vi.stubEnv('RESEND_API_KEY', '')
+    vi.stubEnv('VAPID_PRIVATE_KEY', '')
+    remindersMock.settings.email = 'me@example.com'
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['reminder_create'] as { execute: (args: { due_at: string; message: string }) => Promise<unknown> })
+      .execute({ due_at: new Date(Date.now() + 86_400_000).toISOString(), message: 'x' })
+      .finally(() => { remindersMock.settings.email = null; vi.unstubAllEnvs() })
+    expect(out).toMatchObject({ delivery: { email: false, pushDevices: 0 } })
   })
 
   it('reminder_create refuses a past due time or a time without an offset', async () => {
@@ -629,5 +794,51 @@ describe('tool catalogue', () => {
     const out = await (tools['reminder_cancel'] as { execute: (args: { id: string }) => Promise<unknown> })
       .execute({ id: 'nope' })
     expect(out).toMatchObject({ error: expect.stringContaining('not found'), id: 'nope' })
+  })
+
+  it('planning_get returns the plan with the settings ids the update tool needs', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['planning_get'] as { execute: (args: { force: boolean }) => Promise<unknown> }).execute({ force: false })
+    expect(out).toMatchObject({
+      settings: { monthly_expenses: 3000 },
+      summary: { allocation_rows: expect.arrayContaining([expect.objectContaining({ key: 'equity', actual_pct: 90 })]) },
+    })
+  })
+
+  it('planning_update saves the patched settings and returns what changed, so the user can ask to undo it', async () => {
+    planningMock.save.mockClear()
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['planning_update'] as { execute: (args: unknown) => Promise<unknown> })
+      .execute({ target_model: [{ key: 'equity', target_pct: 70 }, { key: 'bond', target_pct: 20 }] })
+    expect(planningMock.save).toHaveBeenCalledTimes(1)
+    expect(out).toMatchObject({
+      saved: true,
+      changes: expect.arrayContaining([{ field: 'target_model.equity', before: 90, after: 70 }]),
+      allocation_rows: expect.any(Array),
+    })
+  })
+
+  it('planning_update saves nothing when the target model would not total 100%', async () => {
+    planningMock.save.mockClear()
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['planning_update'] as { execute: (args: unknown) => Promise<unknown> })
+      .execute({ target_model: [{ key: 'bond', target_pct: 20 }] })
+    expect(planningMock.save).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ error: expect.stringContaining('120%') })
+  })
+
+  it('portfolio_rebalance_plan proposes trades against the saved target without placing any', async () => {
+    planningMock.stored = { ...planningMock.stored, target_model: [{ key: 'cash', target_pct: 10 }, { key: 'equity', target_pct: 70 }, { key: 'bond', target_pct: 20 }] }
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient)
+    const out = await (tools['portfolio_rebalance_plan'] as { execute: (args: unknown) => Promise<unknown> })
+      .execute({ mode: 'full' })
+    expect(out).toMatchObject({
+      trades: expect.arrayContaining([
+        expect.objectContaining({ symbol: 'VOO', side: 'sell', value: 20_000 }),
+        expect.objectContaining({ bucket: 'bond', symbol: null, side: 'buy', value: 20_000 }),
+      ]),
+    })
+    expect(c.placeOrder).not.toHaveBeenCalled()
   })
 })

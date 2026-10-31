@@ -60,4 +60,18 @@ describe('research intelligence', () => {
       ['NVDA', 'refresh_stale', 'medium'],
     ])
   })
+
+  it('stops asking for a rerun once a later run completed', () => {
+    const row = (id: string, status: string, day: string) => ({
+      id, symbol: 'TSLA', status, startedAt: `2026-05-${day}T00:00:00.000Z`, finishedAt: null,
+      rating: status === 'complete' ? 'hold' : null, confidence: status === 'complete' ? 70 : null, costUsd: 0.2,
+    })
+    const now = new Date('2026-05-16T12:00:00.000Z')
+    const fixed = buildResearchIntelligence([row('a', 'failed', '14'), row('b', 'complete', '15')], now)
+    expect(fixed.queue.map(item => item.action)).not.toContain('rerun_failed')
+    expect(fixed.summary.failed_runs_7d).toBe(1)
+
+    const brokeAgain = buildResearchIntelligence([row('b', 'complete', '14'), row('c', 'failed', '15')], now)
+    expect(brokeAgain.queue.map(item => item.action)).toEqual(['rerun_failed'])
+  })
 })

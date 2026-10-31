@@ -45,6 +45,7 @@ export default defineEventHandler(async (event) => {
     ? await getHistorical(symbol, n)
     : await getQuarterlyHistory(symbol, n)
   const out: StatementHistoryResponse = { symbol, freq, periods }
-  cacheSet(cacheKey, out)
+  // The Yahoo helpers return [] on failure; caching that would hide the history for a day.
+  if (periods.length > 0) cacheSet(cacheKey, out)
   return out
 })

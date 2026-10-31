@@ -178,15 +178,19 @@ function periodReturn(series: EquityPoint[], last: EquityPoint, days: number): n
  * few minutes later than the day before. Strictly requiring `<= cutoff`
  * turned a 1-day return into a 2-day return whenever today's capture ran
  * earlier in the day than yesterday's. Tolerance is half a day, capped at
- * half the window so 1-day and 7-day baselines cannot collide.
+ * half the window so 1-day and 7-day baselines cannot collide. A baseline
+ * more than one extra window old (three days for the 1-day figure, enough
+ * for a weekend) gives null: a gap in the snapshots once showed a 19-day
+ * move as the 1-day change.
  */
 export function periodBaseline<T extends { t: string }>(series: T[], lastIso: string, days: number): T | null {
   const cutoff = new Date(lastIso).getTime() - days * DAY_MS
   const tolerance = Math.min(DAY_MS / 2, (days * DAY_MS) / 2)
+  const oldest = cutoff - Math.max(days, 3) * DAY_MS
   for (let i = series.length - 1; i >= 0; i--) {
     const point = series[i]!
     const t = new Date(point.t).getTime()
-    if (t <= cutoff + tolerance && t < new Date(lastIso).getTime()) return point
+    if (t <= cutoff + tolerance && t < new Date(lastIso).getTime()) return t >= oldest ? point : null
   }
   return null
 }

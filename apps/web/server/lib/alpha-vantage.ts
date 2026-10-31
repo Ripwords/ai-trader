@@ -11,6 +11,8 @@
  * Answers are cached so a repeat question costs nothing.
  */
 
+import { yahooClient } from './yahoo'
+
 export const AV_SOURCE = 'Alpha Vantage (alphavantage.co)'
 export const AV_DAILY_LIMIT = 25
 export const PREPARED_TURN_CHARS = 6000
@@ -152,21 +154,33 @@ async function unavailable<T>(reason: AvUnavailableReason, message: string, now:
   return { status: 'unavailable', reason, message, source: AV_SOURCE, quota: await getAlphaVantageQuota(now) }
 }
 
+type DocResult = { body: Record<string, unknown>; cached: boolean } | { fail: AvUnavailableReason; message: string }
+
+// Concurrent asks for the same document (the fundamentals and news analysts
+// both read estimates) share one live call instead of spending two requests.
+const inflight = new Map<string, Promise<DocResult>>()
+
 /** Cached-or-live fetch of one Alpha Vantage document. */
-async function fetchDoc(
+function fetchDoc(
   cacheKey: string,
   params: Record<string, string>,
   ttlFor: (body: Record<string, unknown>) => number,
   now: Date,
-): Promise<{ body: Record<string, unknown>; cached: boolean } | { fail: AvUnavailableReason; message: string }> {
-  const hit = await cache().getItem<Record<string, unknown>>(cacheKey).catch(() => null)
-  if (hit) return { body: hit, cached: true }
-  const out = await avCall(params, now)
-  if (out.kind !== 'ok') return { fail: out.kind, message: out.message }
-  await cache().setItem(cacheKey, out.body, { ttl: ttlFor(out.body) }).catch((err: unknown) => {
-    console.warn('[alpha-vantage] cache write failed', cacheKey, err)
-  })
-  return { body: out.body, cached: false }
+): Promise<DocResult> {
+  const pending = inflight.get(cacheKey)
+  if (pending) return pending
+  const p = (async (): Promise<DocResult> => {
+    const hit = await cache().getItem<Record<string, unknown>>(cacheKey).catch(() => null)
+    if (hit) return { body: hit, cached: true }
+    const out = await avCall(params, now)
+    if (out.kind !== 'ok') return { fail: out.kind, message: out.message }
+    await cache().setItem(cacheKey, out.body, { ttl: ttlFor(out.body) }).catch((err: unknown) => {
+      console.warn('[alpha-vantage] cache write failed', cacheKey, err)
+    })
+    return { body: out.body, cached: false }
+  })().finally(() => inflight.delete(cacheKey))
+  inflight.set(cacheKey, p)
+  return p
 }
 
 const num = (v: unknown): number | null => {
@@ -201,7 +215,11 @@ export interface EstimateRevisions {
   symbol: string
   /** Upcoming periods, nearest first. */
   forward: EstimatePeriod[]
-  /** The last four quarters whose period has ended, newest first: the consensus going into each print. */
+  /**
+   * The last four quarters whose period has ended, newest first. The newest may
+   * not have reported yet: Alpha Vantage does not say, so this is not "reported"
+   * in the earnings-date sense.
+   */
   reported: EstimatePeriod[]
 }
 
@@ -277,13 +295,52 @@ export interface EarningsCallTranscript {
 
 const QUARTER_RE = /^\d{4}Q[1-4]$/
 
-/** The most recent calendar quarter that has ended, then the one before it. */
-export function recentQuarters(now: Date): [string, string] {
-  const y = now.getUTCFullYear()
-  const q = Math.floor(now.getUTCMonth() / 3) // current quarter index 0..3
-  const last = q === 0 ? { y: y - 1, q: 4 } : { y, q }
-  const prev = last.q === 1 ? { y: last.y - 1, q: 4 } : { y: last.y, q: last.q - 1 }
-  return [`${last.y}Q${last.q}`, `${prev.y}Q${prev.q}`]
+const FISCAL_YEAR_END_TTL = 30 * 86_400
+
+/**
+ * Month (1-12) the company's fiscal year ends in, from Yahoo. A 52/53-week
+ * year that ends in a month's first week (e.g. 2027-01-02) is named for the
+ * month before. December when Yahoo has no answer.
+ */
+export async function fiscalYearEndMonth(symbol: string): Promise<number> {
+  const sym = avSymbol(symbol)
+  const key = `alpha-vantage:fiscal-year-end:${sym}`
+  const hit = await cache().getItem<number>(key).catch(() => null)
+  if (typeof hit === 'number') return hit
+  try {
+    const r = await yahooClient.quoteSummary(sym, { modules: ['defaultKeyStatistics'] })
+    const end = r.defaultKeyStatistics?.nextFiscalYearEnd ?? r.defaultKeyStatistics?.lastFiscalYearEnd
+    if (!(end instanceof Date) || Number.isNaN(end.getTime())) return 12
+    const month = end.getUTCDate() <= 7 ? ((end.getUTCMonth() + 11) % 12) + 1 : end.getUTCMonth() + 1
+    await cache().setItem(key, month, { ttl: FISCAL_YEAR_END_TTL }).catch(() => undefined)
+    return month
+  } catch (err) {
+    console.warn('[alpha-vantage] fiscal year end lookup failed', sym, err)
+    return 12
+  }
+}
+
+/**
+ * The two most recent fiscal quarters that have ended, newest first, as
+ * Alpha Vantage labels them: YYYYQn where YYYY is the year the fiscal year
+ * ends in.
+ */
+export function recentQuarters(now: Date, fyEndMonth = 12): [string, string] {
+  const label = (y: number, m: number) => {
+    const k = (m - fyEndMonth + 12) % 12 // months since the fiscal year closed: 3, 6, 9 or 0
+    return k === 0 ? `${y}Q4` : `${m < fyEndMonth ? y : y + 1}Q${k / 3}`
+  }
+  // Step back to the last quarter-end month whose final day has passed.
+  let y = now.getUTCFullYear()
+  let m = now.getUTCMonth() + 1
+  const ended = (yy: number, mm: number) => Date.UTC(yy, mm, 1) <= now.getTime()
+  while ((m - fyEndMonth + 12) % 3 !== 0 || !ended(y, m)) {
+    m -= 1
+    if (m === 0) { m = 12; y -= 1 }
+  }
+  const prevM = m - 3 > 0 ? m - 3 : m + 9
+  const prevY = m - 3 > 0 ? y : y - 1
+  return [label(y, m), label(prevY, prevM)]
 }
 
 const cap = (s: string, n: number) => (s.length > n ? { text: `${s.slice(0, n)}…`, cut: true } : { text: s, cut: false })
@@ -324,7 +381,7 @@ export async function getEarningsCallTranscript(
   if (wanted && !QUARTER_RE.test(wanted)) {
     return unavailable('bad_request', `quarter must look like 2026Q3, got "${quarter}".`, now)
   }
-  const candidates = wanted ? [wanted] : recentQuarters(now)
+  const candidates = wanted ? [wanted] : recentQuarters(now, await fiscalYearEndMonth(sym))
   const notes: string[] = []
   for (const q of candidates) {
     const doc = await fetchDoc(

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, sql } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { chatMessages, chatThreads, llmUsage, users } from '../../db/schema'
 
@@ -59,16 +59,29 @@ export async function getThreadMessages(threadId: string) {
   }>
 }
 
-/** The UIMessage id of the thread's newest saved message, if any. */
-export async function lastMessageId(threadId: string): Promise<string | null> {
-  const db = getDb()
-  const [row] = await db
-    .select({ id: sql<string | null>`${chatMessages.content}->>'id'` })
-    .from(chatMessages)
-    .where(eq(chatMessages.threadId, threadId))
-    .orderBy(desc(chatMessages.id))
-    .limit(1)
-  return row?.id ?? null
+/**
+ * When the thread has saved `message` (matched by id), store it over the saved
+ * copy, delete everything saved after it, and return true. A retry resends a
+ * saved question, often followed by the reply that failed or was stopped; an
+ * edit resends it with new text. Either way the later turns are what the new
+ * reply replaces, so they go, and the question is not saved twice.
+ */
+export async function keepThrough(
+  threadId: string,
+  message: { id: string; role: string; parts?: readonly unknown[]; metadata?: unknown },
+): Promise<boolean> {
+  return getDb().transaction(async (tx) => {
+    const [row] = await tx
+      .select({ id: chatMessages.id })
+      .from(chatMessages)
+      .where(and(eq(chatMessages.threadId, threadId), sql`${chatMessages.content}->>'id' = ${message.id}`))
+      .orderBy(desc(chatMessages.id))
+      .limit(1)
+    if (!row) return false
+    await tx.update(chatMessages).set({ content: message }).where(eq(chatMessages.id, row.id))
+    await tx.delete(chatMessages).where(and(eq(chatMessages.threadId, threadId), gt(chatMessages.id, row.id)))
+    return true
+  })
 }
 
 export async function createThread(userId: string, title: string): Promise<string> {
@@ -110,6 +123,17 @@ export async function deleteThread(userId: string, threadId: string): Promise<vo
 }
 
 /** Derive a short, sensible title from the first user message. */
+/** Rename a thread only while it still has the title it was created with, so a rename by the user wins. */
+export async function retitleThread(threadId: string, from: string, to: string): Promise<boolean> {
+  const db = getDb()
+  const updated = await db
+    .update(chatThreads)
+    .set({ title: to })
+    .where(and(eq(chatThreads.id, threadId), eq(chatThreads.title, from)))
+    .returning({ id: chatThreads.id })
+  return updated.length > 0
+}
+
 export function titleFromText(text: string): string {
   const trimmed = text.trim().replace(/\s+/g, ' ')
   if (trimmed.length <= 60) return trimmed
@@ -144,14 +168,18 @@ export interface LlmUsageBreakdownRow {
   outputTokens: number
   totalTokens: number
   estimatedCostUsd: number
+  /** Calls with no price (a model missing from the pricing table); not in the cost. */
+  unpricedCalls: number
 }
+
+export interface LlmUsagePeriod { calls: number; totalTokens: number; estimatedCostUsd: number; unpricedCalls: number }
 
 export interface LlmUsageSummary {
   totals: {
-    today: { calls: number; totalTokens: number; estimatedCostUsd: number }
-    week: { calls: number; totalTokens: number; estimatedCostUsd: number }
-    month: { calls: number; totalTokens: number; estimatedCostUsd: number }
-    allTime: { calls: number; totalTokens: number; estimatedCostUsd: number }
+    today: LlmUsagePeriod
+    week: LlmUsagePeriod
+    month: LlmUsagePeriod
+    allTime: LlmUsagePeriod
   }
   bySource: LlmUsageBreakdownRow[]
 }
@@ -208,65 +236,72 @@ export async function listLlmUsage(
   }))
 }
 
-export async function getLlmUsageSummary(userId: string): Promise<LlmUsageSummary> {
+/**
+ * Every metered call: the web app's own (llm_usage) plus finished agents
+ * debates, which the api records only on agent_runs. llm_usage.ts is a UTC
+ * timestamp without a zone.
+ */
+function spendFor(userId: string) {
+  return sql`(
+    select source, input_tokens::bigint as input_tokens, output_tokens::bigint as output_tokens,
+      total_tokens::bigint as total_tokens, estimated_cost_usd as cost, ts at time zone 'UTC' as ts
+    from llm_usage where user_id = ${userId}
+    union all
+    select 'agents-debate', coalesce(tokens_in, 0)::bigint, coalesce(tokens_out, 0)::bigint,
+      (coalesce(tokens_in, 0) + coalesce(tokens_out, 0))::bigint, cost_usd, started_at
+    from agent_runs where user_id = ${userId} and status <> 'running'
+  ) as spend`
+}
+
+/** Totals for today (from midnight in `timeZone`), 7 and 30 days, and all time, by source over 30 days. */
+export async function getLlmUsageSummary(userId: string, timeZone: string): Promise<LlmUsageSummary> {
   const db = getDb()
-  const now = new Date()
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-
-  async function totalsSince(since: Date | null) {
-    const filters = [eq(llmUsage.userId, userId)]
-    if (since) filters.push(gte(llmUsage.ts, since))
-    const rows = await db
-      .select({
-        calls: sql<number>`count(*)::int`,
-        totalTokens: sql<number>`coalesce(sum(${llmUsage.totalTokens}), 0)::int`,
-        estimatedCostUsd: sql<string>`coalesce(sum(${llmUsage.estimatedCostUsd}), 0)::text`,
-      })
-      .from(llmUsage)
-      .where(and(...filters))
-    const r = rows[0]
-    return {
-      calls: Number(r?.calls ?? 0),
-      totalTokens: Number(r?.totalTokens ?? 0),
-      estimatedCostUsd: Number(r?.estimatedCostUsd ?? 0),
-    }
+  const now = Date.now()
+  const week = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString()
+  const month = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const today = sql`(date_trunc('day', now() at time zone ${timeZone}) at time zone ${timeZone})`
+  const period = (name: string, since: ReturnType<typeof sql> | null) => {
+    const where = since ? sql`ts >= ${since}` : sql`true`
+    return sql`
+      count(*) filter (where ${where}) as ${sql.raw(`${name}_calls`)},
+      coalesce(sum(total_tokens) filter (where ${where}), 0)::text as ${sql.raw(`${name}_tokens`)},
+      coalesce(sum(cost) filter (where ${where}), 0)::text as ${sql.raw(`${name}_cost`)},
+      count(*) filter (where ${where} and cost is null) as ${sql.raw(`${name}_unpriced`)}`
   }
+  const totalsResult = await db.execute<Record<string, string | number | null>>(sql`
+    select ${period('today', today)}, ${period('week', sql`${week}::timestamptz`)},
+      ${period('month', sql`${month}::timestamptz`)}, ${period('all', null)}
+    from ${spendFor(userId)}`)
+  const t = totalsResult.rows[0] ?? {}
+  const pick = (name: string): LlmUsagePeriod => ({
+    calls: Number(t[`${name}_calls`] ?? 0),
+    totalTokens: Number(t[`${name}_tokens`] ?? 0),
+    estimatedCostUsd: Number(t[`${name}_cost`] ?? 0),
+    unpricedCalls: Number(t[`${name}_unpriced`] ?? 0),
+  })
 
-  const [today, week, month, allTime] = await Promise.all([
-    totalsSince(startOfDay),
-    totalsSince(sevenDaysAgo),
-    totalsSince(thirtyDaysAgo),
-    totalsSince(null),
-  ])
-
-  const breakdown = await db
-    .select({
-      source: llmUsage.source,
-      calls: sql<number>`count(*)::int`,
-      inputTokens: sql<number>`coalesce(sum(${llmUsage.inputTokens}), 0)::int`,
-      outputTokens: sql<number>`coalesce(sum(${llmUsage.outputTokens}), 0)::int`,
-      totalTokens: sql<number>`coalesce(sum(${llmUsage.totalTokens}), 0)::int`,
-      estimatedCostUsd: sql<string>`coalesce(sum(${llmUsage.estimatedCostUsd}), 0)::text`,
-    })
-    .from(llmUsage)
-    .where(and(eq(llmUsage.userId, userId), gte(llmUsage.ts, thirtyDaysAgo)))
-    .groupBy(llmUsage.source)
-
-  const bySource: LlmUsageBreakdownRow[] = breakdown
+  const breakdown = await db.execute<Record<string, string | number | null>>(sql`
+    select source, count(*) as calls,
+      coalesce(sum(input_tokens), 0)::text as input_tokens, coalesce(sum(output_tokens), 0)::text as output_tokens,
+      coalesce(sum(total_tokens), 0)::text as total_tokens, coalesce(sum(cost), 0)::text as cost,
+      count(*) filter (where cost is null) as unpriced
+    from ${spendFor(userId)}
+    where ts >= ${month}::timestamptz
+    group by source`)
+  const bySource: LlmUsageBreakdownRow[] = breakdown.rows
     .map(r => ({
-      source: r.source,
+      source: String(r.source),
       calls: Number(r.calls),
-      inputTokens: Number(r.inputTokens),
-      outputTokens: Number(r.outputTokens),
-      totalTokens: Number(r.totalTokens),
-      estimatedCostUsd: Number(r.estimatedCostUsd),
+      inputTokens: Number(r.input_tokens),
+      outputTokens: Number(r.output_tokens),
+      totalTokens: Number(r.total_tokens),
+      estimatedCostUsd: Number(r.cost),
+      unpricedCalls: Number(r.unpriced),
     }))
     .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
 
   return {
-    totals: { today, week, month, allTime },
+    totals: { today: pick('today'), week: pick('week'), month: pick('month'), allTime: pick('all') },
     bySource,
   }
 }

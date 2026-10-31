@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../server/lib/yahoo', () => ({
   getFundamentalsBundle: vi.fn().mockResolvedValue({
     symbol: 'NVDA',
+    history: [{ period: '2024' }],
     income_statement: { period: '2024', revenue: 60000, net_income: 30000 },
   }),
 }))
@@ -33,5 +34,26 @@ describe('/internal/yahoo/income-statement', () => {
     const result = (await handler(event)) as { symbol: string; income_statement: { revenue: number } }
     expect(result.symbol).toBe('NVDA')
     expect(result.income_statement.revenue).toBe(60000)
+  })
+
+  it('does not cache an empty bundle, so a failed Yahoo fetch is retried', async () => {
+    const yahoo = await import('../../server/lib/yahoo')
+    const bundle = vi.mocked(yahoo.getFundamentalsBundle)
+    const calls = bundle.mock.calls.length
+    bundle.mockResolvedValueOnce({ symbol: 'NVDA', history: [], income_statement: null } as Awaited<ReturnType<typeof yahoo.getFundamentalsBundle>>)
+    const auth = { authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }
+    await handler(makeEvent(auth, { symbol: 'NVDA' }))
+    await handler(makeEvent(auth, { symbol: 'NVDA' }))
+    expect(bundle.mock.calls.length - calls).toBe(2)
+  })
+
+  it('caches a bundle with history', async () => {
+    const yahoo = await import('../../server/lib/yahoo')
+    const bundle = vi.mocked(yahoo.getFundamentalsBundle)
+    const calls = bundle.mock.calls.length
+    const auth = { authorization: 'Bearer test-bearer-0123456789abcdef0123456789' }
+    await handler(makeEvent(auth, { symbol: 'CACHED' }))
+    await handler(makeEvent(auth, { symbol: 'CACHED' }))
+    expect(bundle.mock.calls.length - calls).toBe(1)
   })
 })

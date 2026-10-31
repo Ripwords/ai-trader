@@ -104,7 +104,7 @@ const columns = computed(() => COLUMNS.filter(c => c.key !== 'allocation' || has
             </tr>
           </thead>
           <tbody>
-            <tr v-for="r in rows" :key="r.symbol">
+            <tr v-for="r in rows" :key="r.key">
               <td class="min-w-0">
                 <div class="font-mono text-[var(--paper-0)]" data-mono>{{ r.symbol }}</div>
                 <div class="text-xs text-[var(--paper-3)] truncate max-w-[28ch]">
@@ -133,7 +133,7 @@ const columns = computed(() => COLUMNS.filter(c => c.key !== 'allocation' || has
             </select>
           </label>
           <ul>
-            <li v-for="r in rows" :key="r.symbol" class="py-3 border-b hairline last:border-0">
+            <li v-for="r in rows" :key="r.key" class="py-3 border-b hairline last:border-0">
               <div class="flex items-baseline justify-between gap-3">
                 <span class="font-mono text-[var(--paper-0)] truncate min-w-0" data-mono>{{ r.symbol }}</span>
                 <span class="font-mono text-[var(--paper-1)] whitespace-nowrap shrink-0" data-mono>{{ fmtCurrency(r.value, r.currency) }}</span>

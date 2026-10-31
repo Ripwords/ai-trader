@@ -392,3 +392,20 @@ export const getSecCashflowSeries = defineCachedFunction(fetchSecCashflowSeries,
   getKey: (symbol: string) => symbol.trim().toUpperCase(),
   validate: entry => entry.value != null,
 }) as typeof fetchSecCashflowSeries
+
+const OPERATING_INCOME_CONCEPT = 'OperatingIncomeLoss'
+
+/** Three-month operating income by period end (Q4 = FY − 9M); null for a non-filer. */
+async function fetchSecQuarterlyOperatingIncome(symbol: string): Promise<PeriodValue[] | null> {
+  const match = await resolveCik(symbol)
+  if (!match) return null
+  const facts = await fetchConcept(match.cik, OPERATING_INCOME_CONCEPT)
+  return facts?.length ? quarterlyFromFacts(facts) : null
+}
+
+export const getSecQuarterlyOperatingIncome = defineCachedFunction(fetchSecQuarterlyOperatingIncome, {
+  name: 'sec-operating-income',
+  maxAge: 6 * 60 * 60,
+  getKey: (symbol: string) => symbol.trim().toUpperCase(),
+  validate: entry => entry.value != null,
+}) as typeof fetchSecQuarterlyOperatingIncome

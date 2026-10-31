@@ -1,11 +1,13 @@
 import { createError, defineEventHandler, getQuery } from 'h3'
-import { getFundamentalsBundle } from '../../../lib/yahoo'
+import { getFundamentalsBundle, getQuarterlyBalanceSheet, type QuarterlyBalance } from '../../../lib/yahoo'
 import { requireInternalBearer } from '../_guard'
 import { cacheGet, cacheSet } from '../_cache'
 
 interface BalanceSheetResponse {
   symbol: string
   balance_sheet: unknown
+  /** Last 8 quarters, newest first; [] when the source has none. */
+  quarterly: QuarterlyBalance[]
 }
 
 export default defineEventHandler(async (event) => {
@@ -22,11 +24,19 @@ export default defineEventHandler(async (event) => {
   const cached = cacheGet<BalanceSheetResponse>(cacheKey)
   if (cached) return cached
 
-  const bundle = await getFundamentalsBundle(symbol)
+  const [bundle, quarterly] = await Promise.all([
+    getFundamentalsBundle(symbol),
+    getQuarterlyBalanceSheet(symbol).catch((err: unknown) => {
+      console.error('[internal/yahoo/balance-sheet] quarterly failed', symbol, err)
+      return []
+    }),
+  ])
   const out: BalanceSheetResponse = {
     symbol: bundle.symbol,
     balance_sheet: bundle.balance_sheet ?? null,
+    quarterly,
   }
-  cacheSet(cacheKey, out)
+  // getHistorical returns [] when Yahoo fails; caching that would hide the data for a day.
+  if (bundle.history.length > 0) cacheSet(cacheKey, out)
   return out
 })

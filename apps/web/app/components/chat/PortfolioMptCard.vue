@@ -15,7 +15,10 @@ const currentPoint = computed(() => props.analysis.summary.current)
 const maxSharpePoint = computed(() => props.analysis.summary.max_sharpe)
 const minVariancePoint = computed(() => props.analysis.summary.min_variance)
 const missingRequested = computed(() => props.analysis.missing_requested_symbols ?? [])
-const excluded = computed(() => props.analysis.excluded ?? [])
+const excluded = computed(() => (props.analysis.excluded ?? []).filter(row => row.reason !== 'cash' && row.reason !== 'manual_asset'))
+const unpriced = computed(() => (props.analysis.excluded ?? [])
+  .filter(row => row.reason === 'cash' || row.reason === 'manual_asset')
+  .map(row => `${row.symbol} (${row.reason === 'cash' ? 'cash' : 'manual'})`))
 const heatmapStyle = computed(() => ({
   gridTemplateColumns: `82px repeat(${Math.max(heatmap.value?.assets.length ?? 0, 1)}, minmax(54px, 1fr))`,
 }))
@@ -205,6 +208,9 @@ function cellStyle(value: number | null) {
       </p>
       <p v-if="excluded.length" class="mpt-note">
         excluded invalid tickers: {{ excluded.map(row => row.symbol).join(', ') }}
+      </p>
+      <p v-if="unpriced.length" class="mpt-note">
+        left out, no market price: {{ unpriced.join(', ') }}
       </p>
     </div>
   </div>

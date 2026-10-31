@@ -73,6 +73,14 @@ describe('buildInvestmentSnapshotRow', () => {
     }))).toThrow(/total/i)
   })
 
+  it('refuses to record a snapshot when one of the live accounts could not be read', () => {
+    // The other account's holdings alone would show as a fall in the curve.
+    expect(() => buildInvestmentSnapshotRow(portfolio({
+      unread_accounts: ['282'],
+      caveats: ['Account 282 could not be read: timeout.'],
+    }))).toThrow(/282/)
+  })
+
   it('records a no_positions portfolio as a genuine zero', () => {
     const row = buildInvestmentSnapshotRow(portfolio({
       status: 'no_positions',

@@ -82,6 +82,9 @@ describe('PortfolioCorrelationMatrix', () => {
           ],
           excluded: [
             { symbol: 'MISSING', reason: 'ticker_not_found' },
+            { symbol: 'USD', reason: 'cash' },
+            { symbol: 'MYR', reason: 'cash' },
+            { symbol: 'GF_KWSP', reason: 'manual_asset' },
           ],
         },
       },
@@ -92,6 +95,9 @@ describe('PortfolioCorrelationMatrix', () => {
     expect(wrapper.text()).toContain('capital allocation line')
     expect(wrapper.text()).toContain('-0.42')
     expect(wrapper.text()).toContain("Footnote: tickers Yahoo can't find or price with enough history are excluded: MISSING.")
+    expect(wrapper.text()).toContain('Cash is left out: USD, MYR.')
+    expect(wrapper.text()).toContain('Manual assets without a market price are left out: GF_KWSP.')
+    expect(wrapper.text()).not.toMatch(/excluded: [^.]*USD/)
   })
 
   it('keeps matrix tickers visible while scrolling', () => {

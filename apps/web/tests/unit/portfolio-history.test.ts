@@ -160,6 +160,25 @@ describe('computePerformance', () => {
     expect(perf.stats.periodReturns.d30).toBeNull()
   })
 
+  it('does not report a 19-day move as the 1-day or 7-day change', () => {
+    const perf = computePerformance([
+      pt('2026-10-01T08:00:00.000Z', 100),
+      pt('2026-10-20T08:00:00.000Z', 110),
+    ])
+    expect(perf.stats.periodReturns.d1).toBeNull()
+    expect(perf.stats.periodReturns.d7).toBeNull()
+    expect(perf.stats.periodReturns.d30).toBeNull()
+    expect(perf.stats.totalReturnPct).toBeCloseTo(10)
+  })
+
+  it('still measures the 1-day change across a weekend with no snapshot', () => {
+    const perf = computePerformance([
+      pt('2026-10-16T08:00:00.000Z', 100),
+      pt('2026-10-19T08:00:00.000Z', 102),
+    ])
+    expect(perf.stats.periodReturns.d1).toBeCloseTo(2)
+  })
+
   it('skips non-finite net worth rows', () => {
     const perf = computePerformance([
       pt('2026-07-01T08:00:00.000Z', 100),

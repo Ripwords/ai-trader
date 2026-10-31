@@ -5,6 +5,8 @@ const props = defineProps<{
   toolName: string
   state?: string
   streaming?: boolean
+  /** Why the call failed; shown under the card. */
+  errorText?: string
 }>()
 
 const labels: Record<string, string> = {
@@ -22,6 +24,9 @@ const labels: Record<string, string> = {
   investment_portfolio: 'Loading investments',
   investment_performance: 'Loading investment history',
   portfolio_performance: 'Loading net-worth history',
+  planning_get: 'Loading your plan',
+  planning_update: 'Updating your plan',
+  portfolio_rebalance_plan: 'Working out rebalance trades',
   value_stock: 'Running valuation',
   value_screen: 'Screening watchlist',
   technical_analysis: 'Computing technicals',
@@ -55,6 +60,19 @@ const labels: Record<string, string> = {
 }
 
 const label = computed(() => labels[props.toolName] ?? `Running ${props.toolName}`)
+
+const PAST: Record<string, string> = {
+  Loading: 'Loaded', Fetching: 'Fetched', Searching: 'Searched', Running: 'Ran', Computing: 'Computed',
+  Building: 'Built', Gathering: 'Gathered', Starting: 'Started', Submitting: 'Submitted', Modifying: 'Modified',
+  Cancelling: 'Cancelled', Checking: 'Checked', Stopping: 'Stopped', Resuming: 'Resumed', Reconciling: 'Reconciled',
+  Converting: 'Converted', Arming: 'Armed', Scheduling: 'Scheduled', Updating: 'Updated', Screening: 'Screened',
+}
+const doneLabel = computed(() => {
+  const [verb, ...rest] = label.value.split(' ')
+  return [PAST[verb!] ?? verb, ...rest].join(' ')
+})
+// A finished call is a step, not a result: one quiet line, like a step list.
+const done = computed(() => props.state === 'output-available' && !props.streaming)
 const statusText = computed(() => {
   if (props.streaming) return 'running'
   if (props.state === 'output-available') return 'complete'
@@ -65,7 +83,16 @@ const statusText = computed(() => {
 </script>
 
 <template>
-  <div class="surface-1 rounded-md overflow-hidden">
+  <div
+    v-if="done"
+    data-testid="tool-done"
+    class="flex items-center gap-2 text-sm text-[var(--paper-3)]"
+  >
+    <UIcon name="i-lucide-check" class="size-4 shrink-0" />
+    <span class="text-[var(--paper-2)]">{{ doneLabel }}</span>
+    <span class="font-mono truncate">{{ toolName }}</span>
+  </div>
+  <div v-else class="surface-1 rounded-md overflow-hidden">
     <div class="px-5 py-4 flex items-center justify-between gap-4">
       <div class="min-w-0">
         <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--paper-3)]">
@@ -87,6 +114,12 @@ const statusText = computed(() => {
         {{ statusText }}
       </div>
     </div>
+    <p
+      v-if="state === 'output-error' && errorText"
+      class="px-5 pb-4 -mt-1 text-sm text-[var(--paper-1)] whitespace-pre-wrap"
+    >
+      {{ errorText }}
+    </p>
     <div v-if="streaming || (state !== 'output-error' && state !== 'output-available')" class="h-px bg-[var(--ink-2)] overflow-hidden">
       <div class="tool-progress h-full bg-[var(--accent)]" />
     </div>

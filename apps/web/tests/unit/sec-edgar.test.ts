@@ -176,4 +176,27 @@ describe('quarterly cash flow from XBRL', () => {
     expect(s.ttm).toEqual({ period_end: '2026-09-30', operating_cash_flow: 132, capex: 214, fcf: -82 })
     expect(s.source_urls.some(u => u.includes('PaymentsToAcquireProductiveAssets'))).toBe(true)
   })
+
+  it('derives quarterly operating income, Q4 included, from the 10-Q and 10-K facts', async () => {
+    const oi = { units: { USD: [
+      fact('2025-01-01', '2025-09-30', 54), fact('2025-01-01', '2025-12-31', 79, '10-K'),
+      fact('2026-04-01', '2026-06-30', 19), fact('2026-07-01', '2026-09-30', 17),
+    ] } }
+    ofetch.mockImplementation(async (url: string) => {
+      if (url.endsWith('company_tickers.json')) return TICKERS
+      if (url.includes('OperatingIncomeLoss.json')) return oi
+      throw Object.assign(new Error('404'), { statusCode: 404 })
+    })
+    expect(await sec.getSecQuarterlyOperatingIncome('AMZN')).toEqual([
+      { end: '2025-12-31', val: 25 }, { end: '2026-06-30', val: 19 }, { end: '2026-09-30', val: 17 },
+    ])
+  })
+
+  it('returns null operating income for a company that does not file the concept', async () => {
+    ofetch.mockImplementation(async (url: string) => {
+      if (url.endsWith('company_tickers.json')) return TICKERS
+      throw Object.assign(new Error('404'), { statusCode: 404 })
+    })
+    expect(await sec.getSecQuarterlyOperatingIncome('AMZN')).toBeNull()
+  })
 })

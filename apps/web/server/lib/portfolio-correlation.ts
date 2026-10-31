@@ -19,7 +19,7 @@ async function getPortfolioCorrelation(opts?: { force?: boolean }): Promise<Port
   const inputs = await collectPortfolioMptInputs(portfolio)
   const barsBySymbol = new Map(
     await Promise.all(
-      inputs.map(async input => [input.symbol, await getDailyBars(input.symbol, LOOKBACK_DAYS + 1)] as const),
+      inputs.map(async input => [input.symbol, input.unpriced ? [] : await getDailyBars(input.symbol, LOOKBACK_DAYS + 1)] as const),
     ),
   )
 
@@ -42,7 +42,8 @@ const cached = defineCachedFunction(
   },
 ) as (opts?: { force?: boolean }) => Promise<PortfolioCorrelationResult>
 
-const CORRELATION_CACHE_KEY = 'cache:portfolio:correlation:full.json'
+// Nitro's order is base:group:name:key, so the group comes first.
+const CORRELATION_CACHE_KEY = 'cache:correlation:portfolio:full.json'
 
 /** See portfolio-cache.ts: a forced call drops the entry rather than serving it stale under swr. */
 export async function getPortfolioCorrelationCached(opts?: { force?: boolean }): Promise<PortfolioCorrelationResult> {

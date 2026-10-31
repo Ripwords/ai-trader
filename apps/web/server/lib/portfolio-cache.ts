@@ -33,7 +33,7 @@ const cached = defineCachedFunction(
 ) as () => Promise<FullPortfolio>
 
 /** Nitro's key for the entry above: base "/cache", group, name, key + ".json". */
-export const FULL_PORTFOLIO_CACHE_KEY = 'cache:portfolio:full:full.json'
+export const FULL_PORTFOLIO_CACHE_KEY = 'cache:full:portfolio:full.json'
 
 /**
  * Stale-while-revalidate keeps page loads instant, but under swr an
