@@ -53,6 +53,11 @@ class ValuationInput(_Model):
     # Something the web side did or could not do to the price series that
     # the result must disclose.
     price_note: str | None = None
+    # Trailing-twelve-month operating cash flow minus capex, as a cross-check
+    # on ``fcf_base`` (which may be a differently defined or stale figure),
+    # and the period it covers ("TTM to 2026-09-30").
+    fcf_ttm: Decimal | None = None
+    fcf_ttm_period: str | None = None
 
 
 class Scenario(_Model):
@@ -91,3 +96,6 @@ class ValuationResult(_Model):
     warnings: list[str] = []
     # Currency of current_price, fair_value and the scenario fair values.
     currency: str | None = None
+    # Why the DCF was judged out of regime and discarded. When set, no fair
+    # value is stated and the DCF never caps the rating.
+    dcf_invalid_reason: str | None = None

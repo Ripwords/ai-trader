@@ -85,3 +85,25 @@ def test_to_valuation_input_missing_data_degrades():
     vi = to_valuation_input("X", {"symbol": "X", "metrics": {}, "history": [], "dailyBars": []})
     assert vi.fcf_base is None
     assert vi.shares_outstanding is None
+
+
+def test_ttm_cash_flow_cross_check_is_carried_with_its_period():
+    payload = {
+        "symbol": "AMZN",
+        "metrics": {"free_cash_flow": 3_219_124_992, "shares_outstanding": 10},
+        "history": [],
+        "dailyBars": [{"time": "2026-10-30", "close": 254.6}],
+        "ttm_cashflow": {"period_end": "2026-09-30", "operating_cash_flow": 168_300_000_000,
+                         "capex": 215_192_000_000, "fcf": -46_892_000_000},
+    }
+    vi = to_valuation_input("AMZN", payload)
+    assert vi.fcf_ttm == D("-46892000000")
+    assert vi.fcf_ttm_period == "TTM to 2026-09-30"
+
+
+def test_missing_ttm_cash_flow_leaves_the_cross_check_unset():
+    payload = {"symbol": "X", "metrics": {}, "history": [], "dailyBars": [],
+               "ttm_cashflow": None}
+    vi = to_valuation_input("X", payload)
+    assert vi.fcf_ttm is None
+    assert vi.fcf_ttm_period is None

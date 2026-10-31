@@ -95,6 +95,16 @@ def to_valuation_input(symbol: str, payload: dict) -> ValuationInput:
     elif payload.get("price_conversion_error"):
         price_note = f"{payload['price_conversion_error']}; fair value and price are in different currencies"
 
+    # Trailing OCF − capex, a cross-check on fcf_base (Yahoo's levered FCF
+    # can disagree in sign with the cash-flow statement).
+    ttm = payload.get("ttm_cashflow")
+    fcf_ttm = _dec(ttm.get("fcf")) if isinstance(ttm, dict) else None
+    fcf_ttm_period = (
+        f"TTM to {ttm.get('period_end')}"
+        if fcf_ttm is not None and isinstance(ttm, dict) and ttm.get("period_end")
+        else None
+    )
+
     return ValuationInput(
         symbol=symbol,
         current_price=current_price,
@@ -107,6 +117,8 @@ def to_valuation_input(symbol: str, payload: dict) -> ValuationInput:
         avg_price_by_period=avg_price_by_period or None,
         currency=str(currency) if currency else None,
         price_note=price_note,
+        fcf_ttm=fcf_ttm,
+        fcf_ttm_period=fcf_ttm_period,
     )
 
 

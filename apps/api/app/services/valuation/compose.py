@@ -18,6 +18,15 @@ RATING_SEVERITY = {
 }
 
 _SCENARIO_GROWTH_DELTA = Decimal("0.03")   # +/- on the base growth
+# A DCF is only meaningful inside a regime: base FCF that is a real share of
+# revenue, agreeing in sign with trailing OCF − capex, and a fair value
+# within a plausible band around the price. Outside it the output is noise
+# (AMZN Q3 2026: a $3.6 fair value against a $254.60 price, from a +$3.2B
+# levered-FCF base while trailing OCF − capex was −$46.9B).
+_NEAR_ZERO_FCF_MARGIN = Decimal("0.01")    # base FCF / latest revenue
+_REGIME_MIN_FV_TO_PRICE = Decimal("0.20")
+_REGIME_MAX_FV_TO_PRICE = Decimal("5")
+
 _SCENARIO_PROBS = {
     "optimistic": Decimal("0.25"),
     "neutral": Decimal("0.50"),
@@ -31,6 +40,60 @@ def _safe_dcf(vi, growth_rates, a) -> Decimal | None:
                    a.terminal_growth, vi.net_debt, vi.shares_outstanding)
     except (ValueError, InvalidOperation, ZeroDivisionError):
         return None
+
+
+def _money(v: Decimal) -> str:
+    sign = "-" if v < 0 else ""
+    a = abs(v)
+    for div, suffix in ((Decimal("1e12"), "T"), (Decimal("1e9"), "B"), (Decimal("1e6"), "M")):
+        if a >= div:
+            return f"{sign}{a / div:.2f}{suffix}"
+    return f"{sign}{a:.2f}"
+
+
+def _base_fcf_out_of_regime(vi: ValuationInput) -> str | None:
+    """Why the positive base FCF can't anchor a DCF, or None when it can."""
+    assert vi.fcf_base is not None
+    if vi.fcf_ttm is not None and vi.fcf_ttm <= 0:
+        period = vi.fcf_ttm_period or "trailing twelve months"
+        return (
+            f"the base FCF ({_money(vi.fcf_base)}) conflicts with operating cash "
+            f"flow minus capex of {_money(vi.fcf_ttm)} ({period}); the base is "
+            f"stale or differently defined, and a DCF on negative FCF is undefined"
+        )
+    revenue = next((p.revenue for p in vi.history if p.revenue), None)
+    if revenue and revenue > 0 and vi.fcf_base / revenue < _NEAR_ZERO_FCF_MARGIN:
+        return (
+            f"the base FCF ({_money(vi.fcf_base)}) is near zero, "
+            f"{vi.fcf_base / revenue:.2%} of {_money(revenue)} revenue, so the DCF "
+            f"just capitalises a rounding error (typical when heavy growth capex "
+            f"temporarily absorbs operating cash flow)"
+        )
+    return None
+
+
+def _fair_value_out_of_regime(fair_value: Decimal, price: Decimal) -> str | None:
+    ratio = fair_value / price
+    if _REGIME_MIN_FV_TO_PRICE <= ratio <= _REGIME_MAX_FV_TO_PRICE:
+        return None
+    return (
+        f"the DCF fair value ({fair_value:.2f}/share) is {ratio:.1%} of the price "
+        f"({price:.2f}), outside the {_REGIME_MIN_FV_TO_PRICE:.0%}–"
+        f"{_REGIME_MAX_FV_TO_PRICE:.0%} band a DCF can resolve; the FCF base does "
+        f"not represent the business's earning power or the inputs are anomalous"
+    )
+
+
+def _invalid_dcf(vi, cur_mult, hist_mult, a, reason: str) -> ValuationResult:
+    return ValuationResult(
+        symbol=vi.symbol, current_price=vi.current_price, fair_value=None,
+        margin_of_safety_pct=None, scenarios=[], assumptions_used=a,
+        multiples=cur_mult, historical_multiples=hist_mult,
+        reverse_dcf_implied_growth=None, data_quality="multiples_only",
+        veto=Veto(triggered=False, reason=None, rating_cap=None),
+        warnings=[f"DCF out of regime and discarded: {reason}; it does not cap the rating"],
+        dcf_invalid_reason=reason,
+    )
 
 
 def value(
@@ -87,6 +150,9 @@ def _value(
         )
 
     a = overrides or build_default_assumptions(vi.history, vi.beta)
+    base_reason = _base_fcf_out_of_regime(vi)
+    if base_reason:
+        return _invalid_dcf(vi, cur_mult, hist_mult, a, base_reason)
     fair_value = _safe_dcf(vi, a.growth_rates, a)
     if fair_value is not None and fair_value <= 0:
         warnings.append(
@@ -106,6 +172,10 @@ def _value(
             veto=Veto(triggered=False, reason=None, rating_cap=None),
             warnings=warnings,
         )
+
+    fv_reason = _fair_value_out_of_regime(fair_value, vi.current_price)
+    if fv_reason:
+        return _invalid_dcf(vi, cur_mult, hist_mult, a, fv_reason)
 
     base_g = a.growth_rates[0]
     scenarios: list[Scenario] = []

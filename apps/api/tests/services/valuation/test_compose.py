@@ -76,11 +76,13 @@ def test_value_negative_fcf_is_multiples_only_no_fabrication():
 
 
 def test_apply_veto_caps_buy_to_hold_when_grossly_overvalued():
-    vi = ValuationInput(symbol="X", current_price=D("1000"), fcf_base=D("100"),
+    # Fair value ~180 against 300: overvalued, yet inside the DCF's regime
+    # (a price above 5x fair value discards the DCF instead of vetoing).
+    vi = ValuationInput(symbol="X", current_price=D("300"), fcf_base=D("100"),
                         net_debt=D("0"), shares_outstanding=D("10"), beta=D("1.0"),
                         history=_history(),
                         metrics=Metrics(free_cash_flow=D("100"), shares_outstanding=D("10")))
-    res = value(vi)  # fair value ~150ish << 1000 -> MoS very negative
+    res = value(vi)  # MoS ~ -65%
     effective, veto = apply_veto("strong-buy", res)
     assert veto.triggered is True
     assert effective == "hold"
@@ -102,7 +104,7 @@ def test_rating_severity_ordering():
 
 # FIX 2: veto reason string accuracy
 def test_veto_reason_says_1_5x_not_2x():
-    vi = ValuationInput(symbol="X", current_price=D("1000"), fcf_base=D("100"),
+    vi = ValuationInput(symbol="X", current_price=D("300"), fcf_base=D("100"),
                         net_debt=D("0"), shares_outstanding=D("10"), beta=D("1.0"),
                         history=_history(),
                         metrics=Metrics(free_cash_flow=D("100"), shares_outstanding=D("10")))

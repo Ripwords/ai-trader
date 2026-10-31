@@ -68,8 +68,11 @@ def test_anomalous_value_warns_about_divergence():
     assert ("anomaly" in joined or "out-of-regime" in joined or "out of regime" in joined)
 
 
-def test_veto_reason_formats_mos_as_percent():
+def test_anomalous_price_discards_the_dcf_instead_of_vetoing():
+    # ~10x price vs fair value is out of the DCF's regime: no fair value is
+    # stated and the anomaly must not cap the rating.
     r = value(_anomalous_mu())
-    assert r.veto.triggered
-    # MoS must be a percentage (matches the card), not a bare fraction.
-    assert "%" in r.veto.reason
+    assert r.fair_value is None
+    assert r.margin_of_safety_pct is None
+    assert not r.veto.triggered
+    assert r.dcf_invalid_reason and "of the price" in r.dcf_invalid_reason
