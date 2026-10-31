@@ -117,6 +117,31 @@ def _pct_delta(curr: Any, prev: Any) -> str:
     return f"{(c - p) / abs(p) * 100:+.1f}%"
 
 
+def _ratio(num: Any, den: Any) -> str:
+    """``num / den`` to two places, n/a when either is missing or den is 0."""
+    if isinstance(num, (int, float)) and isinstance(den, (int, float)) and den:
+        return f"{float(num) / float(den):.2f}"
+    return "n/a"
+
+
+def _year_earlier(period: dict, periods: list[dict]) -> dict | None:
+    """The quarter that ended about a year before ``period`` (within 20 days),
+    matched by ``end_date`` so a gap in the history can't pair the wrong
+    quarters."""
+    try:
+        end = date.fromisoformat(str(period.get("end_date")))
+    except ValueError:
+        return None
+    for p in periods:
+        try:
+            gap = (end - date.fromisoformat(str(p.get("end_date")))).days
+        except ValueError:
+            continue
+        if abs(gap - 365) <= 20 and p.get("revenue") is not None:
+            return p
+    return None
+
+
 def _cagr_pct(first: Any, last: Any, years: int) -> str:
     """Compound annual growth from ``first`` to ``last`` over ``years``
     intervals. n/a when either endpoint is missing or non-positive (CAGR of
@@ -271,6 +296,19 @@ def _sum_rows(rows: list[dict], key: str) -> float | None:
     return float(sum(vals))
 
 
+def _year_before_ttm(quarterly: list[dict], ttm: dict) -> bool:
+    """True when quarterly[-8:-4] is the four quarters before the TTM: the
+    series ends where the TTM does and has no missing quarter. Yahoo's
+    quarterly series can lag the TTM, and SEC rows can have gaps."""
+    if len(quarterly) < 8 or quarterly[-1].get("period_end") != ttm.get("period_end"):
+        return False
+    try:
+        ends = [date.fromisoformat(str(r.get("period_end"))) for r in quarterly[-8:]]
+    except ValueError:
+        return False
+    return all(80 <= (b - a).days <= 100 for a, b in zip(ends, ends[1:]))
+
+
 _OTHER_FCF_NOTE = (
     "Company-reported FCF in the earnings release may differ from OCF − capex: "
     "companies often net proceeds from property and equipment sales and incentives "
@@ -308,7 +346,7 @@ def _render_cashflow_series(label: str, series: dict, levered: Any) -> str:
             f"{ttm.get('label')}: OCF {_fmt_money(ttm.get('operating_cash_flow'))} − capex "
             f"{_fmt_money(ttm.get('capex'))} = FCF {_fmt_money(ttm.get('fcf'))}"
         )
-        if len(quarterly) >= 8:
+        if _year_before_ttm(quarterly, ttm):
             prior = quarterly[-8:-4]
             p_ocf = _sum_rows(prior, "operating_cash_flow")
             p_capex = _sum_rows(prior, "capex")
@@ -355,7 +393,7 @@ def build_toolkit(
     opend_client: OpenDClient | None,
     company_name: str | None = None,
 ) -> AgentToolkit:
-    """Build the 11-tool toolkit. ``opend_client`` may be None in tests; the
+    """Build the 13-tool toolkit. ``opend_client`` may be None in tests; the
     market-data tools then short-circuit with a friendly placeholder.
 
     All tool parameters use ``symbol`` (matching TradingAgents' bundled tool
@@ -393,18 +431,20 @@ def build_toolkit(
         freq: str = "quarterly",
         curr_date: str | None = None,
     ) -> str:
-        """Retrieve the latest balance sheet PLUS a multi-year annual trend
-        table (total assets, total debt, equity, debt/equity per fiscal
-        year). ``freq`` is accepted for compatibility, but balance-sheet
-        history is annual-only in the data source, so the trend is always
-        annual. ``curr_date`` is ignored (no as-of support)."""
-        del freq, curr_date  # see docstring — annual-only history, no as-of
+        """Retrieve the latest balance sheet PLUS a quarterly trend (last ~8
+        quarters: total assets, debt, cash, net debt, equity, debt/equity and
+        the change in debt from the previous row, so a sudden borrowing jump is
+        visible) and a multi-year annual trend. ``freq`` is accepted for
+        compatibility (both views are always returned). ``curr_date`` is
+        ignored (no as-of support)."""
+        del freq, curr_date  # see docstring — both views returned, no as-of
         data, hist = await asyncio.gather(
             _internal_get("/api/internal/yahoo/balance-sheet", {"symbol": ticker}),
             _statement_history(ticker, "annual", 5),
         )
         bs = data.get("balance_sheet")
-        if not bs and not hist:
+        quarterly = data.get("quarterly") if isinstance(data.get("quarterly"), list) else []
+        if not bs and not hist and not quarterly:
             return f"No balance sheet available for {_label(ticker)}."
         parts: list[str] = []
         if bs:
@@ -414,26 +454,52 @@ def build_toolkit(
             )
         else:
             parts.append(f"Balance Sheet for {_label(ticker)}: no latest-period snapshot.")
+        if quarterly:
+            chron = list(reversed(quarterly))  # oldest → newest
+            qrows = []
+            for i, p in enumerate(chron):
+                debt, cash = p.get("total_debt"), p.get("cash")
+                net = (
+                    float(debt) - float(cash)
+                    if isinstance(debt, (int, float)) and isinstance(cash, (int, float))
+                    else None
+                )
+                qrows.append([
+                    str(p.get("period")),
+                    _fmt_money(p.get("total_assets")),
+                    _fmt_money(debt),
+                    _pct_delta(debt, chron[i - 1].get("total_debt")) if i else "—",
+                    _fmt_money(cash),
+                    _fmt_money(net),
+                    _fmt_money(p.get("shareholders_equity")),
+                    _ratio(debt, p.get("shareholders_equity")),
+                ])
+            parts.append(
+                "Quarterly balance-sheet trend (oldest → newest; net debt = total debt − cash; "
+                "Debt Δ = change from the previous row, so check the dates when "
+                "quarters are missing):\n"
+                + _md_table(
+                    ["Quarter", "Total Assets", "Total Debt", "Debt Δ", "Cash",
+                     "Net Debt", "Equity", "Debt/Equity"],
+                    qrows,
+                )
+            )
         if hist:
             rows = []
             for p in reversed(hist):  # oldest → newest
                 debt = p.get("total_debt")
                 equity = p.get("shareholders_equity")
-                ratio = (
-                    f"{float(debt) / float(equity):.2f}"
-                    if isinstance(debt, (int, float)) and isinstance(equity, (int, float)) and equity
-                    else "n/a"
-                )
                 rows.append([
                     str(p.get("period")),
                     _fmt_money(p.get("total_assets")),
                     _fmt_money(debt),
                     _fmt_money(equity),
-                    ratio,
+                    _ratio(debt, equity),
                 ])
             parts.append(
-                "Annual balance-sheet trend (oldest → newest; quarterly history "
-                "not available from source):\n"
+                "Annual balance-sheet trend (oldest → newest"
+                + ("" if quarterly else "; quarterly history not available from source")
+                + "):\n"
                 + _md_table(["FY", "Total Assets", "Total Debt", "Equity", "Debt/Equity"], rows)
             )
         return "\n\n".join(parts)
@@ -490,7 +556,9 @@ def build_toolkit(
     ) -> str:
         """Retrieve the latest income statement PLUS a multi-period trend
         table. ``freq='quarterly'`` (default) gives the last 8 quarters
-        (revenue, QoQ, net income, EPS); ``freq='annual'`` gives 5 fiscal
+        (revenue, QoQ, YoY, operating income, net income, EPS, and a flag for
+        quarters where net income runs well above operating income);
+        ``freq='annual'`` gives 5 fiscal
         years (revenue, YoY, net income, net margin). ``curr_date`` is
         ignored (no as-of support)."""
         del curr_date  # no as-of support in the data source
@@ -516,20 +584,40 @@ def build_toolkit(
             chron = list(reversed(hist))  # oldest → newest
             rows = []
             if quarterly:
+                above_operating: list[str] = []
                 for i, p in enumerate(chron):
                     rev = p.get("revenue")
                     eps = p.get("eps")
+                    ni = p.get("net_income")
+                    oi = p.get("operating_income")
+                    if (
+                        isinstance(ni, (int, float)) and isinstance(oi, (int, float))
+                        and oi > 0 and ni - oi > 0.25 * oi
+                    ):
+                        above_operating.append(str(p.get("period")))
                     rows.append([
                         str(p.get("period")),
                         _fmt_money(rev),
                         _pct_delta(rev, chron[i - 1].get("revenue")) if i else "—",
-                        _fmt_money(p.get("net_income")),
+                        _pct_delta(rev, prior["revenue"]) if (prior := _year_earlier(p, chron)) else "—",
+                        _fmt_money(oi),
+                        _fmt_money(ni),
                         f"{float(eps):.2f}" if isinstance(eps, (int, float)) else "n/a",
                     ])
                 parts.append(
                     "Quarterly trend (oldest → newest):\n"
-                    + _md_table(["Quarter", "Revenue", "QoQ", "Net Income", "EPS"], rows)
+                    + _md_table(["Quarter", "Revenue", "QoQ", "YoY", "Operating Income", "Net Income", "EPS"], rows)
                 )
+                if above_operating:
+                    # Net income well above operating income comes from below
+                    # the operating line, so it says little about the business.
+                    parts.append(
+                        "Net income is more than 25% above operating income in "
+                        + ", ".join(above_operating)
+                        + ": the gap is non-operating (investment gains or losses, "
+                        "interest, tax items). Name it from get_earnings_release "
+                        "before treating that net income or EPS as earnings power."
+                    )
             else:
                 for i, p in enumerate(chron):
                     rev = p.get("revenue")
@@ -942,7 +1030,8 @@ def build_toolkit(
         prepared remarks and the analyst Q&A, with a sentiment score per
         turn. Use it for WHY a number moved in management's own words, what
         analysts pressed on, and what management avoided answering. Pass
-        ``quarter`` as YYYYQn (e.g. 2026Q2) for a specific call; omit it for
+        ``quarter`` as the FISCAL quarter YYYYQn (e.g. 2026Q2; Apple's
+        July-September call is 2026Q4) for a specific call; omit it for
         the latest published one. Limited free budget: call it at most once
         per run."""
         params = {"symbol": ticker}
@@ -1022,7 +1111,8 @@ def build_toolkit(
         if rep:
             rows = [[str(p.get("date")), _eps(p.get("eps_avg")), _fmt_money(p.get("revenue_avg"))] for p in rep]
             parts.append(
-                "Consensus going into recent prints (compare with reported actuals):\n"
+                "Consensus for the last four quarters that have ended (the newest may not have "
+                "reported yet; get_earnings_surprise has the report dates and actuals):\n"
                 + _md_table(["Quarter end", "EPS consensus", "Revenue consensus"], rows)
             )
         return "\n\n".join(parts)

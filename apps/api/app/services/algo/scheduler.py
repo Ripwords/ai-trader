@@ -233,6 +233,11 @@ def adds_since_flat(position: int, executed: list[tuple[str, int]]) -> int:
     return count
 
 
+# Bars a tick reads, by cadence. A 5m strategy on daily bars re-ran on_bar on
+# the same half-formed daily bar every tick.
+CADENCE_KTYPE: dict[str, str] = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
+
+
 class Scheduler:
     """A single asyncio loop that ticks enabled strategies on cadence.
 
@@ -248,7 +253,7 @@ class Scheduler:
     def __init__(
         self,
         *,
-        get_klines: Callable[[str, int], Awaitable[list[Any]]],
+        get_klines: Callable[[str, int, str], Awaitable[list[Any]]],
         get_position: Callable[[str], Awaitable[int]],
         place_paper_order: Callable[[str, str, int], Awaitable[str | None]],
         get_account_summary: Callable[[str], Awaitable[AccountSummary]] | None = None,
@@ -316,17 +321,37 @@ class Scheduler:
 
         for s in strategies:
             if not s.enabled:
-                # Drop the timer so a re-enable doesn't immediately fire.
+                # Drop the timer; a re-enable picks it up again from the
+                # newest signal.
                 self._last_fire.pop(s.id, None)
                 continue
             cadence = CADENCE_SECS.get(s.cadence)
             if cadence is None:
                 continue
             last = self._last_fire.get(s.id)
+            if last is None:
+                last = await self._last_fire_from_signals(s.id, now_mono)
             if last is not None and now_mono - last < cadence:
                 continue
             self._last_fire[s.id] = now_mono
             await self._fire(s, kill_active=kill)
+
+    async def _last_fire_from_signals(self, strategy_id: str, now_mono: float) -> float | None:
+        """When the newest recorded signal was, on the monotonic clock, or None.
+
+        The timers above live in memory, so without this every restart (each
+        deploy) fires every enabled strategy at once. A tick that only held
+        records nothing, so this covers ticks that decided something.
+        """
+        try:
+            latest = await repo.list_signals(strategy_id=strategy_id, limit=1)
+        except Exception:  # noqa: BLE001 — fall back to firing, as before
+            logger.exception("strategy %s: could not read its last signal", strategy_id)
+            return None
+        if not latest:
+            return None
+        age = (_now_naive_utc() - latest[0].ts).total_seconds()
+        return now_mono - max(0.0, age)
 
     async def _fire(self, s: Strategy, *, kill_active: bool) -> None:
         """Run one strategy tick: fetch bars, run on_bar, route intent."""
@@ -338,7 +363,7 @@ class Scheduler:
             return
 
         try:
-            bars = await self._get_klines(s.symbol, 200)
+            bars = await self._get_klines(s.symbol, 200, CADENCE_KTYPE.get(s.cadence, "1d"))
         except Exception as exc:  # noqa: BLE001
             await repo.append_signal(
                 s.id, _now_naive_utc(), "ERROR", 0, None, None,
@@ -413,12 +438,11 @@ class Scheduler:
         # proxy. Prefer live account_value over initial_capital + MTM since
         # the live view already reflects realised cash + all positions.
         from app.services.algo.backtester import resolve_qty
-        default_qty = max(
-            1,
-            resolve_qty(
-                mode=s.sizing_mode, value=s.sizing_value,
-                equity=account_value_now, fill_price=last_close,
-            ),
+        # 0 when the capital does not cover one share; the BUY is then
+        # recorded as blocked, as the backtest skips it.
+        default_qty = resolve_qty(
+            mode=s.sizing_mode, value=s.sizing_value,
+            equity=account_value_now, fill_price=last_close,
         )
         try:
             intent = await asyncio.to_thread(
@@ -461,6 +485,13 @@ class Scheduler:
             # we computed above (sized off the account value with last close
             # as the fill-price proxy).
             qty = max(0, int(explicit_qty)) if explicit_qty is not None else default_qty
+            if qty <= 0:
+                await repo.append_signal(
+                    s.id, ts, side, 0, last_close, None,
+                    f"blocked: BUY of 0 shares (sizing {s.sizing_mode} "
+                    f"{s.sizing_value:g} at {last_close:g})",
+                )
+                return
         if qty <= 0:
             return
 
@@ -491,16 +522,23 @@ class Scheduler:
 
         try:
             order_id = await self._place(s.symbol, side, qty)
-            await repo.append_signal(
-                s.id, ts, side, qty, last_close, order_id, None,
-            )
-            if side == "BUY":
-                self._adds_since_flat[s.id] = (
-                    self._adds_since_flat.get(s.id, 0) + 1
-                )
         except Exception as exc:  # noqa: BLE001
             await repo.append_signal(
                 s.id, ts, side, qty, last_close, None, f"place_order: {exc}",
+            )
+            return
+        # The order exists from here on: count it before recording it, and a
+        # failed insert must not turn it into a "place_order" failure.
+        if side == "BUY":
+            self._adds_since_flat[s.id] = self._adds_since_flat.get(s.id, 0) + 1
+        try:
+            await repo.append_signal(
+                s.id, ts, side, qty, last_close, order_id, None,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "strategy %s: order %s placed but its signal was not saved",
+                s.id, order_id,
             )
 
 

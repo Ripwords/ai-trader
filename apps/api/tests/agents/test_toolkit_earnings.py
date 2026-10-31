@@ -180,6 +180,29 @@ async def test_cashflow_shows_fcf_as_ocf_minus_capex_per_labelled_quarter():
     assert "data.sec.gov" in out
 
 
+def _cashflow_with(quarterly):
+    return {**CASHFLOW, "series": {**CASHFLOW["series"], "quarterly": quarterly}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "quarterly",
+    [
+        # Yahoo's quarterly series lags the TTM by a quarter: [-8:-4] would end 2025-06-30.
+        [_row("2024-09-30", 25.0e9, 22.6e9)] + CASHFLOW["series"]["quarterly"][:-1],
+        # A missing quarter (2025-03-31) makes the "prior four" span five quarters.
+        [_row("2024-06-30", 25.3e9, 17.6e9), _row("2024-09-30", 25.0e9, 22.6e9)]
+        + CASHFLOW["series"]["quarterly"][:1] + CASHFLOW["series"]["quarterly"][2:],
+    ],
+    ids=["lagging-quarters", "gap"],
+)
+async def test_cashflow_skips_prior_ttm_unless_it_is_the_year_before(quarterly):
+    with patch("httpx.AsyncClient.get", new=_fake_http({"/api/internal/yahoo/cashflow": _cashflow_with(quarterly)}, [])):
+        out = await build_toolkit(None).get_cashflow.ainvoke({"ticker": "AMZN"})
+    assert "TTM to 2026-09-30: OCF 168.30B" in out
+    assert "prior TTM" not in out
+
+
 @pytest.mark.asyncio
 async def test_cashflow_labels_the_other_fcf_figures_as_not_interchangeable():
     with patch("httpx.AsyncClient.get", new=_fake_http({"/api/internal/yahoo/cashflow": CASHFLOW}, [])):

@@ -64,9 +64,6 @@ def to_valuation_input(symbol: str, payload: dict) -> ValuationInput:
     newest_close = _dec(bars[-1].get("close")) if bars else None
     current_price = newest_close if newest_close is not None else Decimal("0")
 
-    fcf_base = metrics.free_cash_flow
-    if fcf_base is None and history and history[0].fcf is not None:
-        fcf_base = history[0].fcf
 
     # Net debt is debt less cash; a cash-rich balance sheet is net cash and
     # adds to equity value. Missing figures count as zero, never as debt.
@@ -105,6 +102,14 @@ def to_valuation_input(symbol: str, payload: dict) -> ValuationInput:
         else None
     )
 
+    # The DCF projects OCF − capex (the history it grows from is OCF − capex),
+    # so a positive trailing figure is the base. Yahoo's levered FCF is a
+    # different measure (MSFT: 2.99B against 59.96B); it is only the fallback,
+    # and a negative TTM keeps it so the regime guard can name the conflict.
+    fcf_base = fcf_ttm if fcf_ttm is not None and fcf_ttm > 0 else metrics.free_cash_flow
+    if fcf_base is None and history and history[0].fcf is not None:
+        fcf_base = history[0].fcf
+
     return ValuationInput(
         symbol=symbol,
         current_price=current_price,
@@ -119,6 +124,7 @@ def to_valuation_input(symbol: str, payload: dict) -> ValuationInput:
         price_note=price_note,
         fcf_ttm=fcf_ttm,
         fcf_ttm_period=fcf_ttm_period,
+        industry=str(raw_metrics["industry"]) if raw_metrics.get("industry") else None,
     )
 
 

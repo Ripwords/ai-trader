@@ -108,5 +108,7 @@ async def test_estimate_revisions_table():
         out = await build_toolkit(None).get_estimate_revisions.ainvoke({"ticker": "AMZN"})
     assert "| quarter 2026-12-31 | 2.46 | 2.40 | +2.38% | 2 / 1 | 244.31B | 43 |" in out
     assert "| 2026-09-30 | 1.96 | 202.26B |" in out
+    # Alpha Vantage cannot tell an ended quarter from a reported one, so the label must not claim a print.
+    assert "may not have reported yet" in out
     assert "Alpha Vantage" in out
     assert "20 of 25" in out

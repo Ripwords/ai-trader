@@ -12,7 +12,7 @@ from typing import Any, Callable, Protocol
 import numpy as np
 import pandas as pd
 
-from .validator import ALLOWED_MODULES, ValidationError, validate
+from .validator import ALLOWED_MODULES, ValidationError, name_problem, validate
 
 
 def _safe_import(
@@ -32,9 +32,12 @@ def _safe_import(
     either (the import statement implicitly calls __import__) — strategies
     blew up with NameError: __import__ not found.
     """
-    root = name.split(".", 1)[0]
-    if root not in ALLOWED_MODULES:
+    parts = name.split(".")
+    if level or parts[0] not in ALLOWED_MODULES:
         raise ImportError(f"import of '{name}' is not allowed in sandbox")
+    for part in [*parts[1:], *(fromlist or ())]:
+        if name_problem(part):
+            raise ImportError(f"import of '{part}' from '{name}' is not allowed in sandbox")
     return __import__(name, globals, locals, fromlist, level)
 
 

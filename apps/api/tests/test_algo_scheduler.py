@@ -126,7 +126,7 @@ async def test_tick_runs_strategy_and_records_buy_signal(db_pool: Any) -> None:
 
     placed: list[tuple[str, str, int]] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return [
             _bar(datetime(2026, 1, 1), 100.0),
             _bar(datetime(2026, 1, 2), 110.0),
@@ -162,7 +162,7 @@ async def test_disabled_strategy_does_not_fire(db_pool: Any) -> None:
 
     placed: list[tuple[str, str, int]] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
 
     async def fake_pos(sym: str) -> int:
@@ -185,7 +185,7 @@ async def test_kill_switch_blocks_order_but_records_signal(db_pool: Any) -> None
 
     placed: list[Any] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
 
     async def fake_pos(sym: str) -> int:
@@ -215,7 +215,7 @@ async def test_cadence_throttles_re_runs(db_pool: Any) -> None:
 
     place_calls = 0
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
 
     async def fake_pos(sym: str) -> int:
@@ -238,7 +238,7 @@ async def test_cadence_throttles_re_runs(db_pool: Any) -> None:
 async def test_klines_failure_records_signal_and_does_not_crash(db_pool: Any) -> None:
     sid = await _make_strategy("def on_bar(c): c.buy(c.qty)\n")
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         raise RuntimeError("opend down")
 
     async def fake_pos(sym: str) -> int:
@@ -272,7 +272,7 @@ async def test_get_position_failure_skips_tick_with_error_signal(db_pool: Any) -
     strategy would double-buy. Record an error signal and skip the tick."""
     sid = await _make_strategy("def on_bar(c): c.buy(c.qty)\n")
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return list(_TWO_BARS_UP)
 
     async def fake_pos(sym: str) -> int:
@@ -301,7 +301,7 @@ async def test_pyramiding_cap_blocks_additional_adds(db_pool: Any) -> None:
     placed: list[tuple[str, str, int]] = []
     position = 0
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return list(_TWO_BARS_UP)
 
     async def fake_pos(sym: str) -> int:
@@ -316,7 +316,7 @@ async def test_pyramiding_cap_blocks_additional_adds(db_pool: Any) -> None:
     )
     await sch._tick()
     position = 1  # the first BUY filled
-    sch._last_fire.clear()  # bypass cadence throttle for the second tick
+    sch._last_fire.update(dict.fromkeys(sch._last_fire, float("-inf")))  # bypass cadence throttle for the second tick
     await sch._tick()
 
     assert len(placed) == 1  # second BUY must not reach place_order
@@ -334,7 +334,7 @@ async def test_pyramiding_counter_resets_when_flat(db_pool: Any) -> None:
     placed: list[str] = []
     positions = iter([0, 1, 0])  # buy -> holding (blocked) -> flat (buy again)
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return list(_TWO_BARS_UP)
 
     async def fake_pos(sym: str) -> int:
@@ -349,7 +349,7 @@ async def test_pyramiding_counter_resets_when_flat(db_pool: Any) -> None:
     )
     for _ in range(3):
         await sch._tick()
-        sch._last_fire.clear()
+        sch._last_fire.update(dict.fromkeys(sch._last_fire, float("-inf")))
 
     assert placed == ["BUY", "BUY"]  # tick 2 was blocked, tick 3 allowed
 
@@ -357,7 +357,7 @@ async def test_pyramiding_counter_resets_when_flat(db_pool: Any) -> None:
 async def test_compile_failure_records_an_error_row_not_a_buy(db_pool: Any) -> None:
     sid = await _make_strategy("def on_bar(c)\n")
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return list(_TWO_BARS_UP)
 
     async def fake_pos(sym: str) -> int:
@@ -385,7 +385,7 @@ async def test_pyramiding_count_survives_a_restart(db_pool: Any) -> None:
 
     placed: list[str] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return list(_TWO_BARS_UP)
 
     async def fake_pos(sym: str) -> int:
@@ -425,7 +425,7 @@ async def test_pyramiding_rebuild_stops_at_the_last_flat_point(db_pool: Any) -> 
 
     placed: list[str] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return list(_TWO_BARS_UP)
 
     async def fake_pos(sym: str) -> int:
@@ -463,7 +463,7 @@ async def test_daily_order_cap_blocks_after_limit(
 
     placed: list[str] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return list(_TWO_BARS_UP)
 
     async def fake_pos(sym: str) -> int:
@@ -477,7 +477,7 @@ async def test_daily_order_cap_blocks_after_limit(
         get_klines=fake_klines, get_position=fake_pos, place_paper_order=fake_place
     )
     await sch._tick()
-    sch._last_fire.clear()
+    sch._last_fire.update(dict.fromkeys(sch._last_fire, float("-inf")))
     await sch._tick()
 
     assert len(placed) == 1
@@ -498,7 +498,7 @@ async def test_market_closed_skips_fire(
     sid = await _make_strategy("def on_bar(c): c.buy(c.qty)\n")
     placed: list[str] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return list(_TWO_BARS_UP)
 
     async def fake_pos(sym: str) -> int:
@@ -528,7 +528,7 @@ async def test_market_hours_bypass_env_overrides(
     await _make_strategy("def on_bar(c): c.buy(c.qty)\n")
     placed: list[str] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return list(_TWO_BARS_UP)
 
     async def fake_pos(sym: str) -> int:
@@ -571,7 +571,7 @@ async def test_bare_sell_flattens_live_position_like_the_backtester(db_pool: Any
     sid = await _make_strategy("def on_bar(c): c.sell()\n")
     placed: list[tuple[str, str, int]] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 90.0)]
 
     async def fake_position(sym: str) -> int:
@@ -592,7 +592,7 @@ async def test_runaway_strategy_is_killed_and_the_tick_survives(db_pool: Any) ->
     sid = await _make_strategy("def on_bar(c):\n    while True:\n        pass\n")
     placed: list[tuple[str, str, int]] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
 
     async def fake_position(sym: str) -> int:
@@ -617,7 +617,7 @@ async def test_sell_while_flat_places_nothing(db_pool: Any) -> None:
     sid = await _make_strategy("def on_bar(c): c.sell(3)\n")
     placed: list[tuple[str, str, int]] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 90.0)]
 
     async def fake_position(sym: str) -> int:
@@ -642,7 +642,7 @@ async def test_account_summary_is_requested_in_the_symbol_currency(db_pool: Any)
     await _make_strategy("def on_bar(c): c.buy(c.qty)\n")
     asked: list[str] = []
 
-    async def fake_klines(sym: str, num: int) -> list[Any]:
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
         return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
 
     async def fake_position(sym: str) -> int:
@@ -709,3 +709,106 @@ async def test_scheduler_module_source_never_mentions_the_live_env() -> None:
     from app.services.algo import scheduler as sched_mod
 
     assert "REAL" not in inspect.getsource(sched_mod)
+
+
+@pytest.mark.parametrize("cadence, ktype", [("5m", "5m"), ("1h", "60m"), ("1d", "1d")])
+async def test_tick_reads_bars_at_the_strategy_cadence(db_pool: Any, cadence: str, ktype: str) -> None:
+    # Daily bars for a 5m strategy re-ran on_bar on the same half-formed daily
+    # bar every 5 minutes, so one true condition fired all day.
+    await _make_strategy("def on_bar(c): c.hold()\n", cadence=cadence)
+    asked: list[str] = []
+
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
+        asked.append(ktype)
+        return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
+
+    async def fake_position(sym: str) -> int:
+        return 0
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        return "ORD-1"
+
+    sch = Scheduler(get_klines=fake_klines, get_position=fake_position, place_paper_order=fake_place)
+    await sch._tick()
+    assert asked == [ktype]
+
+
+async def test_sizing_to_zero_shares_buys_nothing_and_says_why(db_pool: Any) -> None:
+    # fixed_cash $50 at $110 is 0 shares; the tick used to buy 1 anyway, which
+    # the backtest never does.
+    from app.schemas.algo import StrategyUpdate
+
+    sid = await _make_strategy("def on_bar(c): c.buy(c.qty)\n")
+    await repo.update_strategy(sid, StrategyUpdate(sizing_mode="fixed_cash", sizing_value=50))
+    placed: list[int] = []
+
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
+        return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
+
+    async def fake_position(sym: str) -> int:
+        return 0
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        placed.append(qty)
+        return "ORD-1"
+
+    sch = Scheduler(get_klines=fake_klines, get_position=fake_position, place_paper_order=fake_place)
+    await sch._tick()
+    assert placed == []
+    sigs = await repo.list_signals(strategy_id=sid)
+    assert len(sigs) == 1 and sigs[0].order_id is None
+    assert "0 shares" in (sigs[0].error or "")
+
+
+async def test_an_order_that_went_through_is_not_recorded_as_failed_when_saving_it_fails(
+    db_pool: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sid = await _make_strategy("def on_bar(c): c.buy(c.qty)\n")
+    real_append = repo.append_signal
+
+    async def flaky_append(*args: Any) -> Any:
+        if args[5] is not None:  # the row carrying the order id
+            raise RuntimeError("db blip")
+        return await real_append(*args)
+
+    monkeypatch.setattr(repo, "append_signal", flaky_append)
+
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
+        return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
+
+    async def fake_position(sym: str) -> int:
+        return 0
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        return "ORD-1"
+
+    sch = Scheduler(get_klines=fake_klines, get_position=fake_position, place_paper_order=fake_place)
+    await sch._tick()
+    sigs = await repo.list_signals(strategy_id=sid)
+    assert not any("place_order" in (x.error or "") for x in sigs)
+    # The placed order still counts against the pyramiding cap.
+    assert sch._adds_since_flat[sid] == 1
+
+
+async def test_a_restart_does_not_fire_again_inside_the_cadence(db_pool: Any) -> None:
+    # The last-fire timers live in memory, so every api restart (each deploy)
+    # fired every enabled strategy at once: a 1d strategy decided twice a day.
+    from app.services.algo.scheduler import _now_naive_utc
+
+    sid = await _make_strategy("def on_bar(c): c.buy(c.qty)\n", cadence="1d")
+    await repo.append_signal(sid, _now_naive_utc(), "BUY", 1, 100.0, "ORD-0", None)
+    fired: list[str] = []
+
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
+        fired.append(sym)
+        return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
+
+    async def fake_position(sym: str) -> int:
+        return 0
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        return "ORD-1"
+
+    sch = Scheduler(get_klines=fake_klines, get_position=fake_position, place_paper_order=fake_place)
+    await sch._tick()
+    assert fired == []

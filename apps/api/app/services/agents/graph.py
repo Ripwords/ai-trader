@@ -71,6 +71,10 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from tradingagents.agents.managers.risk_manager import (
+    create_risk_manager as _upstream_create_risk_manager,
+)
+from tradingagents.agents.trader.trader import create_trader as _upstream_create_trader
 from tradingagents.agents.utils import agent_utils as _agent_utils
 from tradingagents.config import TradingAgentsConfig
 from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -192,6 +196,52 @@ def news_analyst_factory(toolkit: AgentToolkit) -> Callable[[Any], Callable[[Any
     return _analyst_factory(toolkit, "news_analyst", _NEWS_TOOLS, "news_report")
 
 
+_REPORT_SECTIONS = (
+    ("market_report", "Market analyst"),
+    ("sentiment_report", "Social analyst"),
+    ("news_report", "News analyst"),
+    ("fundamentals_report", "Fundamentals analyst"),
+)
+
+
+def with_analyst_reports(plan: str, state: Any) -> str:
+    """``plan`` followed by the analyst reports, for the two roles upstream
+    feeds only a plan: the Trader and the Risk Judge. Without them the final
+    call sees only the facts a debater happened to repeat."""
+    sections = [
+        f"### {title}\n{text}"
+        for field, title in _REPORT_SECTIONS
+        if (text := getattr(state, field, "") or "")
+    ]
+    if not sections:
+        return plan
+    return (
+        f"{plan}\n\n## Analyst reports (source evidence)\n"
+        "Check the plan and the debate against these reports, and weigh any "
+        "material fact in them that the debate left out.\n\n" + "\n\n".join(sections)
+    )
+
+
+def trader_with_reports(llm: Any, memory: Any) -> Callable[[Any], dict[str, Any]]:
+    node = _upstream_create_trader(llm, memory)
+
+    def trader_node(state: Any) -> dict[str, Any]:
+        plan = with_analyst_reports(state.investment_plan, state)
+        return node(state.model_copy(update={"investment_plan": plan}))
+
+    return trader_node
+
+
+def risk_manager_with_reports(llm: Any, memory: Any) -> Callable[[Any], dict[str, Any]]:
+    node = _upstream_create_risk_manager(llm, memory)
+
+    def risk_manager_node(state: Any) -> dict[str, Any]:
+        plan = with_analyst_reports(state.trader_investment_plan, state)
+        return node(state.model_copy(update={"trader_investment_plan": plan}))
+
+    return risk_manager_node
+
+
 def _tool_nodes(toolkit: AgentToolkit) -> dict[str, Any]:
     """ToolNodes matching each analyst's bound tools (seeded onto ``ta``)."""
     from langgraph.prebuilt import ToolNode
@@ -248,6 +298,8 @@ def _install_toolkit(toolkit: AgentToolkit) -> None:
     # tool lists, so the earnings tools could not be added otherwise.
     _setup.create_fundamentals_analyst = fundamentals_analyst_factory(toolkit)
     _setup.create_news_analyst = news_analyst_factory(toolkit)
+    _setup.create_trader = trader_with_reports
+    _setup.create_risk_manager = risk_manager_with_reports
 
 
 def build_graph(

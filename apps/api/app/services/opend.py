@@ -492,7 +492,8 @@ class OpendAdapter:
         positions = [
             Position(
                 code=str(r["code"]),
-                qty=int(_to_float(r.get("qty", 0))),
+                # Float: US accounts hold fractional shares.
+                qty=_to_float(r.get("qty", 0)),
                 # SDK uses "average_cost"; plan schema names it cost_price
                 cost_price=_to_float(r.get("average_cost", r.get("cost_price", 0))),
                 # SDK uses "nominal_price"; plan schema names it current_price
@@ -562,6 +563,7 @@ class OpendAdapter:
                 price=float(r.get("price", 0) or 0),
                 status=str(r.get("order_status", "")),
                 created_at=datetime.fromisoformat(str(r["create_time"])),
+                trigger_price=float(r["aux_price"]) if r.get("aux_price") not in (None, "", "N/A") and float(r["aux_price"]) > 0 else None,
             )
             for _, r in data.iterrows()
         ]

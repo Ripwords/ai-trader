@@ -119,15 +119,19 @@ def _median(values: list[Decimal]) -> Decimal | None:
     return (vals[mid - 1] + vals[mid]) / Decimal("2")
 
 
-def current_multiples(metrics: Metrics, price: Decimal) -> Multiples:
+def current_multiples(
+    metrics: Metrics, price: Decimal, fcf: Decimal | None = None,
+) -> Multiples:
     """Extract current multiples from Metrics and compute P/FCF.
 
     Passes through pe, pb, ps from metrics and calculates p_fcf as
-    market_cap / free_cash_flow when both are available and fcf != 0.
+    market_cap / fcf, where ``fcf`` is the DCF's base (OCF − capex) when
+    given and Yahoo's levered FCF otherwise. A non-positive FCF has no P/FCF.
     """
+    base = fcf if fcf is not None else metrics.free_cash_flow
     p_fcf = None
-    if metrics.market_cap and metrics.free_cash_flow and metrics.free_cash_flow != 0:
-        p_fcf = metrics.market_cap / metrics.free_cash_flow
+    if metrics.market_cap and base is not None and base > 0:
+        p_fcf = metrics.market_cap / base
     return Multiples(
         pe=metrics.pe_ratio,
         pb=metrics.pb_ratio,
@@ -145,6 +149,7 @@ def historical_self_multiples(
 
     Uses current ``shares`` as a proxy market-cap base (period-exact share
     counts aren't in the Yahoo bundle) — good enough for a self-relative band.
+    Loss years have no P/E and are left out of its median.
     """
     pes: list[Decimal] = []
     pss: list[Decimal] = []
@@ -155,6 +160,6 @@ def historical_self_multiples(
         mcap = price * shares
         if h.revenue and h.revenue != 0:
             pss.append(mcap / h.revenue)
-        if h.net_income and h.net_income != 0:
+        if h.net_income and h.net_income > 0:
             pes.append(mcap / h.net_income)
     return Multiples(pe=_median(pes), ps=_median(pss))

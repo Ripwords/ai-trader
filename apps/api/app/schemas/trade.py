@@ -26,7 +26,7 @@ class Account(BaseModel):
 
 class Position(BaseModel):
     code: str
-    qty: int
+    qty: float
     cost_price: float
     current_price: float
     market_val: float
@@ -69,6 +69,8 @@ class Order(BaseModel):
     price: float
     status: str
     created_at: datetime
+    # The stop trigger (moomoo aux_price) of a STOP / STOP_LIMIT order.
+    trigger_price: float | None = None
 
 
 class Fill(BaseModel):

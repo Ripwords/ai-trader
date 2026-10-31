@@ -123,3 +123,27 @@ def test_agent_summary_explains_the_invalid_dcf_and_that_no_cap_applies():
     assert "no valuation cap" in out.lower()
     assert "VETO" not in out
     assert "Fair value/share" not in out
+
+
+def test_bank_dcf_is_out_of_regime_and_names_the_industry():
+    """HSBC got a $58 fair value on a $17.30 price: a bank's operating cash
+    flow moves with deposits and loans, so OCF − capex is not free cash flow."""
+    r = value(_healthy("100").model_copy(update={"industry": "Banks - Diversified"}))
+    assert r.fair_value is None
+    assert r.data_quality == "multiples_only"
+    assert r.dcf_invalid_reason and "Banks - Diversified" in r.dcf_invalid_reason
+    assert "P/B" in r.dcf_invalid_reason
+
+
+def test_insurers_and_brokers_are_out_of_regime_but_card_networks_are_not():
+    for industry in ("Insurance - Life", "Capital Markets", "Banks - Regional"):
+        assert value(_healthy("100").model_copy(update={"industry": industry})).fair_value is None
+    assert value(_healthy("100").model_copy(update={"industry": "Credit Services"})).fair_value is not None
+    assert value(_healthy("100")).fair_value is not None
+
+
+def test_bank_with_negative_fcf_gets_the_bank_reason_not_the_fcf_one():
+    vi = _healthy("100").model_copy(update={"industry": "Banks - Diversified", "fcf_base": D("-5")})
+    r = value(vi)
+    assert r.dcf_invalid_reason and "Banks - Diversified" in r.dcf_invalid_reason
+    assert not any("non-positive FCF" in w for w in r.warnings)

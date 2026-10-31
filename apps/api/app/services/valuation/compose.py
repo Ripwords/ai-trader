@@ -51,6 +51,23 @@ def _money(v: Decimal) -> str:
     return f"{sign}{a:.2f}"
 
 
+# Yahoo industries whose operating cash flow carries deposits, loans, float or
+# client balances, so OCF − capex is not cash the owners can take out.
+# Card networks ("Credit Services") and asset managers keep their DCF.
+_BALANCE_SHEET_INDUSTRIES = ("Banks", "Insurance", "Capital Markets", "Mortgage Finance")
+
+
+def _industry_out_of_regime(vi: ValuationInput) -> str | None:
+    """Why no FCF DCF applies to this kind of business, or None when one does."""
+    if vi.industry and vi.industry.startswith(_BALANCE_SHEET_INDUSTRIES):
+        return (
+            f"the company is in {vi.industry}, where operating cash flow moves with "
+            f"deposits, loans or policy float, so OCF − capex is not free cash flow; "
+            f"judge it on P/B against return on equity, and P/E"
+        )
+    return None
+
+
 def _base_fcf_out_of_regime(vi: ValuationInput) -> str | None:
     """Why the positive base FCF can't anchor a DCF, or None when it can."""
     assert vi.fcf_base is not None
@@ -126,12 +143,16 @@ def _value(
             veto=Veto(triggered=False, reason=None, rating_cap=None),
             warnings=["no current price available; valuation not computed"],
         )
-    cur_mult = current_multiples(vi.metrics, vi.current_price)
+    cur_mult = current_multiples(vi.metrics, vi.current_price, vi.fcf_base)
     hist_mult = None
     eff_avg = avg_price_by_period or vi.avg_price_by_period
     if eff_avg and vi.shares_outstanding:
         hist_mult = historical_self_multiples(
             vi.history, vi.shares_outstanding, eff_avg)
+
+    industry_reason = _industry_out_of_regime(vi)
+    if industry_reason:
+        return _invalid_dcf(vi, cur_mult, hist_mult, None, industry_reason)
 
     dcf_invalid = (
         vi.fcf_base is None or vi.fcf_base <= 0

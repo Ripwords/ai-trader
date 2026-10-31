@@ -107,3 +107,25 @@ def test_missing_ttm_cash_flow_leaves_the_cross_check_unset():
     vi = to_valuation_input("X", payload)
     assert vi.fcf_ttm is None
     assert vi.fcf_ttm_period is None
+
+
+def test_industry_comes_from_metrics():
+    payload = {"metrics": {"industry": "Banks - Diversified"}, "history": [], "dailyBars": []}
+    assert to_valuation_input("HK.00005", payload).industry == "Banks - Diversified"
+    assert to_valuation_input("X", {"metrics": {}, "history": [], "dailyBars": []}).industry is None
+
+
+def test_positive_ttm_ocf_minus_capex_is_the_dcf_base():
+    """MSFT: Yahoo's levered FCF was 2.99B while SEC OCF − capex was 59.96B;
+    the levered figure made the DCF look like a rounding error."""
+    payload = {"metrics": {"free_cash_flow": 2_994_125_056}, "history": [], "dailyBars": [],
+               "ttm_cashflow": {"period_end": "2026-09-30", "fcf": 59_957_000_000}}
+    assert to_valuation_input("MSFT", payload).fcf_base == D("59957000000")
+
+
+def test_negative_ttm_keeps_the_levered_base_so_the_conflict_is_explained():
+    payload = {"metrics": {"free_cash_flow": 3_219_124_992}, "history": [], "dailyBars": [],
+               "ttm_cashflow": {"period_end": "2026-09-30", "fcf": -46_892_000_000}}
+    vi = to_valuation_input("AMZN", payload)
+    assert vi.fcf_base == D("3219124992")
+    assert vi.fcf_ttm == D("-46892000000")

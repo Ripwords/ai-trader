@@ -1,4 +1,5 @@
 import logging
+import threading
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +20,11 @@ from app.services.opend import OpendAdapter, OpendError
 from app.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+# Held from the daily-cap check until the REAL order is sent. The routes run
+# in a threadpool, so without it two orders read the same spent total and
+# both passed a cap that only had room for one.
+_LIVE_ORDER_LOCK = threading.Lock()
 
 
 def _opend_to_http(exc: OpendError) -> HTTPException:
@@ -61,13 +67,18 @@ def _order_is_dead(order_status: str) -> bool:
     return any(marker in s for marker in _DEAD_ORDER_STATUS_MARKERS)
 
 
-def _estimate_price(code: str, price: float | None, opend: OpendAdapter, what: str) -> float:
-    """A limit price when there is one, else the last trade from a snapshot.
-    Fails closed: a REAL order we cannot price is a REAL order we refuse."""
+def _estimate_price(
+    code: str, price: float | None, opend: OpendAdapter, what: str,
+    trigger_price: float | None = None,
+) -> float:
+    """A limit price when there is one, else the last trade from a snapshot,
+    or the stop trigger when that is higher: a BUY STOP above the market
+    fills near its trigger, not at today's price. Fails closed: a REAL order
+    we cannot price is a REAL order we refuse."""
     if price is not None and price > 0:
         return float(price)
     try:
-        return float(opend.get_snapshot(code).last_price)
+        return max(float(opend.get_snapshot(code).last_price), float(trigger_price or 0))
     except OpendError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -102,6 +113,7 @@ def _assert_live_notional_under_cap(
     opend: OpendAdapter,
     settings: Settings,
     exclude_order_id: str | None = None,
+    trigger_price: float | None = None,
 ) -> None:
     """Reject a REAL order (new or modified) that would push today's summed
     REAL order notional over MAX_DAILY_LIVE_NOTIONAL_USD.
@@ -112,13 +124,13 @@ def _assert_live_notional_under_cap(
     last traded price from a snapshot; if that estimate can't be obtained we
     fail closed. ``exclude_order_id`` drops the order being modified from the
     spent total so its new size replaces, rather than adds to, its old one."""
-    new_notional = qty * _estimate_price(code, price, opend, "this REAL order")
+    new_notional = qty * _estimate_price(code, price, opend, "this REAL order", trigger_price)
 
     spent = 0.0
     for o in _todays_live_orders(acc_id, opend):
         if _order_is_dead(o.status) or o.order_id == exclude_order_id:
             continue
-        spent += o.qty * _estimate_price(o.code, o.price, opend, f"open REAL order {o.order_id}")
+        spent += o.qty * _estimate_price(o.code, o.price, opend, f"open REAL order {o.order_id}", o.trigger_price)
 
     if spent + new_notional > settings.MAX_DAILY_LIVE_NOTIONAL_USD:
         raise HTTPException(
@@ -158,6 +170,7 @@ def _assert_live_modify_under_cap(
         opend=opend,
         settings=settings,
         exclude_order_id=body.order_id,
+        trigger_price=body.trigger_price if body.trigger_price is not None else current.trigger_price,
     )
 
 
@@ -262,20 +275,26 @@ def place_order(
 ) -> PlaceOrderResult:
     settings = get_settings()
     _assert_live_trading_enabled(body.trd_env, settings)
-    if body.trd_env == "REAL":
-        if body.acc_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="acc_id is required for REAL orders",
-            )
+    if body.trd_env != "REAL":
+        return _place(body, opend)
+    if body.acc_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="acc_id is required for REAL orders",
+        )
+    with _LIVE_ORDER_LOCK:
         _assert_live_notional_under_cap(
             code=body.code, qty=body.qty, price=body.price, acc_id=body.acc_id,
-            opend=opend, settings=settings,
+            opend=opend, settings=settings, trigger_price=body.trigger_price,
         )
         logger.warning(
             "placing REAL order: %s %s x%s @ %s (%s)",
             body.side, body.code, body.qty, body.price, body.order_type,
         )
+        return _place(body, opend)
+
+
+def _place(body: PlaceOrderRequest, opend: OpendAdapter) -> PlaceOrderResult:
     try:
         return opend.place_order(
             code=body.code,
@@ -298,12 +317,18 @@ def modify_order(
 ) -> dict[str, str]:
     settings = get_settings()
     _assert_live_trading_enabled(body.trd_env, settings)
-    if body.trd_env == "REAL":
+    if body.trd_env != "REAL":
+        return _modify(body, opend)
+    with _LIVE_ORDER_LOCK:
         _assert_live_modify_under_cap(body, opend, settings)
         logger.warning(
             "modifying REAL order %s: price=%s qty=%s trigger=%s",
             body.order_id, body.price, body.qty, body.trigger_price,
         )
+        return _modify(body, opend)
+
+
+def _modify(body: ModifyOrderRequest, opend: OpendAdapter) -> dict[str, str]:
     try:
         return opend.modify_order(
             order_id=body.order_id,

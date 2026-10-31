@@ -391,3 +391,80 @@ def test_real_place_requires_acc_id(
     })
     assert res.status_code == 422
     assert fake_trade_adapter.placed == []
+
+
+def test_two_live_orders_at_once_cannot_both_pass_the_daily_cap(monkeypatch):
+    """The cap is checked, then the order placed. Two requests side by side
+    both read the same spent total unless the check and the placement are
+    one step, so two $900 orders under a $1000 cap both went through."""
+    import threading
+    import time
+
+    from app.routers import trade
+    from app.schemas.trade import PlaceOrderRequest
+
+    _enable_live(monkeypatch, cap=1000)
+
+    class Slow(FakeTradeAdapter):
+        def list_orders(self, *, acc_id, trd_env="SIMULATE"):
+            time.sleep(0.05)
+            return list(self.extra_real_orders)
+
+        def place_order(self, **kwargs):
+            time.sleep(0.2)
+            result = super().place_order(**kwargs)
+            self.extra_real_orders.append(Order(
+                order_id=f"ord-{len(self.extra_real_orders)}", code=kwargs["code"], side=kwargs["side"],
+                qty=kwargs["qty"], price=kwargs["price"], status="SUBMITTED", created_at=datetime(2026, 5, 8, 9, 30),
+            ))
+            return result
+
+    fake = Slow()
+    body = PlaceOrderRequest(code="US.X", side="BUY", qty=9, price=100.0, trd_env="REAL", acc_id="12345")
+    outcomes: list[str] = []
+
+    def go():
+        try:
+            trade.place_order(body, fake)
+            outcomes.append("placed")
+        except Exception as exc:  # noqa: BLE001 - the refusal is what we count
+            outcomes.append(type(exc).__name__)
+
+    threads = [threading.Thread(target=go) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(outcomes) == ["HTTPException", "placed"]
+    assert len(fake.placed) == 1
+
+
+def test_a_live_stop_order_counts_at_its_trigger_when_that_is_above_the_last_trade(
+    monkeypatch, client_with_bearer_and_fake_trade, fake_trade_adapter
+):
+    # Last trade $50 (fake snapshot); a BUY STOP triggers at $200 and fills
+    # near there. 10 shares is $2000 at the trigger, $500 at the last trade.
+    _enable_live(monkeypatch, cap=2500)
+    res = client_with_bearer_and_fake_trade.post("/trade/order/place", json={
+        "code": "US.NVDA", "side": "BUY", "qty": 10, "order_type": "STOP",
+        "trigger_price": 200.0, "trd_env": "REAL", "acc_id": "12345",
+    })
+    assert res.status_code == 409
+    assert fake_trade_adapter.placed == []
+
+
+def test_an_open_live_stop_order_counts_at_its_trigger(
+    monkeypatch, client_with_bearer_and_fake_trade, fake_trade_adapter
+):
+    # moomoo reports an open STOP at price 0; it is worth 10 * $200 at its
+    # trigger, so with ord-1's $1000 there is no room under a $2500 cap.
+    _enable_live(monkeypatch, cap=2500)
+    fake_trade_adapter.extra_real_orders = [
+        Order(order_id="ord-stop", code="US.NVDA", side="BUY", qty=10, price=0.0, trigger_price=200.0,
+              status="SUBMITTED", created_at=datetime(2026, 5, 8, 9, 30)),
+    ]
+    res = client_with_bearer_and_fake_trade.post("/trade/order/place", json={
+        "code": "US.NVDA", "side": "BUY", "qty": 5, "price": 100.0,
+        "trd_env": "REAL", "acc_id": "12345",
+    })
+    assert res.status_code == 409

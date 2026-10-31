@@ -65,8 +65,33 @@ BANNED_ATTRS: frozenset[str] = frozenset(
         "HDFStore", "ExcelWriter", "ExcelFile", "DataSource", "open",
         # module internals that reach the interpreter
         "io", "compat", "ctypeslib", "testing", "util",
+        "core", "lib", "f2py", "api", "plotting", "tseries",
+        # stdlib modules an allowed package re-exports (``statistics.sys``) or
+        # imports internally (``pandas.io.common.os``)
+        "os", "sys", "subprocess", "builtins", "importlib", "shutil", "socket",
+        "pathlib", "pickle", "marshal", "ctypes", "inspect", "gc", "signal",
+        "threading", "multiprocessing", "urllib", "http", "glob", "tempfile",
+        "platform", "runpy", "pty", "posix", "mmap", "codecs", "zipfile",
+        "tarfile", "sysconfig", "types", "weakref",
     }
 )
+
+
+def name_problem(name: str) -> str | None:
+    """Why a module path segment, imported name or attribute is refused, or None.
+
+    The same rule covers ``x.attr``, ``import a.b`` and ``from a import b``:
+    each is a way to reach a name inside an allowed package.
+    """
+    if name.startswith("__") and name.endswith("__"):
+        if name in _ALLOWED_DUNDERS:
+            return None
+        return f"dunder attribute '{name}' is not allowed"
+    if name.startswith("_"):
+        return f"private name '{name}' is not allowed"
+    if name in BANNED_ATTRS:
+        return f"'{name}' is not allowed (file/network IO or interpreter access)"
+    return None
 
 
 @dataclass
@@ -92,12 +117,28 @@ class _Visitor(ast.NodeVisitor):
             root = alias.name.split(".", 1)[0]
             if root not in ALLOWED_MODULES:
                 self._err(node, f"import of '{alias.name}' is not allowed")
+                continue
+            for part in alias.name.split(".")[1:]:
+                if problem := name_problem(part):
+                    self._err(node, f"import of '{alias.name}': {problem}")
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        root = (node.module or "").split(".", 1)[0]
-        if root and root not in ALLOWED_MODULES:
+        if node.level:
+            self._err(node, "relative imports are not allowed")
+            return
+        parts = (node.module or "").split(".")
+        if parts[0] not in ALLOWED_MODULES:
             self._err(node, f"import from '{node.module}' is not allowed")
+            return
+        for part in parts[1:]:
+            if problem := name_problem(part):
+                self._err(node, f"import from '{node.module}': {problem}")
+        for alias in node.names:
+            if alias.name == "*":
+                self._err(node, f"'from {node.module} import *' is not allowed")
+            elif problem := name_problem(alias.name):
+                self._err(node, f"importing '{alias.name}': {problem}")
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
@@ -105,15 +146,8 @@ class _Visitor(ast.NodeVisitor):
             self._err(node, f"'{node.id}' is not allowed")
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        attr = node.attr
-        if (
-            attr.startswith("__")
-            and attr.endswith("__")
-            and attr not in _ALLOWED_DUNDERS
-        ):
-            self._err(node, f"dunder attribute '{attr}' is not allowed")
-        elif attr in BANNED_ATTRS:
-            self._err(node, f"attribute '{attr}' is not allowed (file/network IO)")
+        if problem := name_problem(node.attr):
+            self._err(node, problem)
         self.generic_visit(node)
 
 
@@ -128,8 +162,9 @@ def validate(src: str) -> None:
     v = _Visitor()
     v.visit(tree)
     if v.errors:
+        # Each error carries its own "line N:" prefix already.
         joined = "; ".join(str(e) for e in v.errors)
-        raise ValidationError(joined, v.errors[0].line)
+        raise ValidationError(joined)
 
     # The runtime imports the strategy and calls `on_bar(ctx)` once per
     # bar. The LLM occasionally produces bare module-level code that

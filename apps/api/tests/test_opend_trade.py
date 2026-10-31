@@ -154,6 +154,21 @@ def test_get_portfolio_merges_positions_and_account():
     assert pos.pl_ratio == pytest.approx(0.10)  # SDK returned 10.0 (percentage) → normalized to 0.10
 
 
+def test_get_portfolio_keeps_fractional_share_quantities():
+    """moomoo US accounts hold fractional shares. Truncating 0.5 to 0 showed
+    a held position as zero shares, and the chat's holdings answer with it."""
+    _set_ctx(FakeTradeCtx(
+        positions_payload=[{
+            "code": "US.BRK.A", "qty": 0.5, "average_cost": 600000.0, "nominal_price": 620000.0,
+            "market_val": 310000.0, "unrealized_pl": 10000.0, "pl_ratio_avg_cost": 3.3,
+        }],
+        accinfo_payload=[{"cash": 0.0, "market_val": 310000.0, "total_assets": 310000.0}],
+    ))
+    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    portfolio = adapter.get_portfolio(acc_id=12345, trd_env="REAL")
+    assert portfolio.positions[0].qty == 0.5
+
+
 def test_get_portfolio_requests_configured_reporting_currency():
     """moomoo's accinfo_query defaults to currency='HKD'. Left unpassed it
     converts every account scalar into HKD and stamps currency='HKD',
@@ -292,6 +307,18 @@ def test_get_portfolio_currency_falls_back_to_requested_when_column_absent():
     # Per-position settlement currency stays None when the broker omits it —
     # that one really is an unknown broker fact, not something we supply.
     assert portfolio.positions[0].currency is None
+
+
+def test_list_orders_carries_the_stop_trigger_so_the_live_cap_can_value_it():
+    row = {"trd_side": "BUY", "qty": 10, "price": 0.0, "order_status": "SUBMITTED", "create_time": "2026-05-08 09:30:00"}
+    _set_ctx(FakeTradeCtx(orders_payload=[
+        {**row, "order_id": "stop", "code": "US.NVDA", "aux_price": 200.0},
+        {**row, "order_id": "limit", "code": "US.AAPL", "aux_price": float("nan")},
+    ]))
+    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    orders = {o.order_id: o for o in adapter.list_orders(acc_id=12345, trd_env="REAL")}
+    assert orders["stop"].trigger_price == 200.0
+    assert orders["limit"].trigger_price is None
 
 
 def test_list_orders_returns_typed():

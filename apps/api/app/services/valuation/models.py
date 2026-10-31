@@ -58,6 +58,9 @@ class ValuationInput(_Model):
     # and the period it covers ("TTM to 2026-09-30").
     fcf_ttm: Decimal | None = None
     fcf_ttm_period: str | None = None
+    # Yahoo assetProfile.industry ("Banks - Diversified"); decides whether an
+    # FCF DCF means anything for this business.
+    industry: str | None = None
 
 
 class Scenario(_Model):

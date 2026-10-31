@@ -196,3 +196,57 @@ def test_sandbox_import_rejects_disallowed_modules_at_runtime() -> None:
         safe_import("subprocess")
     # Allowed modules still resolve.
     assert safe_import("math").sqrt(4) == 2.0
+
+
+# --- Escapes through from-imports, dotted imports and module attributes ----
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # pandas.io.common imports os; the root 'pandas' alone passed before.
+        "from pandas.io.common import os as o\ndef on_bar(c): o.popen('id')",
+        "import pandas.io.common as p\ndef on_bar(c): p.os.popen('id')",
+        # The IO ban applied to attributes only, not to imported names.
+        "from pandas import read_csv as r\ndef on_bar(c): r('/etc/passwd')",
+        # statistics re-exports sys, which reaches every loaded module.
+        "import statistics\ndef on_bar(c): statistics.sys.modules['os'].popen('id')",
+        "from statistics import sys\ndef on_bar(c): pass",
+        # Private module internals.
+        "def on_bar(c): np._core",
+        "from pandas import _libs\ndef on_bar(c): pass",
+        "from . import x\ndef on_bar(c): pass",
+        "from math import *\ndef on_bar(c): pass",
+    ],
+)
+def test_rejects_module_escapes(src: str) -> None:
+    with pytest.raises(ValidationError):
+        validate(src)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from math import sqrt\ndef on_bar(c): sqrt(4)",
+        "from statistics import mean\ndef on_bar(c): mean([1, 2])",
+        "import numpy as np\ndef on_bar(c): np.linalg.norm([1, 2])",
+        "def on_bar(c): c.bars['close'].rolling(20).mean()",
+    ],
+)
+def test_still_allows_ordinary_strategy_imports(src: str) -> None:
+    validate(src)
+
+
+def test_runtime_import_refuses_a_module_smuggled_through_an_allowed_package() -> None:
+    from app.services.algo.sandbox import _safe_import
+
+    with pytest.raises(ImportError):
+        _safe_import("pandas.io.common", fromlist=("os",))
+    with pytest.raises(ImportError):
+        _safe_import("statistics", fromlist=("sys",))
+
+
+def test_error_names_each_line_once() -> None:
+    with pytest.raises(ValidationError) as e:
+        validate("import os\ndef on_bar(c): pass")
+    assert str(e.value) == "line 1: import of 'os' is not allowed"

@@ -129,6 +129,45 @@ async def test_get_balance_sheet_includes_annual_trend():
     assert "8.46B" in result
     hist_calls = [c for c in calls if c["url"].endswith("/statement-history")]
     assert hist_calls and hist_calls[0]["params"]["freq"] == "annual"
+    assert "quarterly history not available" in result
+
+
+QUARTERLY_BALANCE = [  # newest first, as the web route returns it
+    {"period": "2026 Q1", "end_date": "2026-03-31", "total_assets": 450e9,
+     "total_debt": 209.888e9, "cash": 101.816e9, "shareholders_equity": 441.914e9},
+    {"period": "2025 Q4", "end_date": "2025-12-31", "total_assets": 400e9,
+     "total_debt": 152.987e9, "cash": 86.81e9, "shareholders_equity": 411.065e9},
+    {"period": "2025 Q3", "end_date": "2025-09-30", "total_assets": 360e9,
+     "total_debt": None, "cash": 66.922e9, "shareholders_equity": 369.631e9},
+]
+
+
+@pytest.mark.asyncio
+async def test_get_balance_sheet_includes_quarterly_trend_with_net_debt():
+    responses = {
+        "/api/internal/yahoo/balance-sheet": {
+            "symbol": "AMZN",
+            "balance_sheet": {"total_assets": 450e9},
+            "quarterly": QUARTERLY_BALANCE,
+        },
+        "/api/internal/yahoo/statement-history": {"symbol": "AMZN", "periods": ANNUAL_PERIODS},
+    }
+    with patch("httpx.AsyncClient.get", new=_fake_http(responses, [])):
+        toolkit = build_toolkit(opend_client=None)
+        result = await toolkit.get_balance_sheet.ainvoke({"ticker": "AMZN"})
+
+    q = result[result.index("Quarterly balance-sheet trend"):]
+    assert q.index("2025 Q3") < q.index("2026 Q1")  # oldest → newest
+    row = next(line for line in q.splitlines() if line.startswith("| 2026 Q1"))
+    # net debt = 209.888 − 101.816; debt QoQ = 209.888 / 152.987 − 1
+    assert "108.07B" in row
+    assert "+37.2%" in row
+    assert "0.47" in row  # debt / equity
+    q3 = next(line for line in q.splitlines() if line.startswith("| 2025 Q3"))
+    assert "n/a" in q3
+    # the annual table is still there, and no longer claims quarters are missing
+    assert "Annual balance-sheet trend" in result
+    assert "not available" not in result
 
 
 @pytest.mark.asyncio
@@ -182,6 +221,64 @@ async def test_get_income_statement_quarterly_trend():
     hist_calls = [c for c in calls if c["url"].endswith("/statement-history")]
     assert hist_calls[0]["params"]["freq"] == "quarterly"
     assert hist_calls[0]["params"]["periods"] == 8
+
+
+@pytest.mark.asyncio
+async def test_income_statement_flags_net_income_above_operating_income():
+    # Amazon Q2 2026: net income $62.6B on operating income $27.5B; the gap
+    # is non-operating (an investment gain), not the core business.
+    periods = [
+        {"period": "2026 Q2", "end_date": "2026-06-30", "revenue": 200_606_000_000,
+         "net_income": 62_647_000_000, "eps": 5.75, "operating_income": 27_461_000_000},
+        {"period": "2026 Q1", "end_date": "2026-03-31", "revenue": 181_519_000_000,
+         "net_income": 30_255_000_000, "eps": 2.78, "operating_income": 23_852_000_000},
+        {"period": "2025 Q4", "end_date": "2025-12-31", "revenue": 213_386_000_000,
+         "net_income": 21_192_000_000, "eps": 1.95, "operating_income": 24_977_000_000},
+    ]
+    responses = {
+        "/api/internal/yahoo/income-statement": {"symbol": "AMZN", "income_statement": None},
+        "/api/internal/yahoo/statement-history": {"symbol": "AMZN", "freq": "quarterly", "periods": periods},
+    }
+    with patch("httpx.AsyncClient.get", new=_fake_http(responses, [])):
+        toolkit = build_toolkit(opend_client=None)
+        result = await toolkit.get_income_statement.ainvoke({"ticker": "AMZN", "freq": "quarterly"})
+
+    assert "Operating Income" in result
+    assert "27.46B" in result
+    flag = next(line for line in result.splitlines() if "above operating income" in line)
+    assert "2026 Q2" in flag and "2026 Q1" in flag
+    assert "2025 Q4" not in flag
+
+
+@pytest.mark.asyncio
+async def test_income_statement_shows_yoy_matched_by_date():
+    # Retail is seasonal: Q1 always falls from Q4, so QoQ alone reads as a
+    # slump. YoY compares with the quarter a year earlier, found by end date.
+    def q(period, end, rev):
+        return {"period": period, "end_date": end, "revenue": rev, "net_income": None,
+                "eps": None, "operating_income": None}
+    periods = [
+        q("2026 Q1", "2026-03-31", 181_519_000_000),
+        q("2025 Q4", "2025-12-31", 213_386_000_000),
+        q("2025 Q3", "2025-09-30", 180_169_000_000),
+        q("2025 Q1", "2025-03-31", 155_667_000_000),
+    ]
+    responses = {
+        "/api/internal/yahoo/income-statement": {"symbol": "AMZN", "income_statement": None},
+        "/api/internal/yahoo/statement-history": {"symbol": "AMZN", "freq": "quarterly", "periods": periods},
+    }
+    with patch("httpx.AsyncClient.get", new=_fake_http(responses, [])):
+        toolkit = build_toolkit(opend_client=None)
+        result = await toolkit.get_income_statement.ainvoke({"ticker": "AMZN", "freq": "quarterly"})
+
+    header = next(line for line in result.splitlines() if line.startswith("| Quarter"))
+    assert "YoY" in header
+    q1 = next(line for line in result.splitlines() if line.startswith("| 2026 Q1"))
+    cells = [c.strip() for c in q1.strip("|").split("|")]
+    assert cells[2] == "-14.9%"  # QoQ vs Q4
+    assert cells[3] == "+16.6%"  # YoY vs 2025 Q1
+    q4 = next(line for line in result.splitlines() if line.startswith("| 2025 Q4"))
+    assert [c.strip() for c in q4.strip("|").split("|")][3] == "—"
 
 
 @pytest.mark.asyncio

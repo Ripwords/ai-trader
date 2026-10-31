@@ -87,9 +87,9 @@ def _make_opend_bridges():
             settings.MOOMOO_REPORT_CURRENCY,
         )
 
-    async def get_klines(symbol: str, num: int):
+    async def get_klines(symbol: str, num: int, ktype: str = "1d"):
         return await asyncio.to_thread(
-            lambda: _adapter().get_kline(code=symbol, ktype="1d", num=num).bars
+            lambda: _adapter().get_kline(code=symbol, ktype=ktype, num=num).bars
         )
 
     async def get_position(symbol: str) -> int:
@@ -98,10 +98,9 @@ def _make_opend_bridges():
             for acc in ad.list_accounts():
                 if acc.trd_env != "SIMULATE":
                     continue
-                try:
-                    pf = ad.get_portfolio(acc_id=acc.acc_id, trd_env="SIMULATE")
-                except Exception:
-                    continue
+                # A failed lookup must raise, not count as flat: the scheduler
+                # records an ERROR rather than buying a held position again.
+                pf = ad.get_portfolio(acc_id=acc.acc_id, trd_env="SIMULATE")
                 for p in pf.positions:
                     if p.code == symbol:
                         return int(p.qty)
