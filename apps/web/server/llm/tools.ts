@@ -1066,17 +1066,23 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         mode: z.enum(['full', 'contribute_only']).default('contribute_only'),
         contribution: z.number().min(0).optional().describe('contribute_only: the amount to invest, in the base currency'),
         maxPerBucket: z.number().int().min(1).max(20).default(3).describe('Spread each bucket over at most this many of its largest holdings. Keep it low for small amounts.'),
+        candidates: z.array(z.object({
+          symbol: z.string().min(1),
+          bucket: z.enum(['equity', 'bond', 'crypto', 'real_estate', 'commodity', 'other']).optional().describe('Required for a symbol the broker account does not hold'),
+        })).max(20).optional().describe('Symbols to trade in place of the holdings of their bucket, in equal parts, e.g. [{symbol:"VOO",bucket:"equity"}]. Any the broker cannot trade come back in skipped with the reason.'),
       }),
-      execute: async ({ mode, contribution, maxPerBucket }) => {
-        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { buildRebalancePlan }] = await Promise.all([
+      execute: async ({ mode, contribution, maxPerBucket, candidates }) => {
+        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { buildRebalancePlan }, { loadRebalanceInputs }] = await Promise.all([
           import('../lib/portfolio-cache'),
           import('../lib/planning-settings'),
           import('../lib/planning'),
           import('../lib/planning-assistant'),
+          import('../lib/rebalance-inputs'),
         ])
         const [portfolio, settings] = await Promise.all([getFullPortfolioCached(), getPlanningSettings()])
         const summary = buildPlanningSummary(portfolio, settings)
-        return buildRebalancePlan(summary, portfolio, mode === 'full'
+        const inputs = await loadRebalanceInputs(portfolio, summary, candidates ?? [])
+        return buildRebalancePlan(summary, inputs, mode === 'full'
           ? { mode, maxPerBucket }
           : { mode, contribution: contribution ?? settings.monthly_contribution, maxPerBucket })
       },

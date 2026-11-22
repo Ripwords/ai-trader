@@ -107,7 +107,7 @@ export const TOOL_CATALOG: Record<NativeToolName, ToolCatalogEntry> = {
   },
   portfolio_rebalance_plan: {
     category: 'Portfolio',
-    what: 'The buys and sells that bring each bucket to your target, either by investing new money only or by a full rebalance. Places nothing.',
+    what: 'Whole-share buys and sells in your live broker account that bring each bucket toward your target, by investing new money only or by a full rebalance. Gives each trade its price, currency and exchange rate, the cash the broker holds per currency, and what is left unallocated. You can name the symbols to use. Places nothing.',
     useWhen: 'You want to know what to buy with this month\'s money, or what a full rebalance would take.',
     example: 'How should I invest RM 2,000 this month to get closer to my target?',
   },

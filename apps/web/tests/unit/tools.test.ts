@@ -117,6 +117,9 @@ const yahooBarsMock = vi.hoisted(() => ({
 vi.mock('../../server/lib/yahoo', () => ({
   resolveSymbol: alertsMock.resolveSymbolMock,
   getDailyBars: yahooBarsMock.getDailyBars,
+  toYahooSymbol: (s: string) => s.replace(/^US\./, ''),
+  getFxRate: async (from: string) => (from === 'USD' ? 4.5 : 1),
+  getYahooQuote: async (): Promise<null> => null,
 }))
 
 const remindersMock = vi.hoisted(() => ({
@@ -154,7 +157,9 @@ vi.mock('../../server/lib/push/subscriptions', () => ({
 const planningMock = vi.hoisted(() => {
   const portfolio = {
     net_worth_total: 100_000, net_worth_currency: 'MYR', cash_total: 0, positions_value: 100_000, total_pnl_pct: 0,
-    accounts: [], moomoo_paper: [], moomoo_live: [], ghostfolio_status: 'ok', moomoo_status: 'ok',
+    accounts: [], moomoo_paper: [], ghostfolio_status: 'ok', moomoo_status: 'ok', fetched_at: '2026-11-22T01:00:00.000Z',
+    moomoo_live: [{ symbol: 'US.VOO', quantity: 100, market_value: 20_000, pnl_pct: 12, account_id: '1', currency: 'USD' }],
+    moomoo_live_cash: { USD: 150 },
     positions: [
       { symbol: 'MMF', name: 'MMF', quantity: 10_000, market_price: 1, market_value: 10_000, investment: 10_000, allocation_pct: 10, pnl_pct: 0, asset_class: 'LIQUIDITY', data_source: null, sectors: [], currency: 'MYR' },
       { symbol: 'VOO', name: 'VOO', quantity: 100, market_price: 900, market_value: 90_000, investment: 80_000, allocation_pct: 90, pnl_pct: 12, asset_class: 'EQUITY', data_source: null, sectors: [], currency: 'USD' },
@@ -875,20 +880,33 @@ describe('tool catalogue', () => {
     const out = await (tools['portfolio_rebalance_plan'] as { execute: (args: unknown) => Promise<unknown> })
       .execute({ mode: 'full' })
     expect(out).toMatchObject({
-      trades: expect.arrayContaining([
-        expect.objectContaining({ symbol: 'VOO', side: 'sell', value: 20_000 }),
-        expect.objectContaining({ bucket: 'bond', symbol: null, side: 'buy', value: 20_000 }),
-      ]),
+      trades: [{ symbol: 'VOO', side: 'sell', shares: 4, price: 900, currency: 'USD', fx_rate: 4.5, value_native: 3_600, value: 16_200 }],
+      buckets: expect.arrayContaining([{ key: 'bond', actual_pct: 0, target_pct: 20, planned: 20_000, traded: 0, instruments: 0 }]),
+      broker_cash: { USD: 150 },
+      fetched_at: '2026-11-22T01:00:00.000Z',
     })
     expect(out).not.toHaveProperty('allocation_rows')
     expect(c.placeOrder).not.toHaveBeenCalled()
   })
 
   it('portfolio_rebalance_plan spends the saved monthly contribution when no amount is given', async () => {
-    planningMock.stored = { ...planningMock.stored, monthly_contribution: 1000, target_model: [{ key: 'cash', target_pct: 5 }, { key: 'equity', target_pct: 95 }, { key: 'bond', target_pct: 0 }] }
+    planningMock.stored = { ...planningMock.stored, monthly_contribution: 5000, target_model: [{ key: 'cash', target_pct: 5 }, { key: 'equity', target_pct: 95 }, { key: 'bond', target_pct: 0 }] }
     const tools = makeTools(fakeClient() as unknown as ApiClient)
     const out = await (tools['portfolio_rebalance_plan'] as { execute: (args: unknown) => Promise<unknown> })
       .execute({ mode: 'contribute_only' })
-    expect(out).toMatchObject({ trades: [expect.objectContaining({ symbol: 'VOO', side: 'buy', value: 1000 })] })
+    expect(out).toMatchObject({ contribution: 5000, unallocated: 950, trades: [expect.objectContaining({ symbol: 'VOO', side: 'buy', shares: 1, value: 4_050 })] })
+  })
+
+  it('portfolio_rebalance_plan reports a candidate it cannot place instead of proposing it', async () => {
+    planningMock.current = planningMock.withPension
+    try {
+      const tools = makeTools(fakeClient() as unknown as ApiClient)
+      const out = await (tools['portfolio_rebalance_plan'] as { execute: (args: unknown) => Promise<unknown> })
+        .execute({ mode: 'contribute_only', contribution: 5000, candidates: [{ symbol: 'GF_KWSP' }] })
+      expect(out).toMatchObject({ skipped: expect.arrayContaining([{ symbol: 'GF_KWSP', reason: 'locked' }]) })
+      expect(JSON.stringify((out as { trades: unknown[] }).trades)).not.toContain('GF_KWSP')
+    } finally {
+      planningMock.current = planningMock.portfolio
+    }
   })
 })
