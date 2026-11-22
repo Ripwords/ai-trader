@@ -22,13 +22,14 @@ describe('getYahooQuote', () => {
       regularMarketPreviousClose: 7.08,
       regularMarketChangePercent: 1.69,
       regularMarketTime: new Date('2026-10-17T09:00:00.000Z'),
+      currency: 'MYR',
     })
     const { getYahooQuote } = await import('../../server/lib/yahoo')
 
     const q = await getYahooQuote('MY.1066')
 
     expect(quote).toHaveBeenCalledWith('1066.KL')
-    expect(q).toMatchObject({ name: 'RHB Bank Berhad', lastPrice: 7.2, prevClosePrice: 7.08, updateTime: '2026-10-17T09:00:00.000Z' })
+    expect(q).toMatchObject({ name: 'RHB Bank Berhad', lastPrice: 7.2, prevClosePrice: 7.08, updateTime: '2026-10-17T09:00:00.000Z', currency: 'MYR' })
     expect(q?.changeRate).toBeCloseTo(0.0169, 6)
   })
 

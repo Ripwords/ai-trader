@@ -55,7 +55,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command
-from pydantic import Field
+from pydantic import BaseModel, Field
 from tradingagents.agents import (
     AgentState,
     create_aggressive_debator,
@@ -546,8 +546,8 @@ def _extract_tool_events(new_msgs: list) -> tuple[list[dict], list[dict]]:
 
 def _extract_debate(prev: dict, curr: dict) -> dict | None:
     """Detect a new bull/bear turn by comparing investment_debate_state.count."""
-    pdb = (prev.get("investment_debate_state") or {}) if isinstance(prev.get("investment_debate_state"), dict) else {}
-    cdb = (curr.get("investment_debate_state") or {}) if isinstance(curr.get("investment_debate_state"), dict) else {}
+    pdb = prev.get("investment_debate_state") or {}
+    cdb = curr.get("investment_debate_state") or {}
     pcount = pdb.get("count", 0)
     ccount = cdb.get("count", 0)
     if ccount <= pcount:
@@ -600,16 +600,15 @@ def _extract_synthesis(prev: dict, curr: dict) -> list[dict]:
     c_tr = curr.get("trader_investment_plan") or ""
     if c_tr and c_tr != p_tr:
         out.append({"stage": "trader-plan", "node": "Trader", "content": c_tr})
-    # The Research Manager's ``judge_decision`` on the bull/bear debate is
-    # also a distinct artifact — closing argument for the investment debate
-    # before the Trader picks it up.
+    # The Research Manager's ``judge_decision`` on the bull/bear debate is its
+    # own artifact only when it says something the plan doesn't: tradingagents
+    # 0.5.0 writes one reply to both fields, and the page would show it twice.
     pdb = prev.get("investment_debate_state") or {}
     cdb = curr.get("investment_debate_state") or {}
-    if isinstance(pdb, dict) and isinstance(cdb, dict):
-        pj = pdb.get("judge_decision") or ""
-        cj = cdb.get("judge_decision") or ""
-        if cj and cj != pj:
-            out.append({"stage": "judge-decision", "node": "Research Manager", "content": cj})
+    pj = pdb.get("judge_decision") or ""
+    cj = cdb.get("judge_decision") or ""
+    if cj and cj != pj and cj != c_inv:
+        out.append({"stage": "judge-decision", "node": "Research Manager", "content": cj})
     return out
 
 
@@ -635,8 +634,6 @@ def _extract_risk_debate(prev: dict, curr: dict) -> dict | None:
     """
     pdb = prev.get("risk_debate_state") or {}
     cdb = curr.get("risk_debate_state") or {}
-    if not (isinstance(pdb, dict) and isinstance(cdb, dict)):
-        return None
     pcount = pdb.get("count", 0)
     ccount = cdb.get("count", 0)
     if ccount <= pcount:
@@ -810,17 +807,22 @@ def _extract_decision(
     return decision
 
 
-def _state_snapshot(state: Any) -> dict:
-    """Coerce a stream chunk into a plain dict for diffing.
+_DEBATE_STATES = ("investment_debate_state", "risk_debate_state")
 
-    AgentState chunks are normally dicts in ``stream_mode="values"`` but some
-    LangGraph paths return pydantic models — handle both.
+
+def _state_snapshot(state: dict) -> dict:
+    """A graph state with the two debate states as plain dicts.
+
+    LangGraph hands over the top level as a dict, in a stream chunk and in a
+    checkpoint alike, but the debate states inside it are still upstream's
+    ``InvestDebateState`` and ``RiskDebateState`` models. Everything that
+    reads a snapshot (the extractors, the confidence judge, the final-state
+    record) reads dicts, so the models are converted here and nowhere else.
     """
-    if isinstance(state, dict):
-        return state
-    if hasattr(state, "model_dump"):
-        return state.model_dump()
-    return dict(state) if state else {}
+    return {
+        key: value.model_dump() if key in _DEBATE_STATES and isinstance(value, BaseModel) else value
+        for key, value in state.items()
+    }
 
 
 def _seed_valuation_context(
@@ -856,18 +858,16 @@ def _serialize_final_state(state: dict) -> dict:
         if v:
             out[f] = v
     inv = state.get("investment_debate_state") or {}
-    if isinstance(inv, dict):
-        out["investment_debate_state"] = {
-            k: inv.get(k, "") for k in ("bull_history", "bear_history", "judge_decision")
-        }
+    out["investment_debate_state"] = {
+        k: inv.get(k, "") for k in ("bull_history", "bear_history", "judge_decision")
+    }
     risk = state.get("risk_debate_state") or {}
-    if isinstance(risk, dict):
-        out["risk_debate_state"] = {
-            k: risk.get(k, "") for k in (
-                "aggressive_history", "conservative_history", "neutral_history",
-                "judge_decision",
-            )
-        }
+    out["risk_debate_state"] = {
+        k: risk.get(k, "") for k in (
+            "aggressive_history", "conservative_history", "neutral_history",
+            "judge_decision",
+        )
+    }
     return out
 
 
@@ -1052,14 +1052,6 @@ def _analyst_chunk(analyst: Analyst, prev: dict, curr: dict, reports: list[dict]
     return _normalize_chunk(analyst.label, values, finished=bool(mine))
 
 
-def _debate_opened(state: dict) -> bool:
-    """LangGraph streams the debate state as upstream's pydantic model;
-    hand-built snapshots carry a dict."""
-    debate = state.get("investment_debate_state")
-    turns = debate.get("count", 0) if isinstance(debate, dict) else getattr(debate, "count", 0)
-    return turns > 0
-
-
 async def _translate_states(
     states: AsyncIterator[Any],
     valuation: _RunValuation | None,
@@ -1113,7 +1105,8 @@ async def _translate_states(
         # The graph only takes its next step when this loop asks for the next
         # snapshot. Once the debate has opened the Research Manager can be
         # next, so waiting here still gets the valuation to that judge.
-        if valuation is not None and _debate_opened(curr):
+        debate_turns = (curr.get("investment_debate_state") or {}).get("count", 0)
+        if valuation is not None and debate_turns > 0:
             await valuation.ready()
 
         prev = curr

@@ -86,7 +86,7 @@ def test_negative_ttm_fcf_conflicting_with_positive_base_marks_dcf_invalid():
     assert "TTM to 2026-09-30" in r.dcf_invalid_reason
 
 
-def test_fair_value_below_20pct_of_price_is_out_of_regime():
+def test_fair_value_far_below_the_price_is_out_of_regime():
     r = value(_healthy("20000"))
     assert r.fair_value is None
     assert r.veto.triggered is False
@@ -103,12 +103,13 @@ def test_fair_value_above_5x_price_is_out_of_regime():
     assert rating == "strong-buy"
 
 
-def test_in_regime_overvaluation_still_vetoes():
-    # Fair value ~0.5x price: overvalued but inside the regime, so the
-    # existing 1.5x veto still applies.
+def test_in_regime_overvaluation_backed_by_own_multiples_still_vetoes():
+    # Fair value ~0.5x price and P/S 2.0 against 1.0 of its own: overvalued
+    # inside the regime on both counts, so the rating is capped.
     fv = value(_healthy("100")).fair_value
     assert fv is not None
-    r = value(_healthy(str((fv * 2).quantize(D("0.01")))))
+    r = value(_healthy(str((fv * 2).quantize(D("0.01")))).model_copy(
+        update={"avg_price_by_period": {"2025": D("50")}}))
     assert r.dcf_invalid_reason is None
     assert r.fair_value is not None
     assert r.veto.triggered is True

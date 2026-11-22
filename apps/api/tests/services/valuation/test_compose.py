@@ -12,6 +12,10 @@ def _history():
     ]
 
 
+# With 10 shares these put the stock's own P/S at 2.0 and 2.5.
+_FLAT_PAST_PRICES = {"2024": D("100"), "2021": D("100")}
+
+
 def test_value_full_quality_produces_three_scenarios():
     vi = ValuationInput(symbol="X", current_price=D("100"), fcf_base=D("100"),
                         net_debt=D("0"), shares_outstanding=D("10"), beta=D("1.2"),
@@ -81,8 +85,10 @@ def test_apply_veto_caps_buy_to_hold_when_grossly_overvalued():
     vi = ValuationInput(symbol="X", current_price=D("300"), fcf_base=D("100"),
                         net_debt=D("0"), shares_outstanding=D("10"), beta=D("1.0"),
                         history=_history(),
-                        metrics=Metrics(free_cash_flow=D("100"), shares_outstanding=D("10")))
-    res = value(vi)  # MoS ~ -65%
+                        metrics=Metrics(free_cash_flow=D("100"), shares_outstanding=D("10"),
+                                        ps_ratio=D("6")),
+                        avg_price_by_period=_FLAT_PAST_PRICES)
+    res = value(vi)  # MoS ~ -65%, P/S 6 against 2.25 of its own
     effective, veto = apply_veto("strong-buy", res)
     assert veto.triggered is True
     assert effective == "hold"
@@ -107,7 +113,9 @@ def test_veto_reason_says_1_5x_not_2x():
     vi = ValuationInput(symbol="X", current_price=D("300"), fcf_base=D("100"),
                         net_debt=D("0"), shares_outstanding=D("10"), beta=D("1.0"),
                         history=_history(),
-                        metrics=Metrics(free_cash_flow=D("100"), shares_outstanding=D("10")))
+                        metrics=Metrics(free_cash_flow=D("100"), shares_outstanding=D("10"),
+                                        ps_ratio=D("6")),
+                        avg_price_by_period=_FLAT_PAST_PRICES)
     res = value(vi)
     assert res.veto.triggered
     assert "1.5x" in (res.veto.reason or "")
@@ -172,13 +180,13 @@ def test_veto_branch_b_high_implied_growth():
         symbol="X", current_price=D("100"), fair_value=D("143"),
         margin_of_safety_pct=D("-0.30"),  # price is 1.3x fair value — branch (a) threshold is -0.50
         scenarios=[], assumptions_used=None,
-        multiples=None, historical_multiples=None,
+        multiples=Multiples(ps=D("6")), historical_multiples=Multiples(ps=D("2")),
         reverse_dcf_implied_growth=D("0.50"),  # well above 2.5 * 0.15 = 0.375
         data_quality="full",
         veto=Veto(triggered=False, reason=None, rating_cap=None),
         warnings=[],
     )
-    veto = _compute_veto(vi, fake_result)
+    veto, _ = _compute_veto(vi, fake_result)
     assert veto.triggered is True
     assert veto.rating_cap == "hold"
     assert "growth" in (veto.reason or "").lower()

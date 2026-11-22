@@ -170,6 +170,8 @@ describe('holdings summary', () => {
       asset_class: 'EQUITY', sectors: ['Technology'], currency: 'USD',
     })
     expect(full.positions[0]!.pnl_pct).toBeCloseTo(61.93)
+    expect(full.moomoo_live_cash).toEqual({ USD: 1_118 })
+    expect(Date.parse(full.fetched_at)).not.toBeNaN()
 
     const out = await getHoldingForSymbol('US.NVDA')
     expect(out.tracker_quantity).toBeCloseTo(10.0129)

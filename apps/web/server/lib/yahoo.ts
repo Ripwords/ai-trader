@@ -579,6 +579,8 @@ export interface YahooQuote {
   changeRate: number | null
   volume: number | null
   updateTime: string | null
+  /** The currency lastPrice is in. */
+  currency: string | null
 }
 
 interface RawQuote {
@@ -592,6 +594,7 @@ interface RawQuote {
   regularMarketChangePercent?: unknown
   regularMarketVolume?: unknown
   regularMarketTime?: unknown
+  currency?: unknown
 }
 
 // Yahoo's regularMarketChangePercent is a percent (1.5 = +1.5%).
@@ -616,6 +619,7 @@ export async function getYahooQuote(symbol: string): Promise<YahooQuote | null> 
       changeRate: pctToDecimal(num(q.regularMarketChangePercent)),
       volume: num(q.regularMarketVolume),
       updateTime: q.regularMarketTime instanceof Date ? q.regularMarketTime.toISOString() : null,
+      currency: typeof q.currency === 'string' ? q.currency : null,
     }
   } catch (err) {
     console.error('[yahoo] getYahooQuote failed', symbol, err)

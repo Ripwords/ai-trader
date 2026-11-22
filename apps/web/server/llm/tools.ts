@@ -1004,13 +1004,14 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         force: z.boolean().default(false).describe('Re-read the portfolio instead of the cached copy.'),
       }),
       execute: async ({ force }) => {
-        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }] = await Promise.all([
+        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { planForChat }] = await Promise.all([
           import('../lib/portfolio-cache'),
           import('../lib/planning-settings'),
           import('../lib/planning'),
+          import('../lib/planning-assistant'),
         ])
         const [portfolio, settings] = await Promise.all([getFullPortfolioCached({ force }), getPlanningSettings()])
-        return { settings, summary: buildPlanningSummary(portfolio, settings) }
+        return planForChat(buildPlanningSummary(portfolio, settings), settings)
       },
     }),
 
@@ -1040,6 +1041,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           amount: z.number().positive().describe('Monthly amount in the base currency'),
         })).optional(),
         remove_cashflow_ids: z.array(z.string()).optional(),
+        locked_symbols: z.array(z.string().min(1)).optional().describe('Holdings the owner cannot or will not trade, such as a pension. Replaces the whole list: send every symbol that stays locked, [] to unlock all. Locked holdings count toward net worth and are left out of allocation, concentration and rebalance trades.'),
       }),
       execute: async (patch) => {
         const [{ getFullPortfolioCached }, { getPlanningSettings, savePlanningSettings }, { buildPlanningSummary }, { applyPlanningPatch }] = await Promise.all([
@@ -1064,17 +1066,25 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         mode: z.enum(['full', 'contribute_only']).default('contribute_only'),
         contribution: z.number().min(0).optional().describe('contribute_only: the amount to invest, in the base currency'),
         maxPerBucket: z.number().int().min(1).max(20).default(3).describe('Spread each bucket over at most this many of its largest holdings. Keep it low for small amounts.'),
+        candidates: z.array(z.object({
+          symbol: z.string().min(1),
+          bucket: z.enum(['equity', 'bond', 'crypto', 'real_estate', 'commodity', 'other']).optional().describe('Required for a symbol the broker account does not hold'),
+        })).max(20).optional().describe('Symbols to trade in place of the holdings of their bucket, in equal parts, e.g. [{symbol:"VOO",bucket:"equity"}]. Any the broker cannot trade come back in skipped with the reason.'),
       }),
-      execute: async ({ mode, contribution, maxPerBucket }) => {
-        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { buildRebalancePlan }] = await Promise.all([
+      execute: async ({ mode, contribution, maxPerBucket, candidates }) => {
+        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { buildRebalancePlan }, { loadRebalanceInputs }] = await Promise.all([
           import('../lib/portfolio-cache'),
           import('../lib/planning-settings'),
           import('../lib/planning'),
           import('../lib/planning-assistant'),
+          import('../lib/rebalance-inputs'),
         ])
         const [portfolio, settings] = await Promise.all([getFullPortfolioCached(), getPlanningSettings()])
         const summary = buildPlanningSummary(portfolio, settings)
-        return { ...buildRebalancePlan(summary, portfolio, { mode, contribution, maxPerBucket }), allocation_rows: summary.allocation_rows }
+        const inputs = await loadRebalanceInputs(portfolio, summary, candidates ?? [])
+        return buildRebalancePlan(summary, inputs, mode === 'full'
+          ? { mode, maxPerBucket }
+          : { mode, contribution: contribution ?? settings.monthly_contribution, maxPerBucket })
       },
     }),
 

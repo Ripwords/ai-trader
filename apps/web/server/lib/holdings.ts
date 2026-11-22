@@ -119,9 +119,13 @@ export interface FullPortfolio {
   positions: FullPortfolioPosition[]
   moomoo_paper: FullPortfolioMoomooPosition[]
   moomoo_live: FullPortfolioMoomooPosition[]
+  /** Cash in the live accounts, in each currency it is held in. */
+  moomoo_live_cash: Record<string, number>
   ghostfolio_status: GhostfolioStatus
   /** 'failing': moomoo could not be reached; 'partial': an account could not be read. */
   moomoo_status: MoomooStatus
+  /** When the tracker and the broker were read (ISO). A cached copy keeps its time. */
+  fetched_at: string
 }
 
 export type MoomooStatus = 'ok' | 'partial' | 'failing'
@@ -402,6 +406,11 @@ export async function getFullPortfolio(): Promise<FullPortfolio> {
       account_id: s.acc_id,
       currency: p.currency ?? s.portfolio.currency ?? null,
     })))
+  const live = moomoo.slices.filter(s => !s.isPaper)
+  const liveCash: Record<string, number> = {}
+  for (const s of live) {
+    for (const [currency, amount] of Object.entries(nativeCash(s.portfolio))) liveCash[currency] = (liveCash[currency] ?? 0) + amount
+  }
   return {
     net_worth_total: ghos.net_worth_total,
     net_worth_currency: ghos.net_worth_currency,
@@ -411,9 +420,11 @@ export async function getFullPortfolio(): Promise<FullPortfolio> {
     accounts: ghos.accounts,
     positions: ghos.positions,
     moomoo_paper: project(moomoo.slices.filter(s => s.isPaper)),
-    moomoo_live: project(moomoo.slices.filter(s => !s.isPaper)),
+    moomoo_live: project(live),
+    moomoo_live_cash: liveCash,
     ghostfolio_status: ghos.status,
     moomoo_status: moomoo.status,
+    fetched_at: new Date().toISOString(),
   }
 }
 

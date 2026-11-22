@@ -95,19 +95,19 @@ export const TOOL_CATALOG: Record<NativeToolName, ToolCatalogEntry> = {
 
   planning_get: {
     category: 'Portfolio',
-    what: 'Your financial plan: target allocation against actual, goals, emergency fund, debts and monthly cashflow.',
+    what: 'Your financial plan: target allocation against actual over the assets you can invest, locked holdings such as a pension, goals, emergency fund, debts and monthly cashflow.',
     useWhen: 'You ask whether you are on track, how far off your ideal split you are, or before changing the plan.',
     example: 'Am I on track with my plan?',
   },
   planning_update: {
     category: 'Portfolio',
-    what: 'Changes your plan: ideal wealth split, expenses, emergency-fund months, monthly contribution, debts and cashflow. Saves at once and lists each change.',
+    what: 'Changes your plan: ideal wealth split, locked holdings, expenses, emergency-fund months, monthly contribution, debts and cashflow. Saves at once and lists each change.',
     useWhen: 'You want to set or tune your target allocation or plan inputs from the chat. Say "undo that" to put the old values back.',
     example: 'Set my target to 70% equity, 20% bonds, 10% cash',
   },
   portfolio_rebalance_plan: {
     category: 'Portfolio',
-    what: 'The buys and sells that bring each bucket to your target, either by investing new money only or by a full rebalance. Places nothing.',
+    what: 'Whole-share buys and sells in your live broker account that bring each bucket toward your target, by investing new money only or by a full rebalance. Gives each trade its price, currency and exchange rate, the cash the broker holds per currency, and what is left unallocated. You can name the symbols to use. Places nothing.',
     useWhen: 'You want to know what to buy with this month\'s money, or what a full rebalance would take.',
     example: 'How should I invest RM 2,000 this month to get closer to my target?',
   },
