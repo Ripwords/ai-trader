@@ -695,7 +695,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'research_start': tool({
       description:
-        'Start a research run (the multi-agent analyst → debate → trader → risk pipeline) on a symbol ASYNCHRONOUSLY. Returns immediately with a runId; the run finishes in the background (~30-90s) and the user gets a browser notification. Use this when the user asks to "research X", "kick off analysis on X", or wants to keep chatting while it runs. Use agents_debate instead when the user wants to watch the debate stream inline now, or when you need the verdict in this turn (before recommending a buy).',
+        'Start a research run (the multi-agent analyst → debate → trader → risk pipeline) on a symbol ASYNCHRONOUSLY. Returns immediately with a runId; the run finishes in the background (it takes minutes) and the user gets a browser notification. Use this when the user asks to "research X", "kick off analysis on X", or wants to keep chatting while it runs. Use agents_debate instead when the user wants to watch the debate stream inline now, or when you need the verdict in this turn (before recommending a buy).',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
         max_debate_rounds: z.number().int().min(1).max(3).default(1),
@@ -730,7 +730,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'research_get': tool({
       description:
-        "Fetch the assessment from a research run so you can cite the agents' actual verdict. Pass runId if you have it (e.g. from an auto-injected recent-run hint or research_start), otherwise pass symbol to get that ticker's latest completed run. Returns status, rating, confidence, rationale and age_days (whole days since the run finished); a run that is still running comes back with its status and no verdict yet, so this is also how to answer \"is it done yet\" after research_start. Use this whenever the user references a ticker that has a recent run, and before agents_debate when you are about to recommend a buy: a complete run with age_days of 7 or less is reused, not re-run.",
+        "Fetch the assessment from a research run so you can cite the agents' actual verdict. Pass runId if you have it (e.g. from an auto-injected recent-run hint or research_start), otherwise pass symbol to get that ticker's latest completed run. Returns the same verdict agents_debate does: rating, rating_cap ({original_rating, reason} when the valuation check lowered the rating), confidence (the probability confidence_measures describes, over 7 trading days, not conviction in the thesis), valuation, bull_case, bear_case, risk_dissent, a shortened rationale, run_url (the page with the full text) and age_days (whole days since the run finished). latest_attempt is a newer run for the symbol that failed or is still running. A run with no decision comes back with rating null and no_verdict_reason, so this is also how to answer \"is it done yet\" after research_start. Use this whenever the user references a ticker that has a recent run, and before agents_debate when you are about to recommend a buy: a complete run with age_days of 7 or less is reused, not re-run.",
       inputSchema: z.object({
         runId: z.string().optional(),
         symbol: z.string().optional(),
@@ -809,7 +809,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'agents_debate': tool({
       description:
-        'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker. Also call it, without being asked, before recommending that the user buy or add to a specific stock, unless research_get shows a complete run for it with age_days of 7 or less. Never one call per row of a screen: at most 2 per turn, for the names you are about to recommend.',
+        'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns one compact verdict: rating, rating_cap ({original_rating, reason} when the valuation check lowered the rating), confidence (the probability confidence_measures describes, over 7 trading days, not conviction in the thesis), valuation, bull_case, bear_case, risk_dissent, a shortened rationale and run_url, the page with the full text. rating null with no_verdict_reason means the run reached no decision. A run takes minutes, not seconds, and costs many times a normal reply, so tell the user in one line that it is starting before you call it. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker. Also call it, without being asked, before recommending that the user buy or add to a specific stock, unless research_get shows a complete run for it with age_days of 7 or less. Never one call per row of a screen: at most 2 per turn, for the names you are about to recommend.',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
         max_debate_rounds: z.number().int().min(1).max(3).default(1),
@@ -989,7 +989,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'planning_get': tool({
       description:
-        'The user\'s financial plan, the same as the /portfolio plan tab: target allocation (ideal wealth distribution by bucket: cash, equity, bond, crypto, real_estate, commodity, other) against actual, the buy/sell amount per bucket, emergency-fund and other goals, concentration, liabilities, monthly cashflow and savings rate. settings holds the editable inputs with the liability and cashflow ids planning_update needs. Call before suggesting or making any plan change.',
+        'The user\'s financial plan, the same as the /portfolio plan tab: target allocation (ideal wealth distribution by bucket: cash, equity, bond, crypto, real_estate, commodity, other) against actual, the buy/sell amount per bucket, emergency-fund and other goals, concentration, liabilities, monthly cashflow and savings rate. Percentages are of investable_total: net worth less the locked holdings, which are listed under locked. inputs holds the editable values the rest does not show, "not set" where the user has entered none; liabilities and cashflow items carry the ids planning_update needs. Call before suggesting or making any plan change.',
       inputSchema: z.object({
         force: z.boolean().default(false).describe('Re-read the portfolio instead of the cached copy.'),
       }),
@@ -1007,7 +1007,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'planning_update': tool({
       description:
-        'Change the user\'s financial plan settings: target allocation, monthly expenses, emergency-fund months, monthly contribution, liabilities and cashflow items. Call only when the user asks for a change, or agrees to one you proposed; to suggest a target model, describe it and wait for a yes. Send only the fields that change: target_model merges into the current model and must then total 100% (set every bucket you move money between). Upserts with an id replace that row; without one they add a row. It saves at once and returns each change with its before and after value: tell the user what changed, and to undo, call it again with the before values. It never places orders; for trades, use portfolio_rebalance_plan and then trade_place_order.',
+        'Change the user\'s financial plan settings: target allocation, monthly expenses, emergency-fund months, monthly contribution, liabilities, cashflow items and the locked holdings (locked_symbols). Call only when the user asks for a change, or agrees to one you proposed; to suggest a target model, describe it and wait for a yes. Send only the fields that change: target_model merges into the current model and must then total 100% (set every bucket you move money between). Upserts with an id replace that row; without one they add a row. It saves at once and returns each change with its before and after value: tell the user what changed, and to undo, call it again with the before values. It never places orders; for trades, use portfolio_rebalance_plan and then trade_place_order.',
       inputSchema: z.object({
         target_model: z.array(z.object({
           key: z.enum(['cash', 'equity', 'bond', 'crypto', 'real_estate', 'commodity', 'other']),
@@ -1051,7 +1051,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'portfolio_rebalance_plan': tool({
       description:
-        'Concrete trades that move the portfolio to the saved target allocation, in the base currency. mode=full buys and sells every bucket to its target, spreading each bucket over its holdings by size; mode=contribute_only spends new money (the monthly contribution unless contribution is given) on underweight buckets and never sells, which avoids realising gains. symbol null means the bucket holds nothing yet: suggest candidates, never a ticker as if it were held. Read-only: it places nothing. Present the trades as a plan; place any only when the user asks, one at a time with trade_place_order (paper unless they say live).',
+        'Whole-share trades in the live broker account that move the portfolio toward the saved target allocation. mode=full buys and sells every bucket to its target; mode=contribute_only spends new money (the monthly contribution unless contribution is given) on underweight buckets and never sells, which avoids realising gains. A bucket\'s amount goes to its largest broker holdings by size, or in equal parts to the candidates given for it. Each trade has shares, price, currency, fx_rate, value_native (in that currency) and value (base currency). skipped lists what could not trade and why (below_one_share carries one_share, the base-currency cost of a share); buckets[].instruments is how many symbols the bucket could trade; unallocated is contribution no whole share spends; currencies[].buy against broker_cash shows what must be converted; fetched_at is when prices were read. Locked holdings are never traded. Read-only: it places nothing. Present the trades as a plan; place any only when the user asks, one at a time with trade_place_order (paper unless they say live).',
       inputSchema: z.object({
         mode: z.enum(['full', 'contribute_only']).default('contribute_only'),
         contribution: z.number().min(0).optional().describe('contribute_only: the amount to invest, in the base currency'),

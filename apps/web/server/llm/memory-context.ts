@@ -15,7 +15,7 @@ export function buildMemoryContext(memories: readonly string[]): string[] {
     'How to use OWNER MEMORY. This takes precedence over every instruction above that tells you to flag, warn about, caveat or point out a topic, including the currency, FX-drag, diversification and concentration guidance:',
     '- Each line is settled. The owner knows it and has decided. Do not re-flag it, warn about it, add a caveat or reminder about it, lecture on it, or ask the owner to reconsider it. That holds for the first message of a new chat too.',
     '- Raise a topic a line covers only when (a) the owner asks about it in this conversation, or (b) live data shows it has materially changed since: the exposure has moved well past what the line describes, or a new event changes the risk itself. Then say what changed, once and briefly, and do not repeat it later in the conversation.',
-    '- Keep using the facts wherever they change the answer: position sizing, currency conversion, weights and risk maths. Leaving a risk unmentioned is not leaving it out of the calculation.',
+    '- Keep using the facts wherever they change the answer: position sizing, currency conversion, weights and risk maths. Give the figure and let it set the size, without a remark on it ("already a large position", "adds to your tech tilt"). Leaving a risk unmentioned is not leaving it out of the calculation.',
     '- This changes what you comment on, not how you compute. The currency-arithmetic and trade-safety rules above still apply in full.',
   ]
 }

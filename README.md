@@ -270,9 +270,9 @@ The guide's text lives in `apps/web/server/llm/tool-catalog.ts`. `tests/unit/too
 Before the assistant tells you to buy or add to a specific stock, or sizes a new buy, it backs the call with an agents debate verdict for that ticker. You do not have to ask for a deep dive.
 
 - **What triggers it.** An actionable recommendation: "buy X", "add to X", naming X as the pick, or sizing a buy. A price, a valuation, a chart, news, a screen ranking, a hold or sell call, a rebalance plan's bucket split, and broad index, bond or money-market funds do not. If you have already decided and ask for the order to be placed, it places the order (after the usual confirmation) with no debate.
-- **Reuse.** A completed run for the ticker that finished 7 days ago or less is reused and quoted with its age. An older or failed run, or one that predates the company's latest earnings or material news, is replaced by a new debate.
-- **Cost and time.** A debate takes about 30 to 60 seconds or more and costs more than a normal reply. The assistant forms its view with the fast tools first and debates only when that view is buy or add. A screen never starts one debate per row: it shortlists, then debates at most 2 names in a turn. Other survivors are listed as "candidates, not debated".
-- **What you see.** The debate card runs in the reply and lists each step as it starts. When the run ends, the card shows the rating, the rating the agents reached first if the valuation capped it ("capped from buy") with the cap's reason, the bull case and the bear case, the Risk Judge's rationale, and a link to the run page. The percentage beside the rating is the confidence judge's probability that the call holds over the next 7 trading days (a buy beats SPY by more than 0.5 percentage points, a hold stays within 1 point of SPY, a reduce or sell trails by more than 0.5). It is not conviction in the long-term thesis. A run whose judge returned no number shows "no confidence score". A long rationale is shortened to its key points on the card; the run page has the full text. The recommendation states the verdict's rating, confidence and one-line reason. If the verdict is hold, reduce or sell where the assistant leaned buy, the reply says so at the top and follows the verdict, or names what the debate missed and labels the call as against the debate.
+- **Reuse.** The assistant looks for an existing run before it starts a debate. A completed run for the ticker that finished 7 days ago or less is reused and quoted with its age. An older or failed run, or one that predates the company's latest earnings or material news, is replaced by a new debate.
+- **Cost and time.** A debate takes minutes, not seconds, and costs many times a normal reply. Before it starts one, the assistant says so in one line, so you know why the reply is waiting. The assistant forms its view with the fast tools first and debates only when that view is buy or add. A screen never starts one debate per row: it shortlists, then debates at most 2 names in a turn. Other survivors are listed as "candidates, not debated".
+- **What you see.** The debate card runs in the reply and lists each step as it starts. When the run ends, the card shows the rating, the rating the agents reached first if the valuation capped it ("capped from buy") with the cap's reason, the bull case and the bear case, the Risk Judge's rationale, and a link to the run page. The percentage beside the rating is the confidence judge's probability that the call holds over the next 7 trading days (a buy beats SPY by more than 0.5 percentage points, a hold stays within 1 point of SPY, a reduce or sell trails by more than 0.5). It is not conviction in the long-term thesis. A run whose judge returned no number shows "no confidence score". A long rationale is shortened to its key points on the card; the run page has the full text. The recommendation states the rating and its one-line reason, a cap and why when there was one, the bull and the bear case in a line each, the percentage named as a 7-trading-day probability, and a link to the run. If the verdict is hold, reduce or sell where the assistant leaned buy, the reply says so at the top and follows the verdict, or names what the debate missed and labels the call as against the debate.
 - **When the debate fails.** The reply says so, and either gives no recommendation or labels it "not debate-backed".
 - **What the assistant reads.** `agents_debate` and `research_get` return the same verdict for a run, built from what the run stored: the rating; the pre-cap rating and the veto reason when the valuation capped it; the confidence, what it measures, and why it is missing when it is; the valuation (fair value, margin of safety and data quality, or why the DCF was discarded or unavailable); the bull case, the bear case and the risk analyst who dissented from the rating, each cut to the sentences that carry the most figures; the rationale cut the same way to about 1,500 characters; the run's status and age in days; and the run page's address. Runs stored before the debates were recorded have no bull case, bear case or dissent. For those the verdict says so and gives the research manager's summary of both sides. `research_get` by symbol returns the latest completed run. A newer attempt that failed or is still running is reported beside it and does not replace it. The symbol matches with or without its market prefix (`AMZN` finds a run stored as `US.AMZN`).
 
@@ -493,6 +493,34 @@ cd apps/web && pnpm exec playwright test
 ```
 
 The e2e test passes if either a chart canvas OR an inline error message appears — so it works with or without a working model key.
+
+### Chat evals (real model)
+
+`apps/web/tests/eval/` measures the chat prompts against the models chosen in Settings. The tools are stubbed with fixed data, so nothing is read from the broker, no order is placed and no debate is run. The evals are skipped unless `EVAL_LLM=1` is set, and they spend API credit: one pass of the three `chat-*` suites at the default 3 runs measured about 140 model requests.
+
+```sh
+cd apps/web && EVAL_LLM=1 DATABASE_URL=postgresql://<user>:<password>@localhost:5435/<db> ENCRYPTION_KEY=<key> pnpm exec vitest run tests/eval
+```
+
+`DATABASE_URL` must reach the compose Postgres from the host (port 5435), because the model choice and provider keys are read from it. `ENCRYPTION_KEY` is the one in `.env`.
+
+| File | What it measures |
+|---|---|
+| `portfolio-answers.eval.test.ts` | Portfolio answers use the right figures and currency basis. |
+| `chat-settled-risks.eval.test.ts` | With memories saying the USD exposure and tech tilt are settled, replies do not warn about them again and still carry the figures. Reports reply length per scenario. |
+| `chat-buy-debate.eval.test.ts` | A debate (or a reused fresh run) backs a buy recommendation, no debate runs for a fact, a sell-side question or an order you already decided on, and a disagreeing verdict leads the reply. A reply that cites a verdict says when the valuation capped it and why, gives the bull and the bear case, names the 7-day horizon of the percentage and links the run. |
+| `chat-memory-extract.eval.test.ts` | The memory extractor saves standing preferences and nothing else. |
+
+Each scenario runs several times. A gated check must hold in at least two thirds of the runs; observations are reported and never fail the test. One quick-model request per judged reply grades what a regular expression cannot (is this sentence a warning, does the reply open with the answer).
+
+| Variable | Effect |
+|---|---|
+| `EVAL_RUNS` | Runs per scenario. Default 3. |
+| `EVAL_REPORT_DIR` | Writes one JSON file per suite with every reply, tool call, check result and the request count. |
+| `EVAL_CHAT_SYSTEM_FILE` | Uses the text in this file as the chat system prompt, to compare a prompt version against the current default. |
+| `EVAL_REPLAY_DIR` | Re-scores the replies saved in a report directory instead of calling the model, after a check changes. |
+
+Add `-t "<scenario name>"` to run one scenario.
 
 `scripts/repro/` holds runtime checks for the streaming behaviour above (dropped chat connections, long silent debate steps, api restarts mid-run, resume). They run against the compose stack; see `scripts/repro/README.md`. The debate checks restart the api with `AGENTS_STUB_RUN_SECONDS` set, which swaps the TradingAgents graph for a stub that sleeps that long and decides `hold` without calling a model. Never set it in `.env`.
 

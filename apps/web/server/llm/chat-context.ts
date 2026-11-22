@@ -46,7 +46,7 @@ export function buildSystemPrompt(
     ghostfolioIntro,
     holdingsGuidance,
     ...(recallContext
-      ? ['', 'RECENT RESEARCH RUNS (for tickers in the latest message):', recallContext]
+      ? ['', 'RECENT RESEARCH RUNS (the latest complete run for each researched stock the latest message names; the percentage is a 7-trading-day probability, not conviction):', recallContext]
       : []),
     ...buildMemoryContext(parts.memories ?? []),
   ].join('\n')
