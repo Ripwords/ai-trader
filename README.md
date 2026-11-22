@@ -13,6 +13,7 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 - Ask `any news on NVDA?` → Tavily-powered news cards.
 - Ask `show me my portfolio` → real positions + cash from your paper or live moomoo account; Ghostfolio MCP can add tracker/reconciliation context when configured.
 - Ask for a full ticker analysis → TradingAgents runs analysts, bull/bear debate, risk review, and a portfolio-manager verdict.
+- Ask `should I buy NVDA?` or `which of these should I add to?` → before the assistant recommends buying or adding to a stock, it gets a debate verdict for that ticker without being asked (see [Debate before a buy](#debate-before-a-buy)).
 - Ask `notify me when NVDA hits 150` or `remind me to check NVDA earnings on Friday 9am` → an email and a push notification when it fires (see [Notifications & reminders](#notifications--reminders)).
 - Manage paper algo strategies from `/algo`; scheduler order placement is paper-only. **go live (paper)** stays disabled until the strategy is saved and its latest backtest clears the blocking checks, and the reason is printed under the button. Saving a change to anything but the name discards the backtest on screen, because it was run on the old code or settings; run a new one before going live. The gate is in the page only: the api does not check backtests. A failed go-live, stop, or kill-switch request shows its error next to the control. Passing checks fold into one "all N checks passed" line. Below 1024px the strategy assistant opens from the **chat** button as a side panel (Esc closes it); order ids sit under **technical details** in the signals table.
 
@@ -72,7 +73,7 @@ Settings → **prompts** lists the instructions each model gets, grouped as Chat
 
 - **What you can edit.** Chat: the chat system prompt, the moomoo rules and the chat titles prompt. Research: the risk report. News: the search angles. Algo: the strategy assistant. Agents debate: the 13 TradingAgents node prompts (the four analysts, bull and bear researchers, research manager, trader system and request, the three risk analysts, risk manager) and the confidence judge.
 - **When edits apply.** The next chat message, report or debate run uses the saved text. A run already in progress keeps the text it started with.
-- **Defaults.** A prompt you have not edited follows the built-in default, so it picks up future changes to it. Saving text identical to the default clears the override. **reset to default** (shown only on a modified prompt) asks for confirmation, then deletes your text.
+- **Defaults.** A prompt you have not edited follows the built-in default, so it picks up future changes to it. A **modified** prompt keeps your text and does not pick them up: after an upgrade that changes a default (for example the chat prompt's reply style and debate-before-a-buy rules), reset the prompt or copy the new sections from the default shown in the editor. Saving text identical to the default clears the override. **reset to default** (shown only on a modified prompt) asks for confirmation, then deletes your text.
 - **What the chat prompt does not include.** The server appends a runtime block to the chat prompt on every turn, after your text: the current date and time in the timezone set under Settings → Notifications, the Ghostfolio status, recent research runs for the tickers you mention, and the slash-command directive. That block is not editable.
 - **Placeholders (agents debate only).** Debate prompts are Python format templates. The editor shows the `{placeholders}` the default uses as chips; your text may use any of them and no others. Any other literal brace must be doubled (`{{` or `}}`). Unknown placeholders and stray braces are rejected when you save, with the reason shown under the text.
 - **Contract lines.** The risk manager's output must contain `FINAL TRANSACTION PROPOSAL` and the confidence judge's must ask for a `CONFIDENCE:` line, because the debate parses them. Removing that wording shows a warning but does not block the save; the run may then fail to read a decision or a confidence score.
@@ -226,7 +227,7 @@ Type `/tools` in chat to see every tool the assistant can use, grouped by purpos
 | **Trading** | to place, change or cancel an order. Paper by default; a live order needs the exact confirmation phrase the assistant gives you. |
 | **Market data** | a price now, a chart, or the order book for one symbol. |
 | **Research** | to dig into one company: what its last earnings really said (`earnings_release`, `earnings_surprise`, `earnings_call_transcript`, `estimate_revisions`), DCF valuation, cheapest names on your watchlist, technicals, a full research memo, a sharp first-principles question, or whether your thesis still holds. |
-| **Agent research runs** | a rated verdict from the multi-agent pipeline. Watch it here ("run the agents on NVDA") or start it in the background and get notified ("research AMD in the background"). Ask "is it done?" or "what did the agents conclude?" afterwards. |
+| **Agent research runs** | a rated verdict from the multi-agent pipeline. Watch it here ("run the agents on NVDA") or start it in the background and get notified ("research AMD in the background"). Ask "is it done?" or "what did the agents conclude?" afterwards. The assistant also runs one on its own before it recommends a buy. |
 | **News & web** | why a stock moved (ticker plus macro and peer news), news on a theme or sector, or a general web search. |
 | **Watchlist** | to see, add or remove watchlist symbols. |
 | **Alerts & reminders** | a price alert (above, below, or a big daily move) or a timed reminder, delivered by email and push. |
@@ -238,9 +239,25 @@ Slash commands run a specific tool directly: `/investment-research <symbol>`, `/
 
 The guide's text lives in `apps/web/server/llm/tool-catalog.ts`. `tests/unit/tool-catalog.test.ts` and the typecheck fail when a tool has no catalog entry, so a new tool cannot ship without its "use it when" line.
 
+#### Debate before a buy
+
+Before the assistant tells you to buy or add to a specific stock, or sizes a new buy, it backs the call with an agents debate verdict for that ticker. You do not have to ask for a deep dive.
+
+- **What triggers it.** An actionable recommendation: "buy X", "add to X", naming X as the pick, or sizing a buy. A price, a valuation, a chart, news, a screen ranking, a hold or sell call, a rebalance plan's bucket split, and broad index, bond or money-market funds do not. If you have already decided and ask for the order to be placed, it places the order (after the usual confirmation) with no debate.
+- **Reuse.** A completed run for the ticker that finished 7 days ago or less is reused and quoted with its age. An older or failed run, or one that predates the company's latest earnings or material news, is replaced by a new debate.
+- **Cost and time.** A debate takes about 30 to 60 seconds or more and costs more than a normal reply. The assistant forms its view with the fast tools first and debates only when that view is buy or add. A screen never starts one debate per row: it shortlists, then debates at most 2 names in a turn. Other survivors are listed as "candidates, not debated".
+- **What you see.** The debate card runs in the reply. The recommendation states the verdict's rating, confidence and one-line reason. If the verdict is hold, reduce or sell where the assistant leaned buy, the reply says so at the top and follows the verdict, or names what the debate missed and labels the call as against the debate.
+- **When the debate fails.** The reply says so, and either gives no recommendation or labels it "not debate-backed".
+
+These rules are instructions to the model in the chat system prompt and the tool descriptions, not a hard check in code, so a model can still miss one. If you have edited the chat system prompt, see **Defaults** under [Editable prompts](#editable-prompts).
+
+#### Reply style
+
+Replies lead with the answer and skip the preamble, the restated question, the list of tools used, repeated caveats and generic disclaimers. Numbers keep their units and currencies, and caveats that matter (currency basis, partial coverage, screen gaps, a failed debate) stay, stated once. Three or more comparable items come back as a table. Memos you ask for (`/investment-research`, `/dyp-ask`) keep their sections.
+
 #### Developer reference
 
-Tools are defined in `apps/web/server/llm/tools.ts` and the routing rules in `apps/web/server/llm/chat-context.ts`. A unit test (`tests/unit/chat-prompt-tool-names.test.ts`) fails when the prompt or a slash command names a tool that no longer exists.
+Tools are defined in `apps/web/server/llm/tools.ts`. The routing rules are the chat system prompt, whose default is `CHAT_SYSTEM_DEFAULT` in `apps/web/server/lib/prompts/defaults.ts`; `apps/web/server/llm/chat-context.ts` appends the runtime block to it. A unit test (`tests/unit/chat-prompt-tool-names.test.ts`) fails when the prompt or a slash command names a tool that no longer exists.
 
 | Group | Tools |
 |---|---|
