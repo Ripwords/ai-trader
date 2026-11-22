@@ -25,6 +25,8 @@ import { chatPresence } from '../lib/chat-presence'
 import { appPublicUrl, enqueueNotificationSafely } from '../lib/notifications'
 import { chatReplyMessage } from '../lib/notifications-messages'
 import { trimHistory } from '../llm/chat-history'
+import { listMemories } from '../lib/chat-memory'
+import { rememberFromTurn } from '../lib/chat-memory-extract'
 
 interface ChatBody {
   messages?: Array<{ id?: string; role: string; parts?: unknown[]; [k: string]: unknown }>
@@ -132,7 +134,7 @@ export default defineEventHandler(async (event) => {
           return
         }
         const client = getApiClient()
-        const [[ghostfolioTools, ghostfolioStatus], recallContext, promptParts] = await Promise.all([
+        const [[ghostfolioTools, ghostfolioStatus], recallContext, promptParts, memories] = await Promise.all([
           within(
             Promise.all([getGhostfolioTools(), getGhostfolioStatus()]),
             MCP_PREP_MS,
@@ -141,6 +143,7 @@ export default defineEventHandler(async (event) => {
           buildRecall(client, ownerId, newestUserText),
           // Missing parts fall back to the default text, without the current time.
           within<Partial<ChatPromptInputs>>(loadChatPromptInputs(), PROMPT_PREP_MS, {}),
+          loadMemories(ownerId),
         ])
         const tools = stopOnAbort({ ...makeTools(client, { event, latestUserText: newestUserText, latestUserMessageId: newestUser?.id }), ...ghostfolioTools })
 
@@ -153,7 +156,7 @@ export default defineEventHandler(async (event) => {
 
         const { slashDispatch, stepToolChoice } = await import('../llm/research/dispatch')
         const dispatch = slashDispatch(newestUserText)
-        const basePrompt = buildSystemPrompt(ghostfolioStatus, recallContext, promptParts)
+        const basePrompt = buildSystemPrompt(ghostfolioStatus, recallContext, { ...promptParts, memories })
         const systemPrompt = dispatch ? `${basePrompt}\n\n${dispatch.directive}` : basePrompt
 
         const maxSteps = resolveMaxSteps(body.maxSteps)
@@ -204,6 +207,10 @@ export default defineEventHandler(async (event) => {
         // with no parts, so a reload shows why instead of an unanswered question.
         if (ending || saved.parts.length > 0) await appendMessages(thread, [saved])
         if (!isAborted && chatPresence.shouldNotify(thread, new Date())) await notifyReply(ownerId, thread, saved)
+        // Not awaited: the stream closes without waiting for the extraction call.
+        if (resolved && !isAborted) {
+          void rememberFromTurn({ ownerId, userText: newestUserText, priorAssistantText: replyBefore(body.messages ?? [], newestUser) })
+        }
       },
     }), { requestId: typeof body.requestId === 'string' ? body.requestId : undefined })
   } catch (err) {
@@ -248,6 +255,13 @@ function lastText(parts: ReadonlyArray<unknown>): string {
   return ''
 }
 
+/** The assistant's answer the newest user message replies to, or '' on a first message. */
+function replyBefore(messages: NonNullable<ChatBody['messages']>, newestUser: NonNullable<ChatBody['messages']>[number] | undefined): string {
+  const upTo = newestUser ? messages.lastIndexOf(newestUser) : messages.length
+  const prior = messages.slice(0, upTo).reverse().find(m => m.role === 'assistant')
+  return lastText(prior?.parts ?? [])
+}
+
 // A slow Ghostfolio or watchlist must not hold up the reply. mcp.ts bounds the
 // connect; this also covers listing tools on a server that accepted the
 // connection and then went quiet.
@@ -255,6 +269,7 @@ const MCP_PREP_MS = 3_000
 const WATCHLIST_MS = 2_000
 const RECALL_MS = 800
 const PROMPT_PREP_MS = 2_000
+const MEMORY_MS = 2_000
 
 // Surface recent research runs for tickers in the user's latest message so the
 // model references the agents' prior assessment. Best-effort.
@@ -268,6 +283,17 @@ async function buildRecall(client: ReturnType<typeof getApiClient>, userId: stri
     console.error('[chat] recall build failed', err)
     return ''
   }
+}
+
+/** The owner's saved memories for the system prompt. A reply without them beats no reply. */
+function loadMemories(ownerId: string): Promise<string[]> {
+  const read = listMemories(ownerId)
+    .then(memories => memories.map(m => m.content))
+    .catch((err: unknown) => {
+      console.error('[chat] memories unreadable; replying without them', err)
+      return []
+    })
+  return within(read, MEMORY_MS, [])
 }
 
 function busy() {

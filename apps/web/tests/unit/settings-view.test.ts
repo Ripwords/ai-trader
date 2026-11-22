@@ -10,6 +10,7 @@ describe('parseSettingsTab', () => {
   it('reads a known tab and falls back to models', () => {
     expect(parseSettingsTab('prompts')).toBe('prompts')
     expect(parseSettingsTab('notifications')).toBe('notifications')
+    expect(parseSettingsTab('memory')).toBe('memory')
     expect(parseSettingsTab('nope')).toBe('models')
     expect(parseSettingsTab(undefined)).toBe('models')
   })

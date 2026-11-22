@@ -1,5 +1,6 @@
 import type { GhostfolioStatus } from './mcp'
 import { webDefault } from '../lib/prompts/registry'
+import { buildMemoryContext } from './memory-context'
 
 export interface SystemPromptParts {
   /** Editable chat body (Settings → Prompts `chat.system`). Defaults to the registry text. */
@@ -8,6 +9,8 @@ export interface SystemPromptParts {
   moomooRules?: string
   /** The `Current date/time: …` line in the user's timezone. */
   currentDateTime?: string
+  /** The owner's saved memories (Settings → memory), shared by every thread. */
+  memories?: readonly string[]
 }
 
 /**
@@ -45,6 +48,7 @@ export function buildSystemPrompt(
     ...(recallContext
       ? ['', 'RECENT RESEARCH RUNS (for tickers in the latest message):', recallContext]
       : []),
+    ...buildMemoryContext(parts.memories ?? []),
   ].join('\n')
 }
 

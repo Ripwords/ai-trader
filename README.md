@@ -64,16 +64,29 @@ Settings (`/settings`, also reachable from the `model · …` badge in the heade
 
 Behind a reverse proxy, long chat and research streams can sit quiet between tokens. nginx drops a proxied response after 60 s of silence by default. Raising `proxy_read_timeout` (for example to `600s`) on the location that serves the web app is optional but avoids cut-off replies.
 
-Settings has three tabs: **models** (the providers and models above), **notifications**, and **prompts**. The open tab is kept in the URL (`/settings?tab=prompts`).
+Settings has four tabs: **models** (the providers and models above), **notifications**, **memory**, and **prompts**. The open tab is kept in the URL (`/settings?tab=prompts`).
+
+## Chat memory
+
+The assistant keeps a short list of facts about you that every chat thread shares, so a new conversation does not re-raise what you have already settled. Settings → **memory** shows the list.
+
+- **What it is for.** Standing preferences, intentional decisions, risks you already accept, constraints and goals. Example: "The owner's holdings are mostly USD against a MYR base currency; this is intentional and needs no warning."
+- **How the assistant uses it.** Every chat message gets the full list. A risk recorded as intentional or already known is not flagged again and gets no caveat, even where the chat prompt says to flag it. The assistant raises it again only if you ask, or if the live data shows it has materially changed since. The fact still counts in the numbers: position sizing, currency arithmetic and the trade-safety rules are unchanged.
+- **Learned from chat.** After each reply finishes, the quick model reads your message and decides whether it states something lasting. It saves only what you said. The assistant's own words and tool output are never a source. It can add a memory or rewrite one that your message corrects; it never deletes one. Questions, one-off requests, prices and position sizes are not saved. A reply you stop, and a slash command, save nothing.
+- **Added by you.** **add memory** saves a fact in your own words. The pencil edits one and the bin deletes it after a confirmation. Each row says whether it was **added by you** or **learned from chat**. Editing a learned memory makes it yours.
+- **When changes apply.** The next chat message uses the saved list. A memory learned from a message is available from the message after it.
+- **Limits.** At most 30 memories of at most 240 characters each. When the list is full, **add memory** is disabled and the assistant only rewrites existing memories. Text identical to a saved memory is rejected.
+- **Cost and failures.** Each chat message makes one extra quick-model call, listed on `/usage` under the source `chat-memory`. It runs after the reply and never delays it. If the call fails, nothing is saved from that message and the server logs a warning. If the list cannot be read within 2 s, the reply goes ahead without it.
+- **The prompt behind it.** Settings → prompts → **Chat memory** is the instruction that decides what is worth saving.
 
 ## Editable prompts
 
 Settings → **prompts** lists the instructions each model gets, grouped as Chat, Research, News, Algo and Agents debate. Click a row to open its text. A **modified** badge marks a prompt you have edited.
 
-- **What you can edit.** Chat: the chat system prompt, the moomoo rules and the chat titles prompt. Research: the risk report. News: the search angles. Algo: the strategy assistant. Agents debate: the 13 TradingAgents node prompts (the four analysts, bull and bear researchers, research manager, trader system and request, the three risk analysts, risk manager) and the confidence judge.
+- **What you can edit.** Chat: the chat system prompt, the moomoo rules, the chat titles prompt and the chat memory prompt. Research: the risk report. News: the search angles. Algo: the strategy assistant. Agents debate: the 13 TradingAgents node prompts (the four analysts, bull and bear researchers, research manager, trader system and request, the three risk analysts, risk manager) and the confidence judge.
 - **When edits apply.** The next chat message, report or debate run uses the saved text. A run already in progress keeps the text it started with.
 - **Defaults.** A prompt you have not edited follows the built-in default, so it picks up future changes to it. Saving text identical to the default clears the override. **reset to default** (shown only on a modified prompt) asks for confirmation, then deletes your text.
-- **What the chat prompt does not include.** The server appends a runtime block to the chat prompt on every turn, after your text: the current date and time in the timezone set under Settings → Notifications, the Ghostfolio status, recent research runs for the tickers you mention, and the slash-command directive. That block is not editable.
+- **What the chat prompt does not include.** The server appends a runtime block to the chat prompt on every turn, after your text: the current date and time in the timezone set under Settings → Notifications, the Ghostfolio status, recent research runs for the tickers you mention, your saved memories with the rule for using them (see [Chat memory](#chat-memory)), and the slash-command directive. That block is not editable.
 - **Placeholders (agents debate only).** Debate prompts are Python format templates. The editor shows the `{placeholders}` the default uses as chips; your text may use any of them and no others. Any other literal brace must be doubled (`{{` or `}}`). Unknown placeholders and stray braces are rejected when you save, with the reason shown under the text.
 - **Contract lines.** The risk manager's output must contain `FINAL TRANSACTION PROPOSAL` and the confidence judge's must ask for a `CONFIDENCE:` line, because the debate parses them. Removing that wording shows a warning but does not block the save; the run may then fail to read a decision or a confidence score.
 - **Limits.** A prompt cannot be empty or longer than 50,000 characters.
