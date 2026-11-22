@@ -31,6 +31,21 @@ describe('chat.system default: debate before a buy', () => {
     expect(rule()).toMatch(/age_days is 7 or less/)
   })
 
+  it('looks for a reusable run before every debate', () => {
+    expect(rule()).toMatch(/call research_get with the symbol before any agents_debate call/)
+  })
+
+  it('tells the owner a debate is starting and that it takes minutes', () => {
+    expect(rule()).toMatch(/in the same message as the agents_debate call/)
+    expect(rule()).toMatch(/takes several minutes/)
+    expect(section('REPLY STYLE', 'PORTFOLIO SCOPE')).toMatch(/one exception: the one-line notice before a debate/)
+  })
+
+  it('never describes a debate as taking seconds', () => {
+    expect(body).not.toMatch(/30-60s|30-90s/)
+    expect(section('RESEARCH (agents_debate):', 'DEBATE BEFORE A BUY')).toMatch(/minutes, not seconds/)
+  })
+
   it('caps debates per turn so a screen cannot launch one per row', () => {
     expect(rule()).toMatch(/at most 2 per turn/)
     expect(rule()).toMatch(/shortlist/i)
@@ -89,6 +104,13 @@ describe('research tools: buy-gate support', () => {
     expect(tools.agents_debate!.description).toMatch(/before recommending that the user buy or add/)
     expect(tools.research_start!.description).toMatch(/verdict in this turn/)
     expect(tools.research_get!.description).toContain('age_days')
+  })
+
+  it('describes a run as taking minutes in both research tools', () => {
+    const tools = makeTools({} as ApiClient)
+    expect(tools.agents_debate!.description).toMatch(/minutes, not seconds/)
+    expect(tools.research_start!.description).toMatch(/takes minutes/)
+    expect(tools.research_start!.description).not.toMatch(/30-90s/)
   })
 
   it('reports how old a finished run is, in whole days', async () => {

@@ -703,7 +703,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'research_start': tool({
       description:
-        'Start a research run (the multi-agent analyst → debate → trader → risk pipeline) on a symbol ASYNCHRONOUSLY. Returns immediately with a runId; the run finishes in the background (~30-90s) and the user gets a browser notification. Use this when the user asks to "research X", "kick off analysis on X", or wants to keep chatting while it runs. Use agents_debate instead when the user wants to watch the debate stream inline now, or when you need the verdict in this turn (before recommending a buy).',
+        'Start a research run (the multi-agent analyst → debate → trader → risk pipeline) on a symbol ASYNCHRONOUSLY. Returns immediately with a runId; the run finishes in the background (it takes minutes) and the user gets a browser notification. Use this when the user asks to "research X", "kick off analysis on X", or wants to keep chatting while it runs. Use agents_debate instead when the user wants to watch the debate stream inline now, or when you need the verdict in this turn (before recommending a buy).',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
         max_debate_rounds: z.number().int().min(1).max(3).default(1),
@@ -816,7 +816,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'agents_debate': tool({
       description:
-        'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker. Also call it, without being asked, before recommending that the user buy or add to a specific stock, unless research_get shows a complete run for it with age_days of 7 or less. Never one call per row of a screen: at most 2 per turn, for the names you are about to recommend.',
+        'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. A run takes minutes, not seconds, and costs many times a normal reply, so tell the user in one line that it is starting before you call it. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker. Also call it, without being asked, before recommending that the user buy or add to a specific stock, unless research_get shows a complete run for it with age_days of 7 or less. Never one call per row of a screen: at most 2 per turn, for the names you are about to recommend.',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
         max_debate_rounds: z.number().int().min(1).max(3).default(1),
