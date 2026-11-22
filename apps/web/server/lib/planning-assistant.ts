@@ -107,6 +107,38 @@ function diffSettings(before: PlanningSettings, after: PlanningSettings): Planni
   return changes
 }
 
+type NotSet = 'not set'
+const orNotSet = (v: number): number | NotSet => (v > 0 ? v : 'not set')
+
+/**
+ * The plan as the chat reads it. Each fact appears once: the target sits on
+ * its allocation row, liabilities carry their own ids, and cash is the cash
+ * row. Only the inputs the summary does not already show are listed.
+ */
+export interface PlanForChat extends Omit<PlanningSummary, 'cash_total' | 'positions_value'> {
+  inputs: {
+    monthly_expenses: number | NotSet
+    emergency_fund_months: number
+    monthly_contribution: number | NotSet
+    cashflow_items: PlanningCashflowItem[]
+    locked_symbols: string[]
+  }
+}
+
+export function planForChat(summary: PlanningSummary, settings: PlanningSettings): PlanForChat {
+  const { cash_total: _cash, positions_value: _positions, ...plan } = summary
+  return {
+    ...plan,
+    inputs: {
+      monthly_expenses: orNotSet(settings.monthly_expenses),
+      emergency_fund_months: settings.emergency_fund_months,
+      monthly_contribution: orNotSet(settings.monthly_contribution),
+      cashflow_items: settings.cashflow_items,
+      locked_symbols: settings.locked_symbols,
+    },
+  }
+}
+
 /**
  * The largest `count` holdings, plus as many more as a sale of `sell` needs:
  * each holding's share of the sale is then at most what it is worth.
@@ -153,7 +185,7 @@ export interface RebalancePlan {
 export function buildRebalancePlan(
   summary: PlanningSummary,
   portfolio: FullPortfolio,
-  opts: { mode: 'full' | 'contribute_only', contribution?: number, maxPerBucket?: number },
+  opts: { mode: 'full', maxPerBucket?: number } | { mode: 'contribute_only', contribution: number, maxPerBucket?: number },
 ): RebalancePlan {
   const base = summary.base_currency
   const rows = summary.allocation_rows.filter(r => r.key !== 'cash')
@@ -163,7 +195,7 @@ export function buildRebalancePlan(
   if (opts.mode === 'full') {
     for (const r of rows) if (Math.abs(r.action_value) >= 1) amounts.set(r.key, r.action_value)
   } else {
-    const money = Math.max(0, opts.contribution ?? summary.assumptions.monthly_contribution)
+    const money = Math.max(0, opts.contribution)
     const short = rows.filter(r => r.action_value >= 1)
     const totalShort = short.reduce((sum, r) => sum + r.action_value, 0)
     const spend = Math.min(money, totalShort)

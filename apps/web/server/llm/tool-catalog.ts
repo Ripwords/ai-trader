@@ -95,13 +95,13 @@ export const TOOL_CATALOG: Record<NativeToolName, ToolCatalogEntry> = {
 
   planning_get: {
     category: 'Portfolio',
-    what: 'Your financial plan: target allocation against actual, goals, emergency fund, debts and monthly cashflow.',
+    what: 'Your financial plan: target allocation against actual over the assets you can invest, locked holdings such as a pension, goals, emergency fund, debts and monthly cashflow.',
     useWhen: 'You ask whether you are on track, how far off your ideal split you are, or before changing the plan.',
     example: 'Am I on track with my plan?',
   },
   planning_update: {
     category: 'Portfolio',
-    what: 'Changes your plan: ideal wealth split, expenses, emergency-fund months, monthly contribution, debts and cashflow. Saves at once and lists each change.',
+    what: 'Changes your plan: ideal wealth split, locked holdings, expenses, emergency-fund months, monthly contribution, debts and cashflow. Saves at once and lists each change.',
     useWhen: 'You want to set or tune your target allocation or plan inputs from the chat. Say "undo that" to put the old values back.',
     example: 'Set my target to 70% equity, 20% bonds, 10% cash',
   },

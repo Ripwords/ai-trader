@@ -1004,13 +1004,14 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         force: z.boolean().default(false).describe('Re-read the portfolio instead of the cached copy.'),
       }),
       execute: async ({ force }) => {
-        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }] = await Promise.all([
+        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { planForChat }] = await Promise.all([
           import('../lib/portfolio-cache'),
           import('../lib/planning-settings'),
           import('../lib/planning'),
+          import('../lib/planning-assistant'),
         ])
         const [portfolio, settings] = await Promise.all([getFullPortfolioCached({ force }), getPlanningSettings()])
-        return { settings, summary: buildPlanningSummary(portfolio, settings) }
+        return planForChat(buildPlanningSummary(portfolio, settings), settings)
       },
     }),
 
@@ -1075,7 +1076,9 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         ])
         const [portfolio, settings] = await Promise.all([getFullPortfolioCached(), getPlanningSettings()])
         const summary = buildPlanningSummary(portfolio, settings)
-        return { ...buildRebalancePlan(summary, portfolio, { mode, contribution, maxPerBucket }), allocation_rows: summary.allocation_rows }
+        return buildRebalancePlan(summary, portfolio, mode === 'full'
+          ? { mode, maxPerBucket }
+          : { mode, contribution: contribution ?? settings.monthly_contribution, maxPerBucket })
       },
     }),
 

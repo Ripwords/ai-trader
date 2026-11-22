@@ -109,14 +109,7 @@ export interface PlanningSummary {
   cash_total: number
   positions_value: number
   data_quality: 'ok' | 'partial'
-  assumptions: {
-    monthly_expenses: number
-    emergency_fund_months: number
-    monthly_contribution: number
-  }
-  target_model: PlanningTarget[]
   allocation_rows: AllocationRow[]
-  rebalance_actions: AllocationRow[]
   goals: PlanningGoal[]
   concentration: ConcentrationSummary
   liabilities: LiabilitiesSummary
@@ -381,7 +374,7 @@ function buildCashflowSummary(settings: PlanningSettings): CashflowSummary {
 
 export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: unknown): PlanningSummary {
   const settings = normalizePlanningSettings(inputSettings)
-  const netWorth = portfolio.net_worth_total ?? null
+  const netWorth = portfolio.net_worth_total == null ? null : roundMoney(portfolio.net_worth_total)
   const baseCurrency = portfolio.net_worth_currency || 'MYR'
   const liabilities = buildLiabilitiesSummary(settings)
   const cashflow = buildCashflowSummary(settings)
@@ -406,14 +399,7 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
       cash_total: cashTotal,
       positions_value: positionsValue,
       data_quality: 'partial',
-      assumptions: {
-        monthly_expenses: settings.monthly_expenses,
-        emergency_fund_months: settings.emergency_fund_months,
-        monthly_contribution: settings.monthly_contribution,
-      },
-      target_model: settings.target_model,
       allocation_rows: [],
-      rebalance_actions: [],
       goals: [],
       concentration: {
         top_position: null,
@@ -456,10 +442,6 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
     }
   })
 
-  const rebalanceActions = allocationRows
-    .filter(row => row.action !== 'hold' && Math.abs(row.drift_pct) >= 3)
-    .sort((a, b) => Math.abs(b.action_value) - Math.abs(a.action_value))
-
   const cashTarget = allocationRows.find(row => row.key === 'cash')
   const emergencyFundTarget = settings.monthly_expenses > 0
     ? roundMoney(settings.monthly_expenses * settings.emergency_fund_months)
@@ -470,9 +452,6 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
   const cashReserveTargetValue = Math.max(cashTarget?.target_value ?? 0, emergencyFundTarget)
   const cashProgressPct = cashReserveTargetValue > 0
     ? Math.min(100, roundPct((cashTarget?.current_value ?? 0) / cashReserveTargetValue * 100))
-    : 0
-  const contributionProgressPct = cashReserveTargetValue > 0
-    ? Math.min(100, roundPct(settings.monthly_contribution / cashReserveTargetValue * 100))
     : 0
 
   const sortedPositions = portfolio.positions
@@ -506,14 +485,7 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
     cash_total: cashTotal,
     positions_value: positionsValue,
     data_quality: portfolio.ghostfolio_status === 'ok' ? 'ok' : 'partial',
-    assumptions: {
-      monthly_expenses: settings.monthly_expenses,
-      emergency_fund_months: settings.emergency_fund_months,
-      monthly_contribution: settings.monthly_contribution,
-    },
-    target_model: settings.target_model,
     allocation_rows: allocationRows,
-    rebalance_actions: rebalanceActions,
     goals: [
       {
         key: 'cash_reserve',
@@ -525,17 +497,6 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
         note: cashProgressPct >= 100
           ? `Cash meets the ${cashReserveLabel} reserve target.`
           : `Cash is below the ${cashReserveLabel} reserve target.`,
-      },
-      {
-        key: 'monthly_contribution',
-        label: 'Monthly Contribution',
-        current_value: settings.monthly_contribution,
-        target_value: cashReserveTargetValue,
-        progress_pct: contributionProgressPct,
-        reached: settings.monthly_contribution > 0,
-        note: settings.monthly_contribution > 0
-          ? 'Monthly contribution assumption is set for planning projections.'
-          : 'Set a monthly contribution to project progress against goals.',
       },
       {
         key: 'concentration',

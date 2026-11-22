@@ -811,9 +811,11 @@ describe('tool catalogue', () => {
     const tools = makeTools(fakeClient() as unknown as ApiClient)
     const out = await (tools['planning_get'] as { execute: (args: { force: boolean }) => Promise<unknown> }).execute({ force: false })
     expect(out).toMatchObject({
-      settings: { monthly_expenses: 3000 },
-      summary: { allocation_rows: expect.arrayContaining([expect.objectContaining({ key: 'equity', actual_pct: 90 })]) },
+      inputs: { monthly_expenses: 3000, monthly_contribution: 1000, cashflow_items: [] },
+      allocation_rows: expect.arrayContaining([expect.objectContaining({ key: 'equity', actual_pct: 90 })]),
     })
+    expect(out).not.toHaveProperty('settings')
+    expect(out).not.toHaveProperty('summary')
   })
 
   it('planning_get keeps a locked pension out of the allocation and reports it once', async () => {
@@ -822,12 +824,10 @@ describe('tool catalogue', () => {
       const tools = makeTools(fakeClient() as unknown as ApiClient)
       const out = await (tools['planning_get'] as { execute: (args: { force: boolean }) => Promise<unknown> }).execute({ force: false })
       expect(out).toMatchObject({
-        summary: {
-          investable_total: 100_000,
-          locked: { total: 40_000, holdings: [{ symbol: 'GF_KWSP', name: 'KWSP', value: 40_000 }] },
-          allocation_rows: expect.arrayContaining([expect.objectContaining({ key: 'equity', actual_pct: 90 })]),
-          concentration: { top_position: { symbol: 'VOO', allocation_pct: 90 } },
-        },
+        investable_total: 100_000,
+        locked: { total: 40_000, holdings: [{ symbol: 'GF_KWSP', name: 'KWSP', value: 40_000 }] },
+        allocation_rows: expect.arrayContaining([expect.objectContaining({ key: 'equity', actual_pct: 90 })]),
+        concentration: { top_position: { symbol: 'VOO', allocation_pct: 90 } },
       })
       const text = JSON.stringify(out)
       expect(text.match(/GF_KWSP/g)).toHaveLength(2)
@@ -880,6 +880,15 @@ describe('tool catalogue', () => {
         expect.objectContaining({ bucket: 'bond', symbol: null, side: 'buy', value: 20_000 }),
       ]),
     })
+    expect(out).not.toHaveProperty('allocation_rows')
     expect(c.placeOrder).not.toHaveBeenCalled()
+  })
+
+  it('portfolio_rebalance_plan spends the saved monthly contribution when no amount is given', async () => {
+    planningMock.stored = { ...planningMock.stored, monthly_contribution: 1000, target_model: [{ key: 'cash', target_pct: 5 }, { key: 'equity', target_pct: 95 }, { key: 'bond', target_pct: 0 }] }
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['portfolio_rebalance_plan'] as { execute: (args: unknown) => Promise<unknown> })
+      .execute({ mode: 'contribute_only' })
+    expect(out).toMatchObject({ trades: [expect.objectContaining({ symbol: 'VOO', side: 'buy', value: 1000 })] })
   })
 })

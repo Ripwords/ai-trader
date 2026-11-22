@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { FullPortfolio, FullPortfolioPosition } from '../../server/lib/holdings'
 import { buildPlanningSummary, normalizePlanningSettings, type PlanningSettings } from '../../server/lib/planning'
-import { applyPlanningPatch, buildRebalancePlan } from '../../server/lib/planning-assistant'
+import { applyPlanningPatch, buildRebalancePlan, planForChat } from '../../server/lib/planning-assistant'
 
 function position(symbol: string, assetClass: string, value: number, currency = 'MYR'): FullPortfolioPosition {
   return {
@@ -102,6 +102,41 @@ describe('applyPlanningPatch', () => {
     const out = applyPlanningPatch(settings(), { monthly_expenses: 3000 })
     if ('error' in out) throw new Error(out.error)
     expect(out.changes).toEqual([])
+  })
+})
+
+describe('planForChat', () => {
+  // Ghostfolio lists the cash as a holding and also reports an account cash
+  // total that leaves some of it out.
+  const held = { ...portfolio([position('MMF', 'LIQUIDITY', 18_000), position('VOO', 'EQUITY', 82_000, 'USD')]), cash_total: 6_543 }
+  const s = settings({
+    monthly_expenses: 0,
+    liabilities: [{ id: 'car', name: 'Car loan', balance: 20_000, interest_rate_pct: 3, minimum_payment: 600 }],
+    cashflow_items: [{ id: 'salary', name: 'Salary', kind: 'income', amount: 9000 }],
+  })
+  const plan = planForChat(buildPlanningSummary(held, s), s)
+
+  it('gives one cash figure, the cash row of the allocation', () => {
+    expect(plan).not.toHaveProperty('cash_total')
+    expect(plan).not.toHaveProperty('positions_value')
+    expect(plan.allocation_rows.find(r => r.key === 'cash')?.current_value).toBe(18_000)
+    expect(JSON.stringify(plan)).not.toContain('6543')
+  })
+
+  it('marks an input the owner has not set instead of reporting it as zero', () => {
+    expect(plan.inputs).toMatchObject({ monthly_expenses: 'not set', monthly_contribution: 'not set', emergency_fund_months: 6 })
+    const set = settings({ monthly_contribution: 2000 })
+    expect(planForChat(buildPlanningSummary(held, set), set).inputs).toMatchObject({ monthly_expenses: 3000, monthly_contribution: 2000 })
+  })
+
+  it('states each table once, keeping the ids planning_update needs', () => {
+    const text = JSON.stringify(plan)
+    expect(text.match(/"target_pct"/g)).toHaveLength(plan.allocation_rows.length)
+    expect(text.match(/Car loan/g)).toHaveLength(1)
+    expect(text.match(/Salary/g)).toHaveLength(1)
+    expect(plan.liabilities.rows[0]?.id).toBe('car')
+    expect(plan.inputs.cashflow_items[0]?.id).toBe('salary')
+    expect(plan.inputs.locked_symbols).toEqual(['GF_KWSP'])
   })
 })
 

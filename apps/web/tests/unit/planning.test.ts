@@ -104,7 +104,21 @@ describe('planning summary', () => {
       action_value: -10_000,
       action: 'sell',
     })
-    expect(out.rebalance_actions.map(a => a.key)).toEqual(['equity', 'cash', 'bond'])
+  })
+
+  it('rounds net worth to cents and carries no copy of the settings or of its own rows', () => {
+    const out = buildPlanningSummary(portfolio({ net_worth_total: 151581.33838376327 }))
+    expect(out.net_worth_total).toBe(151581.34)
+    expect(Object.keys(out)).not.toEqual(expect.arrayContaining(['rebalance_actions']))
+    expect(out).not.toHaveProperty('assumptions')
+    expect(out).not.toHaveProperty('target_model')
+  })
+
+  it('has no goal for the monthly contribution, which is an input and not a target to reach', () => {
+    for (const monthly_contribution of [0, 4_000]) {
+      const out = buildPlanningSummary(portfolio(), { monthly_contribution })
+      expect(out.goals.map(g => g.key)).toEqual(['cash_reserve', 'concentration'])
+    }
   })
 
   it('surfaces cash reserve and concentration goals', () => {
@@ -158,7 +172,7 @@ describe('planning summary', () => {
       emergency_fund_months: 6,
       monthly_contribution: 0,
     })
-    expect(kept.target_model.map(t => [t.key, t.target_pct])).toEqual([
+    expect(kept.allocation_rows.map(r => [r.key, r.target_pct])).toEqual([
       ['cash', 10], ['equity', 60], ['bond', 5], ['crypto', 25],
     ])
   })
@@ -175,11 +189,6 @@ describe('planning summary', () => {
       monthly_contribution: 0,
     })
 
-    expect(out.target_model.map(t => [t.key, t.target_pct])).toEqual([
-      ['cash', 20],
-      ['equity', 70],
-      ['bond', 10],
-    ])
     expect(out.allocation_rows.find(row => row.key === 'cash')).toMatchObject({
       target_pct: 20,
       target_value: 20_000,
@@ -206,22 +215,11 @@ describe('planning summary', () => {
       monthly_contribution: 4_000,
     })
 
-    expect(out.assumptions).toEqual({
-      monthly_expenses: 6_000,
-      emergency_fund_months: 6,
-      monthly_contribution: 4_000,
-    })
     expect(out.goals.find(goal => goal.key === 'cash_reserve')).toMatchObject({
       target_value: 36_000,
       progress_pct: 13.89,
       reached: false,
       note: 'Cash is below the 6-month reserve target.',
-    })
-    expect(out.goals.find(goal => goal.key === 'monthly_contribution')).toMatchObject({
-      current_value: 4_000,
-      target_value: 36_000,
-      progress_pct: 11.11,
-      reached: true,
     })
   })
 
