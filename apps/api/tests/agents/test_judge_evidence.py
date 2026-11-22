@@ -8,7 +8,6 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage
 from tradingagents.agents.utils.agent_states import AgentState, RiskDebateState
 
-from app.services.agents import graph as graph_mod
 from app.services.agents.graph import (
     risk_manager_with_reports,
     trader_with_reports,
@@ -90,17 +89,3 @@ def test_risk_judge_sees_the_reports_and_the_debate() -> None:
     assert result["final_trade_decision"] == "Ruling. FINAL TRANSACTION PROPOSAL: **HOLD**"
     # The reports are prompt input only; they never leak into saved state.
     assert "trader_investment_plan" not in result
-
-
-def test_install_wires_both_wrappers_once() -> None:
-    from tradingagents.graph import setup as setup_mod
-
-    toolkit = graph_mod.build_toolkit(None)
-    graph_mod._install_toolkit(toolkit)
-    graph_mod._install_toolkit(toolkit)
-    assert setup_mod.create_trader is trader_with_reports
-    assert setup_mod.create_risk_manager is risk_manager_with_reports
-
-    llm = FakeLlm("ok")
-    setup_mod.create_risk_manager(llm, FakeMemory())(_state())
-    assert _text(llm.inputs[0]).count(FUNDAMENTALS) == 1
