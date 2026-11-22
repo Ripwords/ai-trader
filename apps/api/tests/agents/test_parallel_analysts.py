@@ -218,6 +218,18 @@ async def test_every_analyst_starts_before_any_finishes_and_each_ends_once(
     assert sorted(ended) == sorted(LABELS.values())
 
 
+async def test_every_started_node_ends(
+    llm: FakeLlm, valuation_delay: dict[str, float], tmp_path: Any
+) -> None:
+    events, _ = await _run(_build(tmp_path))
+
+    started = [e["node"] for e in events if e["type"] == "node-start"]
+    ended = [e["node"] for e in events if e["type"] == "node-end"]
+    assert started[4:] == ["Research Manager", "Trader", "Risk Manager"]
+    assert sorted(ended) == sorted(started)
+    assert ended[4:] == started[4:]
+
+
 async def test_debate_starts_only_after_every_report_is_in(
     llm: FakeLlm, valuation_delay: dict[str, float], tmp_path: Any
 ) -> None:

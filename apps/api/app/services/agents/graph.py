@@ -1100,7 +1100,8 @@ async def _translate_states(
                 }
 
         if values or node:
-            yield _normalize_chunk(node, values, finished=bool(node and (debate or decision)))
+            # A stage is named by the field it wrote, so naming it means it is done.
+            yield _normalize_chunk(node, values, finished=node is not None)
 
         # The graph only takes its next step when this loop asks for the next
         # snapshot. Once the debate has opened the Research Manager can be
