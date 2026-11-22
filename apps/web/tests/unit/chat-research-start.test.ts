@@ -76,10 +76,11 @@ describe('research_get tool', () => {
   it('reports a still-running run by runId, so no separate status tool is needed', async () => {
     vi.doMock('../../server/db/repo', () => ({ getOwnerId: async () => 'user-1' }))
     vi.doMock('../../server/lib/agents/runs-query', () => ({
-      getRunAssessment: vi.fn(async (_u: string, runId: string) => ({
-        runId, symbol: 'NVDA', status: 'running', finishedAt: null, rating: null, confidence: null, rationale: null,
+      getRunVerdict: vi.fn(async (_u: string, runId: string) => ({
+        runId, symbol: 'NVDA', status: 'running', finishedAt: null, rating: null, no_verdict_reason: 'the run is still in progress',
       })),
       getLatestRunForSymbol: vi.fn(async () => null),
+      getLatestAttemptForSymbol: vi.fn(async () => null),
     }))
     const tools = makeTools({} as unknown as ApiClient)
     const out = await tools.research_get.execute({ runId: 'run-9' }, {} as unknown) as Record<string, unknown>

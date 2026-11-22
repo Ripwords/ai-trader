@@ -140,7 +140,7 @@ export default defineEventHandler(async (event) => {
             MCP_PREP_MS,
             [{}, 'failing'] as [Awaited<ReturnType<typeof getGhostfolioTools>>, GhostfolioStatus],
           ),
-          buildRecall(client, ownerId, newestUserText),
+          buildRecall(ownerId, newestUserText),
           // Missing parts fall back to the default text, without the current time.
           within<Partial<ChatPromptInputs>>(loadChatPromptInputs(), PROMPT_PREP_MS, {}),
           loadMemories(ownerId),
@@ -266,19 +266,16 @@ function replyBefore(messages: NonNullable<ChatBody['messages']>, newestUser: No
 // connect; this also covers listing tools on a server that accepted the
 // connection and then went quiet.
 const MCP_PREP_MS = 3_000
-const WATCHLIST_MS = 2_000
 const RECALL_MS = 800
 const PROMPT_PREP_MS = 2_000
 const MEMORY_MS = 2_000
 
 // Surface recent research runs for tickers in the user's latest message so the
 // model references the agents' prior assessment. Best-effort.
-async function buildRecall(client: ReturnType<typeof getApiClient>, userId: string, text: string): Promise<string> {
+async function buildRecall(userId: string, text: string): Promise<string> {
   try {
     const { buildRecallContext } = await import('../llm/recall')
-    const watch = await within(client.listWatchlist({ group: 'All' }), WATCHLIST_MS, [])
-    const watchlist = watch.map(w => String(w?.code ?? '')).filter(Boolean)
-    return await within(buildRecallContext({ userId, text, watchlist }), RECALL_MS, '')
+    return await within(buildRecallContext({ userId, text }), RECALL_MS, '')
   } catch (err) {
     console.error('[chat] recall build failed', err)
     return ''

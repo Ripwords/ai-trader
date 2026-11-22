@@ -18,11 +18,21 @@ const { tailRun } = vi.hoisted(() => ({
 }))
 vi.mock('../../server/lib/agents/run-events', () => ({ tailRun }))
 
+// What the run left in the database by the time its tail ends.
+let stored: Record<string, unknown> | null = null
+const { getRunVerdict } = vi.hoisted(() => ({
+  getRunVerdict: vi.fn(async (_userId: string, runId: string) => (stored ? { runId, ...stored } : null)),
+}))
+vi.mock('../../server/lib/agents/runs-query', () => ({ getRunVerdict }))
+vi.mock('../../server/db/repo', () => ({ getOwnerId: async () => 'user-1' }))
+
 let makeTools: (client: ApiClient, event?: H3Event) => ToolMap
 beforeEach(async () => {
   vi.resetModules()
   tailRun.mockClear()
+  getRunVerdict.mockClear()
   tailFrames = []
+  stored = null
   makeTools = (await import('../../server/llm/tools')).makeTools as unknown as (
     client: ApiClient,
     event?: H3Event,
@@ -69,9 +79,10 @@ describe('agents_debate tool catalogue', () => {
     expect(tools.analyze_ticker).toBeUndefined()
   })
 
-  it('starts a detached run, streams progress yields, and returns the final decision', async () => {
+  it('starts a detached run, streams progress yields, and returns the stored verdict', async () => {
     const tools = makeTools({} as unknown as ApiClient)
     const fetchSpy = startResponse()
+    stored = { status: 'complete', rating: 'buy', confidence: 72, rationale: 'strong fundamentals', bull_case: 'AWS grew 39.3%.' }
     tailFrames = [
       ev(0, { type: 'run-start', run_id: 'run-1', symbol: 'NVDA', config: {} }),
       ev(1, { type: 'node-start', node: 'market' }),
@@ -87,9 +98,29 @@ describe('agents_debate tool catalogue', () => {
     // One yield before the run starts plus one per event keeps the chat
     // stream moving and drives the AgentsDebateCard timeline.
     expect(yields.length).toBeGreaterThanOrEqual(6)
-    expect(final).toMatchObject({ runId: 'run-1', rating: 'buy', confidence: 72, rationale: 'strong fundamentals' })
-    const nodes = (final as { events: Array<{ node?: string }> }).events.map(e => e.node)
-    expect(nodes).toEqual(['market', 'trader'])
+    const progress = yields.at(-2) as { events: Array<{ node?: string }> }
+    expect(progress.events.map(e => e.node)).toEqual(['market', 'trader'])
+    expect(progress).not.toHaveProperty('rationale')
+    expect(getRunVerdict).toHaveBeenCalledWith('user-1', 'run-1')
+    expect(final).toEqual({ runId: 'run-1', ...stored })
+  })
+
+  it('gives the model the verdict without the progress events', async () => {
+    const tools = makeTools({} as unknown as ApiClient)
+    startResponse()
+    stored = { status: 'complete', rating: 'buy', confidence: 72, rationale: 'strong fundamentals' }
+    tailFrames = [ev(0, { type: 'node-start', node: 'market' }), { kind: 'end', status: 'complete', error: null }]
+    const { final } = await drain(tools.agents_debate.execute(args, {} as unknown))
+    expect(final).not.toHaveProperty('events')
+  })
+
+  it('keeps the verdict a failed run still reached, with the failure', async () => {
+    const tools = makeTools({} as unknown as ApiClient)
+    startResponse()
+    stored = { status: 'failed', rating: 'hold', confidence: null, rationale: 'mixed' }
+    tailFrames = [{ kind: 'end', status: 'failed', error: 'confidence judge crashed' }]
+    const { final } = await drain(tools.agents_debate.execute(args, {} as unknown))
+    expect(final).toMatchObject({ runId: 'run-1', rating: 'hold', error: 'run failed: confidence judge crashed' })
   })
 
   it('forwards the session cookie when given an event', async () => {
@@ -122,9 +153,11 @@ describe('agents_debate tool catalogue', () => {
   it('returns an error when the run completes without a decision', async () => {
     const tools = makeTools({} as unknown as ApiClient)
     startResponse()
+    stored = { status: 'complete', rating: null, no_verdict_reason: 'the run completed without a decision' }
     tailFrames = [ev(0, { type: 'node-start', node: 'market' }), { kind: 'end', status: 'complete', error: null }]
     const { final } = await drain(tools.agents_debate.execute(args, {} as unknown))
-    expect(final).toMatchObject({ error: 'no decision emitted' })
+    expect(final).toMatchObject({ runId: 'run-1', error: 'no decision emitted' })
+    expect(final).not.toHaveProperty('events')
   })
 
   it('returns the failure reason when the run fails', async () => {
@@ -140,6 +173,7 @@ describe('agents_debate tool catalogue', () => {
     ;(globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () =>
       Response.json({ statusCode: 409, data: { run_id: 'run-live' } }, { status: 409 }),
     ) as unknown as typeof fetch
+    stored = { status: 'complete', rating: 'hold', confidence: 55, rationale: 'mixed' }
     tailFrames = [
       ev(7, { type: 'decision', rating: 'hold', confidence: 55, rationale: 'mixed' }),
       { kind: 'end', status: 'complete', error: null },
