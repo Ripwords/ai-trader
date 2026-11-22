@@ -9,6 +9,7 @@ steps overlapped.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from datetime import date
@@ -64,6 +65,8 @@ class FakeLlm:
         self._lock = threading.Lock()
         self.analyst_inputs: dict[str, list[list[Any]]] = {a: [] for a in ANALYSTS}
         self.prompts: list[str] = []
+        self.judge_prompts: list[str] = []
+        self.fail_on_prompt: int | None = None
 
     def bind_tools(self, tools: list[Any]) -> Any:
         names = [t.name for t in tools]
@@ -87,10 +90,15 @@ class FakeLlm:
     def invoke(self, prompt: Any) -> AIMessage:
         with self._lock:
             self.prompts.append(str(prompt))
+            if self.fail_on_prompt == len(self.prompts):
+                self.fail_on_prompt = None
+                self.prompts.pop()
+                raise RuntimeError("debate provider outage")
         time.sleep(self.delay)
         return AIMessage(content="Argument. FINAL TRANSACTION PROPOSAL: **BUY**")
 
-    async def ainvoke(self, _prompt: str, config: Any = None) -> AIMessage:
+    async def ainvoke(self, prompt: str, config: Any = None) -> AIMessage:
+        self.judge_prompts.append(prompt)
         return AIMessage(content="CONFIDENCE: 70\nREASON: fake")
 
 
@@ -301,6 +309,86 @@ async def test_resume_after_one_analyst_fails_reruns_only_that_analyst(
         assert final[field] == f"{role} report"
     assert next(e for e in events if e["type"] == "decision")["rating"] == "buy"
     assert len([p for p in fake.prompts if VALUATION_MARKER in p]) == 2
+
+
+REPLY = "Argument. FINAL TRANSACTION PROPOSAL: **BUY**"
+DEBATE_ROUNDS = [(1, "bull", f"Bull Analyst: {REPLY}"), (1, "bear", f"Bear Analyst: {REPLY}")]
+RISK_TURNS = [
+    (1, "aggressive", f"Aggressive Analyst: {REPLY}"),
+    (2, "conservative", f"Conservative Analyst: {REPLY}"),
+    (3, "neutral", f"Neutral Analyst: {REPLY}"),
+]
+
+
+def _debate_rounds(events: list[dict]) -> list[tuple]:
+    return [(e["round"], e["side"], e["text"]) for e in events if e["type"] == "debate-round"]
+
+
+def _risk_turns(events: list[dict]) -> list[tuple]:
+    return [(e["turn"], e["speaker"], e["text"]) for e in events if e["type"] == "risk-debate-turn"]
+
+
+async def test_stream_carries_every_debate_turn_with_its_speaker(
+    llm: FakeLlm, valuation_delay: dict[str, float], tmp_path: Any
+) -> None:
+    events, _ = await _run(_build(tmp_path))
+
+    assert _debate_rounds(events) == DEBATE_ROUNDS
+    assert _risk_turns(events) == RISK_TURNS
+
+
+async def test_final_state_keeps_both_debate_transcripts(
+    llm: FakeLlm, valuation_delay: dict[str, float], tmp_path: Any
+) -> None:
+    events, _ = await _run(_build(tmp_path))
+
+    final = next(e for e in events if e["type"] == "final-state")["state"]
+    assert final["investment_debate_state"] == {
+        "bull_history": f"\nBull Analyst: {REPLY}",
+        "bear_history": f"\nBear Analyst: {REPLY}",
+        "judge_decision": REPLY,
+    }
+    assert final["risk_debate_state"] == {
+        "aggressive_history": f"\nAggressive Analyst: {REPLY}",
+        "conservative_history": f"\nConservative Analyst: {REPLY}",
+        "neutral_history": f"\nNeutral Analyst: {REPLY}",
+        "judge_decision": REPLY,
+    }
+    json.dumps(final)
+
+
+async def test_confidence_judge_reads_the_whole_debate(
+    llm: FakeLlm, valuation_delay: dict[str, float], tmp_path: Any
+) -> None:
+    await _run(_build(tmp_path))
+
+    (prompt,) = llm.judge_prompts
+    for speaker in ("Bull", "Bear", "Aggressive", "Conservative", "Neutral"):
+        assert f"{speaker} Analyst: {REPLY}" in prompt
+
+
+async def test_resume_mid_debate_streams_only_the_turns_still_to_come(
+    monkeypatch: pytest.MonkeyPatch, valuation_delay: dict[str, float], tmp_path: Any
+) -> None:
+    fake = FakeLlm(delay=0.05)
+    # Bull, bear, research manager, trader and the aggressive analyst answer;
+    # the conservative analyst's call fails.
+    fake.fail_on_prompt = 6
+    monkeypatch.setattr(llm_config, "build_role_model", lambda *_a, **_kw: fake)
+    monkeypatch.setattr(graph_mod, "build_toolkit", lambda *_a, **_kw: _fake_toolkit())
+    saver = InMemorySaver()
+
+    with pytest.raises(RuntimeError, match="debate provider outage"):
+        await _run(_build(tmp_path, checkpointer=saver), run_id="run-2")
+
+    resumed = _build(tmp_path, checkpointer=saver)
+    events = await _events(graph_mod.resume_graph(resumed, "NVDA", DAY, run_id="run-2"))
+
+    assert _debate_rounds(events) == []
+    assert _risk_turns(events) == RISK_TURNS[1:]
+    final = next(e for e in events if e["type"] == "final-state")["state"]
+    assert final["investment_debate_state"]["bull_history"] == f"\nBull Analyst: {REPLY}"
+    assert final["risk_debate_state"]["aggressive_history"] == f"\nAggressive Analyst: {REPLY}"
 
 
 def test_debate_wiring_matches_upstream(llm: FakeLlm, tmp_path: Any) -> None:
