@@ -1,10 +1,8 @@
 """Tests for the asyncio lock that serialises ``build_graph`` calls.
 
-``build_graph`` mutates module globals on
-``tradingagents.agents.utils.agent_utils`` (it monkey-patches in the toolkit
-the compiled graph will bind to). Two concurrent calls would race; the lock
-guarantees serialisation. We don't assert which toolkit "wins" — just that
-both calls return without error.
+Constructing ``TradingAgentsGraph`` registers its config as tradingagents'
+process-wide active config. The lock keeps one build's construct-and-compile
+from interleaving with another's.
 """
 
 from __future__ import annotations
