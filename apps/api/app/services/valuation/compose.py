@@ -24,8 +24,17 @@ _SCENARIO_GROWTH_DELTA = Decimal("0.03")   # +/- on the base growth
 # (AMZN Q3 2026: a $3.6 fair value against a $254.60 price, from a +$3.2B
 # levered-FCF base while trailing OCF − capex was −$46.9B).
 _NEAR_ZERO_FCF_MARGIN = Decimal("0.01")    # base FCF / latest revenue
-_REGIME_MIN_FV_TO_PRICE = Decimal("0.20")
+_REGIME_MAX_PRICE_TO_FV = Decimal("3")     # margin of safety of -200%
 _REGIME_MAX_FV_TO_PRICE = Decimal("5")
+
+# Inside the regime the DCF caps the rating only when both hold: it signals
+# overvaluation, and the stock trades well above its own historical multiple.
+# Growth is a dampened backward FCF CAGR capped at 15%, so the DCF signal
+# alone fires on most durable growers (AAPL, MSFT, NVDA and V at once).
+_VETO_MAX_MARGIN_OF_SAFETY = Decimal("-0.50")      # price >= 1.5x fair value
+_VETO_IMPLIED_GROWTH_MULTIPLE = Decimal("2.5")     # reverse-DCF growth / base growth
+_VETO_OWN_MULTIPLE_STRETCH = Decimal("1.5")        # current P/E or P/S / own history
+_MULTIPLES_ONLY_MAX_PS = Decimal("30")
 
 _SCENARIO_PROBS = {
     "optimistic": Decimal("0.25"),
@@ -90,14 +99,24 @@ def _base_fcf_out_of_regime(vi: ValuationInput) -> str | None:
 
 
 def _fair_value_out_of_regime(fair_value: Decimal, price: Decimal) -> str | None:
-    ratio = fair_value / price
-    if _REGIME_MIN_FV_TO_PRICE <= ratio <= _REGIME_MAX_FV_TO_PRICE:
+    if price >= _REGIME_MAX_PRICE_TO_FV * fair_value:
+        bound = (
+            f"the price is {price / fair_value:.1f}x fair value, at or beyond the "
+            f"{_REGIME_MAX_PRICE_TO_FV}x (margin of safety "
+            f"{1 - _REGIME_MAX_PRICE_TO_FV:.0%}) a DCF can resolve"
+        )
+    elif fair_value > _REGIME_MAX_FV_TO_PRICE * price:
+        bound = (
+            f"fair value is {fair_value / price:.1f}x the price, beyond the "
+            f"{_REGIME_MAX_FV_TO_PRICE}x a DCF can resolve"
+        )
+    else:
         return None
     return (
-        f"the DCF fair value ({fair_value:.2f}/share) is {ratio:.1%} of the price "
-        f"({price:.2f}), outside the {_REGIME_MIN_FV_TO_PRICE:.0%}–"
-        f"{_REGIME_MAX_FV_TO_PRICE:.0%} band a DCF can resolve; the FCF base does "
-        f"not represent the business's earning power or the inputs are anomalous"
+        f"the DCF fair value ({fair_value:.2f}/share) is {fair_value / price:.1%} of the "
+        f"price ({price:.2f}): {bound}; the FCF base or the growth extrapolated from "
+        f"its history does not represent the business's earning power, or the inputs "
+        f"are anomalous (e.g. an unadjusted split in the price feed)"
     )
 
 
@@ -225,21 +244,9 @@ def _value(
         reverse_dcf_implied_growth=implied, data_quality="full",
         veto=Veto(triggered=False, reason=None, rating_cap=None), warnings=warnings,
     )
-    result.veto = _compute_veto(vi, result)
-    # Guardrail: when the market price diverges wildly from the DCF fair value
-    # (>= ~3x, i.e. MoS <= -200%), the output is out-of-regime. This is usually
-    # deeply cyclical/normalized FCF or an upstream data anomaly (e.g. an
-    # unadjusted split inflating the price feed ~10x vs the fundamentals feed,
-    # as seen for US.MU). Surface it instead of printing a confident -1880%.
-    if fair_value > 0 and mos <= Decimal("-2.0"):
-        ratio = vi.current_price / fair_value
-        result.warnings.append(
-            f"market price is {ratio:.1f}x the DCF fair value (margin of safety "
-            f"{mos:.0%}); the price implies FCF growth beyond the model's range — "
-            f"likely deeply cyclical/normalized FCF or a data anomaly (e.g. an "
-            f"unadjusted split in the price feed). Treat the fair value as "
-            f"out-of-regime, not a precise target."
-        )
+    result.veto, uncapped_note = _compute_veto(vi, result)
+    if uncapped_note:
+        result.warnings.append(uncapped_note)
     # v1 single-source market-cap sanity check; full two-source cross_source_check deferred to v2
     if vi.shares_outstanding is not None and vi.metrics.market_cap is not None:
         ok, msg = verify_market_cap(vi.current_price, vi.shares_outstanding, vi.metrics.market_cap)
@@ -248,20 +255,55 @@ def _value(
     return result
 
 
-def _compute_veto(vi: ValuationInput, result: ValuationResult) -> Veto:
-    # (a) grossly overvalued by DCF
-    if result.margin_of_safety_pct is not None and result.margin_of_safety_pct <= Decimal("-0.50"):
-        return Veto(triggered=True, rating_cap="hold",
-                    reason=f"price >= 1.5x DCF fair value "
-                           f"(margin of safety {result.margin_of_safety_pct:.1%})")
-    # (b) reverse-DCF implies implausible growth
+def _dcf_overvaluation_signal(vi: ValuationInput, result: ValuationResult) -> str | None:
+    mos = result.margin_of_safety_pct
+    if mos is not None and mos <= _VETO_MAX_MARGIN_OF_SAFETY:
+        return (f"price >= {1 - _VETO_MAX_MARGIN_OF_SAFETY:.1f}x DCF fair value "
+                f"(margin of safety {mos:.1%})")
     base_g = derive_growth(vi.history)
-    if (result.reverse_dcf_implied_growth is not None and base_g > 0
-            and result.reverse_dcf_implied_growth > Decimal("2.5") * base_g):
-        return Veto(triggered=True, rating_cap="hold",
-                    reason=f"price implies {result.reverse_dcf_implied_growth:.1%} growth, "
-                           f">2.5x historical {base_g:.1%}")
-    return Veto(triggered=False, reason=None, rating_cap=None)
+    implied = result.reverse_dcf_implied_growth
+    if implied is not None and base_g > 0 and implied > _VETO_IMPLIED_GROWTH_MULTIPLE * base_g:
+        return (f"price implies {implied:.1%} growth, "
+                f">{_VETO_IMPLIED_GROWTH_MULTIPLE}x historical {base_g:.1%}")
+    return None
+
+
+def _own_multiple_stretches(result: ValuationResult) -> list[tuple[str, Decimal, Decimal]]:
+    """(label, current, own history) for each multiple both sides can state."""
+    now, past = result.multiples, result.historical_multiples
+    if now is None or past is None:
+        return []
+    pairs = (("P/E", now.pe, past.pe), ("P/S", now.ps, past.ps))
+    return [(label, n, p) for label, n, p in pairs
+            if n is not None and p is not None and n > 0 and p > 0]
+
+
+def _compute_veto(vi: ValuationInput, result: ValuationResult) -> tuple[Veto, str | None]:
+    """The veto, and when a DCF signal did not become a cap, the note saying why."""
+    signal = _dcf_overvaluation_signal(vi, result)
+    if signal is None:
+        return Veto(triggered=False, reason=None, rating_cap=None), None
+    pairs = _own_multiple_stretches(result)
+    if not pairs:
+        return (
+            Veto(triggered=False, reason=None, rating_cap=None, corroboration="unavailable"),
+            f"DCF overvaluation signal not applied as a rating cap: {signal}, but no "
+            f"historical P/E or P/S of the stock's own was available to corroborate "
+            f"it; the valuation check is unverified, not passed",
+        )
+    stretched = [pair for pair in pairs if pair[1] / pair[2] >= _VETO_OWN_MULTIPLE_STRETCH]
+    described = ", ".join(
+        f"{label} {n:.1f} is {n / p:.1f}x its own history ({p:.1f})"
+        for label, n, p in (stretched or pairs))
+    if stretched:
+        return Veto(triggered=True, rating_cap="hold", corroboration="corroborated",
+                    reason=f"{signal}, and {described}"), None
+    return (
+        Veto(triggered=False, reason=None, rating_cap=None, corroboration="not_corroborated"),
+        f"DCF overvaluation signal not applied as a rating cap: {signal}, but "
+        f"{described}, under the {_VETO_OWN_MULTIPLE_STRETCH}x that would corroborate "
+        f"it; a DCF on a dampened, capped FCF trend does not cap the rating alone",
+    )
 
 
 def _cap_rating(rating: str, cap: str) -> str:
@@ -275,9 +317,10 @@ def apply_veto(rating: str, result: ValuationResult) -> tuple[str, Veto]:
     veto = result.veto
     if (not veto.triggered and result.data_quality == "multiples_only"
             and result.multiples and result.multiples.ps is not None
-            and result.multiples.ps > Decimal("30")):
+            and result.multiples.ps > _MULTIPLES_ONLY_MAX_PS):
         veto = Veto(triggered=True, rating_cap="hold",
-                    reason=f"no positive FCF and P/S {result.multiples.ps:.1f} > 30x")
+                    reason=f"no positive FCF and P/S {result.multiples.ps:.1f} "
+                           f"> {_MULTIPLES_ONLY_MAX_PS}x")
     if not veto.triggered or veto.rating_cap is None:
         return rating, veto
     return _cap_rating(rating, veto.rating_cap), veto
