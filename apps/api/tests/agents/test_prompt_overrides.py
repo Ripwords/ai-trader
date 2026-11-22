@@ -59,7 +59,7 @@ def _serve(monkeypatch: pytest.MonkeyPatch, handler: Any) -> list[httpx.Request]
 
 def test_defaults_cover_every_node_prompt_and_the_judge() -> None:
     defaults = prompts_mod.prompt_defaults()
-    assert set(defaults) == {*NODE_NAMES, "confidence_judge"}
+    assert set(defaults) == {*NODE_NAMES, "confidence_judge", "owner_mandate"}
     for name in NODE_NAMES:
         if name in EARNINGS_AWARE:
             # Our earnings-discipline rules are appended to the upstream text.

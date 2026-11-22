@@ -101,6 +101,7 @@ class _Graph:
         self.propagator = _Propagator()
         self.deep_thinking_llm = _JudgeLlm()
         self.run_context = RunContext()
+        self.owner_context = None
 
 
 @pytest.fixture(autouse=True)
@@ -159,6 +160,30 @@ async def test_resume_rebuilds_the_graph_with_stored_options(
 
     assert {k: seen[k] for k in STORED_CONFIG} == STORED_CONFIG
     assert lines[-1]["type"] == "run-end"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored", "status"),
+    [
+        ({"position": {"status": "held", "quantity": 3}}, "held"),
+        ({"position": {"status": "no longer a status"}}, None),
+        (None, None),
+    ],
+)
+async def test_resume_decides_for_the_owner_the_run_started_with(
+    monkeypatch: pytest.MonkeyPatch, stored: Any, status: str | None
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_build(_opend: Any, **kwargs: Any) -> _Graph:
+        seen.update(kwargs)
+        return _Graph()
+
+    await _resume(monkeypatch, fake_build, {**STORED_CONFIG, "owner_context": stored})
+
+    owner = seen["owner_context"]
+    assert (owner.position.status if owner else None) == status
 
 
 @pytest.mark.asyncio

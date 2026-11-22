@@ -1,4 +1,5 @@
 export type Rating = 'strong-buy' | 'buy' | 'hold' | 'reduce' | 'sell'
+export type OwnerVerdict = 'add' | 'hold' | 'trim' | 'do-not-add'
 export type RunStatus = 'running' | 'complete' | 'failed' | 'cancelled'
 
 /** Tags for the four analyst reports. Match graph._REPORT_KIND_MAP. */
@@ -25,7 +26,9 @@ export type AgentEvent =
   | { type: 'risk-debate-turn'; speaker: RiskSpeaker; text: string; turn: number }
   | { type: 'report'; kind: ReportKind; node: string; content: string }
   | { type: 'synthesis'; stage: SynthesisStage; node: string; content: string }
-  | { type: 'decision'; rating: Rating; confidence: number | null; rationale: string }
+  // `owner_verdict` is present when the run had an owner mandate to answer;
+  // `rating` then follows it (add: buy, hold and do-not-add: hold, trim: reduce).
+  | { type: 'decision'; rating: Rating; confidence: number | null; rationale: string; owner_verdict?: OwnerVerdict }
   // Sent once before the first debate turn (again on a resume). `reason` says
   // why there is no DCF fair value; it is null when status is 'ok'.
   | { type: 'valuation'; status: 'ok' | 'multiples_only' | 'unavailable'; reason: string | null }

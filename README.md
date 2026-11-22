@@ -84,12 +84,12 @@ The assistant keeps a short list of facts about you that every chat thread share
 
 Settings → **prompts** lists the instructions each model gets, grouped as Chat, Research, News, Algo and Agents debate. Click a row to open its text. A **modified** badge marks a prompt you have edited.
 
-- **What you can edit.** Chat: the chat system prompt, the moomoo rules, the chat titles prompt and the chat memory prompt. Research: the risk report. News: the search angles. Algo: the strategy assistant. Agents debate: the 13 TradingAgents node prompts (the four analysts, bull and bear researchers, research manager, trader system and request, the three risk analysts, risk manager) and the confidence judge.
+- **What you can edit.** Chat: the chat system prompt, the moomoo rules, the chat titles prompt and the chat memory prompt. Research: the risk report. News: the search angles. Algo: the strategy assistant. Agents debate: the 13 TradingAgents node prompts (the four analysts, bull and bear researchers, research manager, trader system and request, the three risk analysts, risk manager), the confidence judge and the owner mandate (see [Deciding for the owner](#deciding-for-the-owner)).
 - **When edits apply.** The next chat message, report or debate run uses the saved text. A run already in progress keeps the text it started with.
 - **Defaults.** A prompt you have not edited follows the built-in default, so it picks up future changes to it. A **modified** prompt keeps your text and does not pick them up: after an upgrade that changes a default (for example the chat prompt's reply style and debate-before-a-buy rules), reset the prompt or copy the new sections from the default shown in the editor. Saving text identical to the default clears the override. **reset to default** (shown only on a modified prompt) asks for confirmation, then deletes your text.
 - **What the chat prompt does not include.** The server appends a runtime block to the chat prompt on every turn, after your text: the current date and time in the timezone set under Settings → Notifications, the Ghostfolio status, recent research runs for the tickers you mention, your saved memories with the rule for using them (see [Chat memory](#chat-memory)), and the slash-command directive. That block is not editable.
 - **Placeholders (agents debate only).** Debate prompts are Python format templates. The editor shows the `{placeholders}` the default uses as chips; your text may use any of them and no others. Any other literal brace must be doubled (`{{` or `}}`). Unknown placeholders and stray braces are rejected when you save, with the reason shown under the text.
-- **Contract lines.** The risk manager's output must contain `FINAL TRANSACTION PROPOSAL` and the confidence judge's must ask for a `CONFIDENCE:` line, because the debate parses them. Removing that wording shows a warning but does not block the save; the run may then fail to read a decision or a confidence score.
+- **Contract lines.** The risk manager's output must contain `FINAL TRANSACTION PROPOSAL`, the confidence judge's must ask for a `CONFIDENCE:` line and the owner mandate must ask for an `OWNER VERDICT` line, because the debate parses them. Removing that wording shows a warning but does not block the save; the run may then fail to read a decision, a confidence score or the owner verdict.
 - **Limits.** A prompt cannot be empty or longer than 50,000 characters.
 - **If the api is down.** The debate prompts' defaults come from the api service. While it is unreachable, the Agents debate group shows an error with a retry and its rows cannot be opened; the other groups still work. If a debate run cannot read the overrides, it logs a warning and uses the defaults.
 
@@ -428,7 +428,7 @@ flowchart LR
 | **Confidence judge** | Reads the whole debate and the final call, then states the probability (0–100) that the rating is right over the next 7 trading days, scored the same way the backtest scores it. A failed or unreadable reply stores no confidence rather than a placeholder. | Debate + decision |
 | **Execution** | Places the order against `SIMULATE` (paper) by default; `REAL` is gated by `MAX_DAILY_LIVE_NOTIONAL_USD`. | Manager decision → moomoo OpenD |
 
-Each run starts fresh: agents do not carry lessons from past decisions into later runs. The only extra context is the deterministic valuation. It is computed while the analysts work, and the debate waits for it. Its summary is appended to the prompt of every node from the Bull Researcher to the Portfolio Manager, after whatever text Settings → Prompts has saved for that node, so an edited prompt receives it too. The analysts do not see it.
+Each run starts fresh: agents do not carry lessons from past decisions into later runs. The extra context is the deterministic valuation and, on runs started from this app, the owner's position (see [Deciding for the owner](#deciding-for-the-owner)). It is computed while the analysts work, and the debate waits for it. Its summary is appended to the prompt of every node from the Bull Researcher to the Portfolio Manager, after whatever text Settings → Prompts has saved for that node, so an edited prompt receives it too. The analysts do not see it.
 
 The run says how the valuation went in a `valuation` event before the first debate turn, and stores the same two fields under `valuation` in the run's final state:
 
@@ -439,6 +439,39 @@ The run says how the valuation went in a `valuation` event before the first deba
 | `unavailable` | The data fetch or the computation failed. The debate is told no fair value exists and not to invent one. The run continues. | The error message |
 
 A resumed run computes the valuation again and sends the event again.
+
+#### Deciding for the owner
+
+Upstream TradingAgents rules for a short-term trading desk. Every run started from this app (the chat's debate and the research page) also tells the debate who it is deciding for. A direct call to the api without `owner_context`, and a backtest, run as before.
+
+When a run starts, the web app reads the accounts and sends an `owner_context` object. The api validates it and rejects a malformed one with 422.
+
+| Field | Content |
+|---|---|
+| `position.status` | `held`, `not_held`, or `unknown` when the accounts could not be read. The debate is told not to assume either way on `unknown`. |
+| `position.quantity`, `market_value`, `currency`, `weight_pct`, `unrealized_pnl_pct` | Present on a held position. The weight is the share of investable assets from the tracker. |
+| `base_currency`, `investable_total` | From the tracker. Left out when it cannot be read. |
+| `monthly_contribution` | From the planning settings. Left out when it was never set. |
+| `notes` | Your saved chat memories (see [Chat memory](#chat-memory)), at most 30 of 240 characters each. |
+
+A failed read never blocks a run: the part that failed is left out. The object is stored in the run's `config`, so a resumed run decides for the same owner it started with.
+
+The api turns the object into an `## Owner Context` section and appends it, after the valuation, to the prompt of every node from the Bull Researcher to the Portfolio Manager. The analysts do not see it.
+
+The Research Manager, the Trader and the Portfolio Manager also get the **owner mandate** after the owner context. It is the `Owner mandate` prompt under Settings → Prompts, so how the debate must rule for you is your text, not code. The default says you accumulate for the long term and add money monthly, that your US technology concentration is deliberate, and that you do not use stop-losses, tranche ladders, price-trigger exits or options. It asks for one of four answers with reasons, and says Hold is a complete answer, which upstream prompts discourage. Both sections are appended after whatever text is saved for a node, so an edited node prompt receives them too.
+
+The mandate asks for the verdict on a line of its own, and the `decision` event carries it as `owner_verdict` when the Portfolio Manager wrote one. The existing `rating` then follows it:
+
+| `OWNER VERDICT` line | `owner_verdict` | `rating` |
+|---|---|---|
+| `ADD` | `add` | `buy` |
+| `HOLD` | `hold` | `hold` |
+| `TRIM` | `trim` | `reduce` |
+| `DO NOT ADD AT THIS SIZE` | `do-not-add` | `hold` |
+
+If the line appears more than once, the last one counts. Without the line, `rating` is read as before and `owner_verdict` is absent. The valuation veto still applies to `rating` afterwards.
+
+The confidence judge is unchanged. Its number is still the probability that the rating is right over the next 7 trading days, which is a shorter horizon than the mandate rules for.
 
 Upstream TradingAgents gives the Trader and the Portfolio Manager only the plan and the debate, so a fact no debater repeated never reached the final call. This app appends the four analyst reports to their input, with an instruction to check the debate against them. The reports are prompt input only and are not saved into the trader plan or the decision.
 

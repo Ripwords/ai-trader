@@ -80,8 +80,10 @@ from .deepseek_compat import install_litellm_thinking_patch
 from . import llm_config
 from . import prompts as prompts_mod
 from .llm_config import LlmRuntimeConfig
+from .owner import format_owner_context, owner_mandate
 from .run_context import ContextLlm, RunContext
 from .toolkit import AgentToolkit, OpenDClient, build_toolkit
+from app.schemas.agents import OwnerContext
 from app.services.valuation.compose import apply_veto, value
 from app.services.valuation.fetch import fetch_valuation_input
 from app.services.valuation.models import ValuationResult
@@ -334,15 +336,18 @@ def _compile_graph(
 
     # The analysts keep the bare model: the run's context is not ready while
     # they work, and they bind tools to it.
-    quick, deep = ContextLlm(quick, ta.run_context), ContextLlm(deep, ta.run_context)
-    workflow.add_node("Bull Researcher", create_bull_researcher(quick, ta.bull_memory))
-    workflow.add_node("Bear Researcher", create_bear_researcher(quick, ta.bear_memory))
-    workflow.add_node("Research Manager", create_research_manager(deep, ta.invest_judge_memory))
-    workflow.add_node("Trader", trader_with_reports(quick, ta.trader_memory))
-    workflow.add_node("Aggressive Analyst", create_aggressive_debator(quick))
-    workflow.add_node("Neutral Analyst", create_neutral_debator(quick))
-    workflow.add_node("Conservative Analyst", create_conservative_debator(quick))
-    workflow.add_node("Risk Judge", risk_manager_with_reports(deep, ta.risk_manager_memory))
+    # The three nodes that decide also get the owner mandate.
+    argues = ContextLlm(quick, ta.run_context)
+    quick_decides = ContextLlm(quick, ta.run_context, decides=True)
+    deep_decides = ContextLlm(deep, ta.run_context, decides=True)
+    workflow.add_node("Bull Researcher", create_bull_researcher(argues, ta.bull_memory))
+    workflow.add_node("Bear Researcher", create_bear_researcher(argues, ta.bear_memory))
+    workflow.add_node("Research Manager", create_research_manager(deep_decides, ta.invest_judge_memory))
+    workflow.add_node("Trader", trader_with_reports(quick_decides, ta.trader_memory))
+    workflow.add_node("Aggressive Analyst", create_aggressive_debator(argues))
+    workflow.add_node("Neutral Analyst", create_neutral_debator(argues))
+    workflow.add_node("Conservative Analyst", create_conservative_debator(argues))
+    workflow.add_node("Risk Judge", risk_manager_with_reports(deep_decides, ta.risk_manager_memory))
 
     workflow.add_edge([analyst.clear_node for analyst in selected], "Bull Researcher")
     workflow.add_conditional_edges(
@@ -387,6 +392,7 @@ def build_graph(
     response_language: str = "en-US",
     selected_analysts: list[str] | None = None,
     company_name: str | None = None,
+    owner_context: OwnerContext | None = None,
     results_dir: Path | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> TradingAgentsGraph:
@@ -441,6 +447,7 @@ def build_graph(
     # bundled tools and run the analysts one after another.
     ta.__dict__["tool_nodes"] = _tool_nodes(toolkit)
     ta.__dict__["run_context"] = RunContext()
+    ta.__dict__["owner_context"] = owner_context
     ta.__dict__["graph"] = _compile_graph(ta, toolkit, checkpointer)
     return ta
 
@@ -455,6 +462,7 @@ async def build_graph_locked(
     response_language: str = "en-US",
     selected_analysts: list[str] | None = None,
     company_name: str | None = None,
+    owner_context: OwnerContext | None = None,
     results_dir: Path | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> TradingAgentsGraph:
@@ -491,6 +499,7 @@ async def build_graph_locked(
             response_language=response_language,
             selected_analysts=selected_analysts,
             company_name=company_name,
+            owner_context=owner_context,
             results_dir=results_dir,
             checkpointer=checkpointer,
         )
@@ -773,6 +782,23 @@ def _parse_rating(text: str) -> str:
     return regex or "hold"
 
 
+# The verdict the owner mandate asks the deciding nodes for. A judge that
+# quotes the trader's line before giving its own states its own last.
+_OWNER_VERDICT_PATTERN = re.compile(
+    r"OWNER\s+VERDICT\s*:[\s*_`]*(DO\s+NOT\s+ADD|ADD|HOLD|TRIM)\b", re.IGNORECASE
+)
+_OWNER_VERDICT_RATING = {"add": "buy", "hold": "hold", "trim": "reduce", "do-not-add": "hold"}
+
+
+def _parse_owner_verdict(text: str) -> str | None:
+    """``add``, ``hold``, ``trim`` or ``do-not-add`` from the last
+    ``OWNER VERDICT:`` line, or None when the text has none."""
+    verdicts = _OWNER_VERDICT_PATTERN.findall(text)
+    if not verdicts:
+        return None
+    return "-".join(verdicts[-1].lower().split())
+
+
 def _extract_decision(
     prev: dict,
     curr: dict,
@@ -800,12 +826,15 @@ def _extract_decision(
     cdec = curr.get("final_trade_decision") or ""
     if not cdec or cdec == pdec:
         return None
-    rating = _parse_rating(cdec)
+    owner_verdict = _parse_owner_verdict(cdec)
+    rating = _OWNER_VERDICT_RATING[owner_verdict] if owner_verdict else _parse_rating(cdec)
     decision: dict = {
         "rating": rating,
         "confidence": None,
         "rationale": cdec,
     }
+    if owner_verdict:
+        decision["owner_verdict"] = owner_verdict
     if valuation is not None and valuation.veto.triggered:
         effective, veto = apply_veto(rating, valuation)
         if effective != rating:
@@ -948,6 +977,16 @@ class _RunValuation:
         self._task.cancel()
 
 
+def _brief_on_owner(graph: TradingAgentsGraph, symbol: str) -> None:
+    """Write who the run is for into its context. The mandate is read here,
+    in the run's task, where this run's prompt overrides are set."""
+    owner: OwnerContext | None = graph.owner_context
+    if owner is None:
+        return
+    graph.run_context.owner = format_owner_context(owner, symbol)
+    graph.run_context.mandate = owner_mandate()
+
+
 async def run_graph(
     graph: TradingAgentsGraph,
     symbol: str,
@@ -980,6 +1019,7 @@ async def run_graph(
     """
     del max_debate_rounds, deep_thinking  # baked in at build_graph time
 
+    _brief_on_owner(graph, symbol)
     valuation = _RunValuation(graph, symbol, run_id)
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
     args = _graph_args(graph, run_id, usage)
@@ -1018,6 +1058,7 @@ async def resume_graph(
     before a debate turn. It is computed again, so a resumed run announces it
     a second time.
     """
+    _brief_on_owner(graph, symbol)
     valuation = _RunValuation(graph, symbol, run_id)
     announced = await valuation.settle()
     if announced:

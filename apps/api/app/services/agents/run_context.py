@@ -17,20 +17,26 @@ class RunContext:
     """Filled in before the debate opens, read each time a debate node prompts."""
 
     valuation: str = ""
+    owner: str = ""
+    # How to rule for this owner. Only the nodes that decide read it.
+    mandate: str = ""
 
-    def render(self) -> str:
-        return "\n\n".join(section for section in (self.valuation,) if section)
+    def render(self, *, decides: bool = False) -> str:
+        sections = (self.valuation, self.owner, self.mandate if decides else "")
+        return "\n\n".join(section for section in sections if section)
 
 
 class ContextLlm:
     """A debate node's model, with the run's context appended to its prompt."""
 
-    def __init__(self, llm: Any, context: RunContext) -> None:
+    def __init__(self, llm: Any, context: RunContext, *, decides: bool = False) -> None:
         self._llm = llm
         self._context = context
+        self._decides = decides
 
     def invoke(self, prompt: Any, *args: Any, **kwargs: Any) -> Any:
-        return self._llm.invoke(_append(prompt, self._context.render()), *args, **kwargs)
+        text = self._context.render(decides=self._decides)
+        return self._llm.invoke(_append(prompt, text), *args, **kwargs)
 
 
 def _append(prompt: Any, text: str) -> Any:

@@ -7,6 +7,10 @@ vi.mock('../../server/db/repo', () => ({ getOwnerId: async () => 'user-1' }))
 vi.mock('../../server/lib/yahoo', () => ({
   resolveSymbol: async () => ({ status: 'resolved', symbol: 'US.NVDA', name: 'NVIDIA' }),
 }))
+const OWNER = { base_currency: 'MYR', position: { status: 'not_held' }, investable_total: 1, monthly_contribution: null, notes: [] }
+vi.mock('../../server/lib/agents/owner-context', () => ({
+  buildOwnerContext: vi.fn(async () => OWNER),
+}))
 
 const { startAgentRun } = await import('../../server/lib/agents/start-run')
 
@@ -40,6 +44,19 @@ describe('startAgentRun', () => {
     expect(failed?.set.error).toMatch(/unreachable/)
     expect(failed?.set.finishedAt).toBeInstanceOf(Date)
     expect(failed?.params).toContain('run-new')
+  })
+
+  it('sends the owner context to the agents service and keeps it on the run for a resume', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}\n')))
+
+    await startAgentRun({ symbol: 'NVDA', origin: 'chat' })
+
+    const [, init] = vi.mocked(fetch).mock.calls[0]!
+    expect(JSON.parse(String(init?.body)).owner_context).toEqual(OWNER)
+    const { buildOwnerContext } = await import('../../server/lib/agents/owner-context')
+    expect(buildOwnerContext).toHaveBeenCalledWith('US.NVDA', 'user-1')
+    const row = fake.inserts.find(i => i.table === 'agent_runs')
+    expect((row?.values.config as { owner_context: unknown }).owner_context).toEqual(OWNER)
   })
 
   it('turns a concurrent start that loses the unique index race into a 409 naming the live run', async () => {
