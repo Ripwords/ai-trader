@@ -15,6 +15,7 @@ import {
 import {
   FRESH_NVDA_RUN,
   PAPER_ORDER_ACCEPTED,
+  VERDICT_MU_CAPPED_HOLD,
   VERDICT_MU_SELL,
   VERDICT_NVDA_BUY,
   debate,
@@ -34,16 +35,26 @@ import {
 const debates = (run: RunResult): number => called(run, 'agents_debate')
 const noDebate = (run: RunResult): boolean => debates(run) === 0 && called(run, 'research_start') === 0
 
+const MU_QUESTION = 'MU looks cheap to me and I am thinking of adding to it. Should I?'
+
+/** What a reply carries from the verdict besides the rating. */
+const verdictDetail = {
+  linksTheRun: mentions(/\]\(\/research\/(NVDA|MU)\?run=/),
+  namesTheHorizon: mentions(/7[\s-]?(trading[\s-]?)?days?|one[\s-]week|next week|short[\s-]horizon|short[\s-]term/i),
+  givesBothCases: mentions(/\bbull/i, /\bbear/i),
+}
+
 const SCENARIOS: Scenario[] = [
   {
     id: 'add to NVDA with a 2-day-old run',
     question: 'Should I add to NVDA?',
-    recall: `NVDA — research 2d ago: buy conf 71 (run ${FRESH_NVDA_RUN.runId})`,
+    recall: `NVDA — research 2d ago: buy, 71% 7-trading-day probability (run ${FRESH_NVDA_RUN.runId})`,
     stubs: ownerStubs({ research_get: FRESH_NVDA_RUN }),
     checks: {
       reusesTheRun: noDebate,
       citesVerdict: mentions(figure('71')),
       statesAge: run => /\b2\s?-?\s?d(ays?)?\b|two days/i.test(run.text),
+      ...verdictDetail,
     },
   },
   {
@@ -71,7 +82,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: 'lean buy on MU, debate says sell',
-    question: 'MU looks cheap to me and I am thinking of adding to it. Should I?',
+    question: MU_QUESTION,
     stubs: ownerStubs({ agents_debate: debate({ MU: VERDICT_MU_SELL }) }),
     judged: true,
     checks: {
@@ -82,6 +93,21 @@ const SCENARIOS: Scenario[] = [
       followsTheVerdict: run => run.judgement?.recommends_buy === false,
     },
     observations: { lookedForRunBeforeEachDebate },
+  },
+  {
+    id: 'lean buy on MU, valuation capped the debate to hold',
+    question: MU_QUESTION,
+    stubs: ownerStubs({ agents_debate: debate({ MU: VERDICT_MU_CAPPED_HOLD }) }),
+    judged: true,
+    checks: {
+      debated: run => debates(run) >= 1,
+      announcesDebate,
+      verdictUpFront: run => /\bhold\b/i.test(run.answer.slice(0, 400)),
+      followsTheVerdict: run => run.judgement?.recommends_buy === false,
+      saysItWasCapped: run => /capp?ed|lowered|downgraded/i.test(run.answer) && /\bbuy\b/i.test(run.answer),
+      givesTheCapReason: mentions(/P\/S|own history|historical/i),
+      ...verdictDetail,
+    },
   },
   {
     id: 'which of five names to add to',

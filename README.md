@@ -508,7 +508,7 @@ cd apps/web && EVAL_LLM=1 DATABASE_URL=postgresql://<user>:<password>@localhost:
 |---|---|
 | `portfolio-answers.eval.test.ts` | Portfolio answers use the right figures and currency basis. |
 | `chat-settled-risks.eval.test.ts` | With memories saying the USD exposure and tech tilt are settled, replies do not warn about them again and still carry the figures. Reports reply length per scenario. |
-| `chat-buy-debate.eval.test.ts` | A debate (or a reused fresh run) backs a buy recommendation, no debate runs for a fact, a sell-side question or an order you already decided on, and a disagreeing verdict leads the reply. |
+| `chat-buy-debate.eval.test.ts` | A debate (or a reused fresh run) backs a buy recommendation, no debate runs for a fact, a sell-side question or an order you already decided on, and a disagreeing verdict leads the reply. A reply that cites a verdict says when the valuation capped it and why, gives the bull and the bear case, names the 7-day horizon of the percentage and links the run. |
 | `chat-memory-extract.eval.test.ts` | The memory extractor saves standing preferences and nothing else. |
 
 Each scenario runs several times. A gated check must hold in at least two thirds of the runs; observations are reported and never fail the test. One quick-model request per judged reply grades what a regular expression cannot (is this sentence a warning, does the reply open with the answer).

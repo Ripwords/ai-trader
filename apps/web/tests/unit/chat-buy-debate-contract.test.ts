@@ -35,6 +35,15 @@ describe('chat.system default: debate before a buy', () => {
     expect(rule()).toMatch(/call research_get with the symbol before any agents_debate call/)
   })
 
+  it('reports the cap, both cases and the run link, and keeps the 7-day probability from reading as conviction', () => {
+    expect(rule()).toMatch(/rating_cap is set, say the agents reached original_rating/)
+    expect(rule()).toMatch(/the bull case and the bear case in one line each/)
+    expect(rule()).toMatch(/a markdown link to run_url/)
+    expect(rule()).toMatch(/add no host/)
+    expect(rule()).toMatch(/never as conviction in the long-term thesis/)
+    expect(body).not.toMatch(/rating\/confidence\/rationale/)
+  })
+
   it('tells the owner a debate is starting and that it takes minutes', () => {
     expect(rule()).toMatch(/in the same message as the agents_debate call/)
     expect(rule()).toMatch(/takes several minutes/)
@@ -99,6 +108,27 @@ describe('research tools: buy-gate support', () => {
     expect(tools.agents_debate!.description).toMatch(/before recommending that the user buy or add/)
     expect(tools.research_start!.description).toMatch(/verdict in this turn/)
     expect(tools.research_get!.description).toContain('age_days')
+  })
+
+  it('names the verdict fields the two research tools return', () => {
+    const tools = makeTools({} as ApiClient)
+    for (const name of ['agents_debate', 'research_get']) {
+      for (const field of ['rating_cap', 'bull_case', 'bear_case', 'run_url', 'no_verdict_reason']) {
+        expect(tools[name]!.description, name).toContain(field)
+      }
+    }
+    expect(tools.research_get!.description).toContain('latest_attempt')
+  })
+
+  it('describes the plan tools by the fields they return', () => {
+    const tools = makeTools({} as ApiClient)
+    expect(tools.planning_get!.description).toContain('investable_total')
+    expect(tools.planning_get!.description).not.toMatch(/settings holds/)
+    expect(tools.planning_update!.description).toContain('locked_symbols')
+    expect(tools.portfolio_rebalance_plan!.description).toMatch(/Whole-share trades/)
+    expect(tools.portfolio_rebalance_plan!.description).not.toMatch(/symbol null/)
+    expect(body).not.toMatch(/symbol null/)
+    expect(body).toContain('investable_total')
   })
 
   it('describes a run as taking minutes in both research tools', () => {

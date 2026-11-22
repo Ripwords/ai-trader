@@ -1,3 +1,4 @@
+import { buildRunVerdict, type PersistedRun } from '../../../server/lib/agents/verdict'
 import type { Stubs } from './harness'
 
 /**
@@ -310,53 +311,96 @@ function marketSnapshot(input: Record<string, unknown>) {
   }
 }
 
+type Rating = 'strong-buy' | 'buy' | 'hold' | 'reduce' | 'sell'
+
+/** What a finished run stored, as far as the evals vary it. */
 export interface Verdict {
-  rating: 'strong-buy' | 'buy' | 'hold' | 'reduce' | 'sell'
+  rating: Rating
   confidence: number
   rationale: string
+  bull: string
+  bear: string
+  /** The conservative risk analyst, who dissents from a buy. */
+  conservative: string
+  /** The aggressive risk analyst, who dissents from a sell. */
+  aggressive: string
+  cap?: { originalRating: Rating, reason: string }
 }
 
 export const VERDICT_NVDA_BUY: Verdict = {
   rating: 'buy',
   confidence: 68,
   rationale: 'Data-centre revenue is still compounding and the forward multiple sits below its own five-year average; the bear case (customer concentration, export controls) is real but priced. Risk gate: size modestly, the stock trades near its 52-week high.',
+  bull: 'Data-centre revenue grew 56% year on year and the order backlog covers the next four quarters. The forward P/E of 31 sits below the five-year average of 38.',
+  bear: 'Four customers are 46% of revenue, so one capex cut hits hard. Export controls already removed about US$8B of China sales and could tighten again.',
+  conservative: 'At 2% below the 52-week high, a 10% pullback is ordinary. Add in two tranches, not one.',
+  aggressive: 'Backlog visibility of four quarters justifies a full-size add now.',
 }
 
 export const VERDICT_MU_SELL: Verdict = {
   rating: 'sell',
   confidence: 74,
   rationale: 'DRAM contract prices rolled over in the latest month and channel inventory is rising; trailing free cash flow overstates through-cycle earnings, so the DCF discount is a cyclical-peak artefact. Risk gate rejected new longs until pricing stabilises.',
+  bull: 'HBM is sold out through next year and gross margin expanded to 39%. Trailing free cash flow puts the DCF fair value 20% above the price.',
+  bear: 'DRAM contract prices fell 6% in the latest month and channel inventory rose to 14 weeks. Trailing free cash flow is a cyclical peak, not a base.',
+  conservative: 'Memory downturns have cut the stock 40% or more from the peak. Wait for contract prices to stop falling.',
+  aggressive: 'HBM demand makes this cycle different; a 6% price dip is noise.',
+}
+
+export const VERDICT_MU_CAPPED_HOLD: Verdict = {
+  ...VERDICT_MU_SELL,
+  rating: 'hold',
+  confidence: 57,
+  rationale: 'The agents reached buy on the memory upcycle, but the valuation check capped it. DRAM contract prices rolled over in the latest month and channel inventory is rising; trailing free cash flow overstates through-cycle earnings. Risk gate: no new longs until pricing stabilises.',
+  cap: {
+    originalRating: 'buy',
+    reason: 'price implies 31.0% growth, >2.5x historical 11.0%, and P/S 5.9 is 1.7x its own history (3.5)',
+  },
 }
 
 const VERDICT_DEFAULT: Verdict = {
   rating: 'buy',
   confidence: 62,
   rationale: 'Fundamentals and trend agree; no thesis-breaking risk surfaced in the debate. Risk gate: normal position size.',
+  bull: 'Revenue and free cash flow both grew faster than the sector over the last four quarters.',
+  bear: 'The multiple is above the sector median, so an earnings miss would be punished.',
+  conservative: 'Nothing here argues for more than a normal position size.',
+  aggressive: 'The trend and the fundamentals agree; size up.',
 }
 
-/** agents_debate output: the verdict for the symbol asked about, in the shape of the tool's final yield. */
-export function debate(verdicts: Record<string, Verdict>) {
-  return (input: Record<string, unknown>) => {
-    const symbol = bare(String(input.symbol ?? ''))
-    return {
-      runId: `eval-run-${symbol.toLowerCase()}`,
-      events: ['Market Analyst', 'Fundamentals Analyst', 'News Analyst', 'Bull Researcher', 'Bear Researcher', 'Research Manager', 'Trader', 'Risk Judge']
-        .map(node => ({ type: 'node-start', node })),
-      ...(verdicts[symbol] ?? VERDICT_DEFAULT),
-    }
+const FIXTURE_NOW_MS = Date.parse('2026-11-22T03:00:00.000Z')
+
+function persisted(symbol: string, runId: string, finishedAt: string, v: Verdict): PersistedRun {
+  return {
+    runId,
+    symbol,
+    status: 'complete',
+    error: null,
+    finishedAt: new Date(finishedAt),
+    decision: { rating: v.rating, confidence: v.confidence, rationale: v.rationale },
+    cap: v.cap ?? null,
+    valuation: null,
+    valuationUnavailableReason: null,
+    debate: { bull: v.bull, bear: v.bear, aggressive: v.aggressive, conservative: v.conservative, neutral: null, researchManager: null },
   }
 }
 
-export const FRESH_NVDA_RUN = {
-  runId: '6f1c2a9e-4d0b-4f6e-9a57-0c1d2e3f4a5b',
-  symbol: 'NVDA',
-  status: 'complete',
-  finishedAt: '2026-11-20T02:00:00.000Z',
-  rating: 'buy',
-  confidence: 71,
-  rationale: VERDICT_NVDA_BUY.rationale,
-  age_days: 2,
+/** agents_debate output: the verdict the tool itself builds from a run that has just finished. */
+export function debate(verdicts: Record<string, Verdict>) {
+  return (input: Record<string, unknown>) => {
+    const symbol = bare(String(input.symbol ?? ''))
+    return buildRunVerdict(
+      persisted(symbol, `eval-run-${symbol.toLowerCase()}`, '2026-11-22T02:55:00.000Z', verdicts[symbol] ?? VERDICT_DEFAULT),
+      FIXTURE_NOW_MS,
+    )
+  }
 }
+
+/** research_get output for a run that finished two days before the fixture clock. */
+export const FRESH_NVDA_RUN = buildRunVerdict(
+  persisted('NVDA', '6f1c2a9e-4d0b-4f6e-9a57-0c1d2e3f4a5b', '2026-11-20T02:00:00.000Z', { ...VERDICT_NVDA_BUY, confidence: 71 }),
+  FIXTURE_NOW_MS,
+)
 
 /**
  * planning_get and portfolio_rebalance_plan as the tools return them for this
