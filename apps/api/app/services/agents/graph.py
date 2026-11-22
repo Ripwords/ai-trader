@@ -41,11 +41,12 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Any, AsyncIterator, Awaitable, Callable
+from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, Literal
 
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, RemoveMessage, ToolMessage
@@ -79,12 +80,15 @@ from .deepseek_compat import install_litellm_thinking_patch
 from . import llm_config
 from . import prompts as prompts_mod
 from .llm_config import LlmRuntimeConfig
+from .run_context import ContextLlm, RunContext
 from .toolkit import AgentToolkit, OpenDClient, build_toolkit
 from app.services.valuation.compose import apply_veto, value
 from app.services.valuation.fetch import fetch_valuation_input
 from app.services.valuation.models import ValuationResult
 from app.services.valuation.persist import record_valuation_snapshot
 from app.services.valuation.summary import format_valuation_for_agents
+
+logger = logging.getLogger(__name__)
 
 
 # ``TradingAgentsGraph(...)`` registers its config as tradingagents' process-wide
@@ -328,6 +332,9 @@ def _compile_graph(
         workflow.add_edge(START, analyst.label)
         workflow.add_edge(analyst.tools_node, analyst.label)
 
+    # The analysts keep the bare model: the run's context is not ready while
+    # they work, and they bind tools to it.
+    quick, deep = ContextLlm(quick, ta.run_context), ContextLlm(deep, ta.run_context)
     workflow.add_node("Bull Researcher", create_bull_researcher(quick, ta.bull_memory))
     workflow.add_node("Bear Researcher", create_bear_researcher(quick, ta.bear_memory))
     workflow.add_node("Research Manager", create_research_manager(deep, ta.invest_judge_memory))
@@ -433,6 +440,7 @@ def build_graph(
     # Seeded for the same reason: upstream's own ToolNodes and graph bind its
     # bundled tools and run the analysts one after another.
     ta.__dict__["tool_nodes"] = _tool_nodes(toolkit)
+    ta.__dict__["run_context"] = RunContext()
     ta.__dict__["graph"] = _compile_graph(ta, toolkit, checkpointer)
     return ta
 
@@ -825,23 +833,6 @@ def _state_snapshot(state: dict) -> dict:
     }
 
 
-def _seed_valuation_context(
-    graph: TradingAgentsGraph, symbol: str, trade_date: date, summary: str
-) -> None:
-    """Put the deterministic valuation summary in front of the two judges.
-
-    TradingAgents' Research Manager and Risk Manager read their
-    ``FinancialSituationMemory`` (a BM25 over situation/recommendation pairs)
-    at prompt time; seeding the summary there is how the DCF reaches them
-    without patching the upstream prompts. Other roles never see it.
-    """
-    if not summary:
-        return
-    pair = (f"{symbol} valuation on {trade_date.isoformat()}", summary)
-    graph.invest_judge_memory.add_situations([pair])
-    graph.risk_manager_memory.add_situations([pair])
-
-
 def _serialize_final_state(state: dict) -> dict:
     """Flatten the terminal AgentState into a JSON-serializable summary.
 
@@ -871,55 +862,87 @@ def _serialize_final_state(state: dict) -> dict:
     return out
 
 
-async def _compute_run_valuation(
-    symbol: str, run_id: str | None = None
-) -> tuple[ValuationResult | None, str]:
-    """Compute the deterministic valuation for this run, fail-soft.
+@dataclass(frozen=True)
+class ValuationOutcome:
+    """How the run's valuation went, and what the debate is told about it."""
 
-    Returns (result, agent-facing summary markdown). Any data/compute error
-    returns (None, "") so a valuation outage never aborts the agent run.
+    # ``multiples_only``: the engine ran but skipped or discarded the DCF.
+    status: Literal["ok", "multiples_only", "unavailable"]
+    reason: str | None
+    result: ValuationResult | None
+    summary: str  # agent-facing markdown
 
-    On success the result is persisted to ``valuation_snapshots``
-    (source='agent_run', linked to ``run_id``) as a record of what the
-    judges saw. The persist call is best-effort and separately guarded — even a raising
-    recorder must not kill the run's valuation context.
+    def public(self) -> dict[str, str | None]:
+        """The part the stream and the run record carry."""
+        return {"status": self.status, "reason": self.reason}
+
+
+def _valuation_unavailable(reason: str, result: ValuationResult | None = None) -> ValuationOutcome:
+    summary = (
+        "## Deterministic Valuation\n"
+        f"Valuation unavailable for this run: {reason}. No fair value was "
+        "computed. Do not cite or invent a DCF target."
+    )
+    return ValuationOutcome("unavailable", reason, result, summary)
+
+
+async def _compute_run_valuation(symbol: str, run_id: str | None = None) -> ValuationOutcome:
+    """Compute the deterministic valuation for this run.
+
+    A data or compute error is an ``unavailable`` outcome, never an exception:
+    a valuation outage must not abort the run, and the debate and the stream
+    are told why it is missing.
+
+    A computed result is persisted to ``valuation_snapshots``
+    (source='agent_run', linked to ``run_id``) as a record of what the debate
+    saw. A failed snapshot does not cost the run its valuation.
     """
     try:
         vi = await fetch_valuation_input(symbol)
         result = value(vi)
     except Exception as e:  # noqa: BLE001 - valuation is best-effort context
-        print(f"[agents] valuation skipped for {symbol}: {e}")
-        return None, ""
+        logger.warning("valuation unavailable for %s: %r", symbol, e)
+        return _valuation_unavailable((str(e) or type(e).__name__)[:300])
     try:
         await record_valuation_snapshot(result, source="agent_run", run_id=run_id)
-    except Exception as e:  # noqa: BLE001 - snapshot is best-effort
-        print(f"[agents] valuation snapshot failed for {symbol}: {e}")
-    return result, format_valuation_for_agents(result)
+    except Exception:  # noqa: BLE001 - snapshot is best-effort
+        logger.exception("valuation snapshot failed for %s", symbol)
+    if result.data_quality == "unavailable":
+        return _valuation_unavailable("market data could not be retrieved", result)
+    summary = format_valuation_for_agents(result)
+    if result.data_quality == "multiples_only":
+        # Every multiples-only path in the engine records why first.
+        reason = result.dcf_invalid_reason or next(iter(result.warnings), "no DCF fair value")
+        return ValuationOutcome("multiples_only", reason, result, summary)
+    return ValuationOutcome("ok", None, result, summary)
 
 
 class _RunValuation:
     """The run's deterministic valuation, fetched while the analysts work.
 
-    Only the Research Manager and the Risk Manager read it (through their
-    memories) and only the decision's veto needs the result, so nothing before
-    the debate waits for it.
+    Every debate prompt carries its summary, so the debate waits for it; the
+    analysts do not.
     """
 
     def __init__(
-        self, graph: TradingAgentsGraph, symbol: str, trade_date: date, run_id: str | None
+        self, graph: TradingAgentsGraph, symbol: str, run_id: str | None
     ) -> None:
-        self.result: ValuationResult | None = None
+        self.outcome: ValuationOutcome | None = None
+        self._context: RunContext = graph.run_context
         self._task = asyncio.ensure_future(_compute_run_valuation(symbol, run_id=run_id))
-        self._seed = functools.partial(_seed_valuation_context, graph, symbol, trade_date)
-        self._seeded = False
 
-    async def ready(self) -> None:
-        """Wait for the valuation and put its summary in front of the judges."""
-        if self._seeded:
-            return
-        self.result, summary = await self._task
-        self._seed(summary)
-        self._seeded = True
+    @property
+    def result(self) -> ValuationResult | None:
+        return self.outcome.result if self.outcome else None
+
+    async def settle(self) -> dict | None:
+        """Wait for the valuation and put its summary into the run's context.
+        Returns the chunk announcing the outcome, the first time only."""
+        if self.outcome is not None:
+            return None
+        self.outcome = await self._task
+        self._context.valuation = self.outcome.summary
+        return _normalize_chunk(None, {"valuation": self.outcome.public()}, finished=False)
 
     def cancel(self) -> None:
         self._task.cancel()
@@ -957,18 +980,19 @@ async def run_graph(
     """
     del max_debate_rounds, deep_thinking  # baked in at build_graph time
 
-    valuation = _RunValuation(graph, symbol, trade_date, run_id)
+    valuation = _RunValuation(graph, symbol, run_id)
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
     args = _graph_args(graph, run_id, usage)
+    selected = [analyst for analyst in ANALYSTS if analyst.label in graph.graph.nodes]
     try:
         # Every selected analyst starts in the first step, so say so before any
         # of them has a tool call to show.
-        for analyst in ANALYSTS:
-            if analyst.label in graph.graph.nodes:
-                yield _normalize_chunk(analyst.label, {}, finished=False)
+        for analyst in selected:
+            yield _normalize_chunk(analyst.label, {}, finished=False)
         async for chunk in _translate_states(
             graph.graph.astream(init_state, **args), valuation, prev={},
             judge=_confidence_judge(graph, args),
+            debate_waits_for=tuple(analyst.report for analyst in selected),
         ):
             yield chunk
     finally:
@@ -991,10 +1015,13 @@ async def resume_graph(
 
     A run that halted with some analysts done reruns only the unfinished ones.
     The valuation is awaited up front here: the checkpoint may sit one step
-    before a judge.
+    before a debate turn. It is computed again, so a resumed run announces it
+    a second time.
     """
-    valuation = _RunValuation(graph, symbol, trade_date, run_id)
-    await valuation.ready()
+    valuation = _RunValuation(graph, symbol, run_id)
+    announced = await valuation.settle()
+    if announced:
+        yield announced
 
     args = _graph_args(graph, run_id, usage)
     checkpoint = await graph.graph.aget_state(args["config"])
@@ -1052,11 +1079,20 @@ def _analyst_chunk(analyst: Analyst, prev: dict, curr: dict, reports: list[dict]
     return _normalize_chunk(analyst.label, values, finished=bool(mine))
 
 
+def _debate_may_be_next(state: dict, debate_waits_for: tuple[str, ...]) -> bool:
+    """Whether the graph's next step can be a debate turn: every selected
+    analyst has reported, or the debate is already running."""
+    turns = (state.get("investment_debate_state") or {}).get("count", 0)
+    reported = bool(debate_waits_for) and all(state.get(field) for field in debate_waits_for)
+    return reported or turns > 0
+
+
 async def _translate_states(
     states: AsyncIterator[Any],
     valuation: _RunValuation | None,
     prev: dict,
     judge: Judge | None = None,
+    debate_waits_for: tuple[str, ...] = (),
 ) -> AsyncIterator[dict]:
     """Diff successive AgentState snapshots into normalized chunks, then yield
     the terminal state as a ``final_state`` chunk.
@@ -1104,11 +1140,12 @@ async def _translate_states(
             yield _normalize_chunk(node, values, finished=node is not None)
 
         # The graph only takes its next step when this loop asks for the next
-        # snapshot. Once the debate has opened the Research Manager can be
-        # next, so waiting here still gets the valuation to that judge.
-        debate_turns = (curr.get("investment_debate_state") or {}).get("count", 0)
-        if valuation is not None and debate_turns > 0:
-            await valuation.ready()
+        # snapshot, so waiting here puts the valuation into the context before
+        # the first debate prompt is built.
+        if valuation is not None and _debate_may_be_next(curr, debate_waits_for):
+            announced = await valuation.settle()
+            if announced:
+                yield announced
 
         prev = curr
 
@@ -1116,5 +1153,7 @@ async def _translate_states(
     # tee can persist it on agent_runs.final_state.
     if prev:
         snapshot = _serialize_final_state(prev)
+        if valuation is not None and valuation.outcome is not None:
+            snapshot["valuation"] = valuation.outcome.public()
         if snapshot:
             yield _normalize_chunk(None, {"final_state": snapshot}, finished=False)

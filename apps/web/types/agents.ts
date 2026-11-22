@@ -26,6 +26,9 @@ export type AgentEvent =
   | { type: 'report'; kind: ReportKind; node: string; content: string }
   | { type: 'synthesis'; stage: SynthesisStage; node: string; content: string }
   | { type: 'decision'; rating: Rating; confidence: number | null; rationale: string }
+  // Sent once before the first debate turn (again on a resume). `reason` says
+  // why there is no DCF fair value; it is null when status is 'ok'.
+  | { type: 'valuation'; status: 'ok' | 'multiples_only' | 'unavailable'; reason: string | null }
   | { type: 'valuation-veto'; original_rating: string; effective_rating: string; reason: string; rating_cap: string }
   | { type: 'final-state'; state: Record<string, unknown> }
   | { type: 'run-end'; run_id: string; tokens_in: number; tokens_out: number; cost_usd: number }

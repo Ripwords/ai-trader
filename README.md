@@ -291,7 +291,7 @@ Tools are defined in `apps/web/server/llm/tools.ts`. The routing rules are the c
 - When OpenD is down, each api call to it makes one connection attempt (at most 20 s) and then fails with 502, or reports `reachable: false` for `/quote/state`. OpenD calls run off the event loop, so the other api routes keep answering.
 - The chat's chart (`market_kline`) and quote (`market_snapshot`) tools, and the risk report's price and chart, fall back to Yahoo's delayed data when moomoo refuses the symbol. That happens for markets your moomoo account has no quote permission for (Bursa Malaysia `MY.*` on this account), or while OpenD is down. Daily, weekly and monthly charts fall back; intraday charts (`1m`–`60m`) still fail. The chat reply says the data is delayed from Yahoo. The risk report's price header reads **yahoo · delayed** in place of **moomoo**, and shows the market's currency (`MYR` for `MY.*`, `HKD` for `HK.*`, and so on) rather than always `USD`. moomoo codes map to Yahoo symbols as `MY.1066` → `1066.KL`, `SG.` → `.SI`, `JP.` → `.T`, `AU.` → `.AX`, `CA.` → `.TO`. The web server's other Yahoo lookups (fundamentals, earnings, news) use the same mapping, so they now find those symbols too.
 - Valuations are computed in the currency the company reports in. When the quote trades in another currency (an HKD-listed company reporting in CNY) the price series and the market cap are converted at the current FX rate and the result says so (before, the market cap stayed in the trading currency, so HSBC showed a false "market cap mismatch" and P/FCF divided an HKD market cap by USD cash flow); the card labels prices with the ISO code.
-- The agent streams **NDJSON** chunks (`run-start`, `node-start`, `node-end`, `tool-call`, `tool-result`, `debate-round`, `risk-debate-turn`, `report`, `decision`, `synthesis`, `final-state`) which the chat + research UIs parse inline.
+- The agent streams **NDJSON** chunks (`run-start`, `node-start`, `node-end`, `tool-call`, `tool-result`, `debate-round`, `risk-debate-turn`, `report`, `valuation`, `decision`, `synthesis`, `final-state`) which the chat + research UIs parse inline.
 
 ### Long replies and runs survive the browser
 
@@ -428,7 +428,17 @@ flowchart LR
 | **Confidence judge** | Reads the whole debate and the final call, then states the probability (0–100) that the rating is right over the next 7 trading days, scored the same way the backtest scores it. A failed or unreadable reply stores no confidence rather than a placeholder. | Debate + decision |
 | **Execution** | Places the order against `SIMULATE` (paper) by default; `REAL` is gated by `MAX_DAILY_LIVE_NOTIONAL_USD`. | Manager decision → moomoo OpenD |
 
-Each run starts fresh: agents do not carry lessons from past decisions into later runs. The only extra context is the deterministic DCF valuation, which the Research Manager and Risk Manager see before they rule.
+Each run starts fresh: agents do not carry lessons from past decisions into later runs. The only extra context is the deterministic valuation. It is computed while the analysts work, and the debate waits for it. Its summary is appended to the prompt of every node from the Bull Researcher to the Portfolio Manager, after whatever text Settings → Prompts has saved for that node, so an edited prompt receives it too. The analysts do not see it.
+
+The run says how the valuation went in a `valuation` event before the first debate turn, and stores the same two fields under `valuation` in the run's final state:
+
+| `status` | Meaning | `reason` |
+|---|---|---|
+| `ok` | A DCF fair value was computed. | `null` |
+| `multiples_only` | The engine ran but skipped or discarded the DCF (non-positive free cash flow, a bank or insurer, a fair value outside the band a DCF can resolve). The debate gets the multiples and is told there is no DCF target. | The engine's reason |
+| `unavailable` | The data fetch or the computation failed. The debate is told no fair value exists and not to invent one. The run continues. | The error message |
+
+A resumed run computes the valuation again and sends the event again.
 
 Upstream TradingAgents gives the Trader and the Portfolio Manager only the plan and the debate, so a fact no debater repeated never reached the final call. This app appends the four analyst reports to their input, with an instruction to check the debate against them. The reports are prompt input only and are not saved into the trader plan or the decision.
 

@@ -10,6 +10,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
 
+from app.services.agents.run_context import RunContext
 from tests.agents.test_router_sync import _FakePool
 
 STORED_CONFIG = {
@@ -99,14 +100,15 @@ class _Graph:
         self.graph = _Compiled()
         self.propagator = _Propagator()
         self.deep_thinking_llm = _JudgeLlm()
+        self.run_context = RunContext()
 
 
 @pytest.fixture(autouse=True)
 def _no_valuation(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.agents import graph as graph_mod
 
-    async def fake_valuation(*_a: Any, **_kw: Any) -> tuple[None, str]:
-        return None, ""
+    async def fake_valuation(*_a: Any, **_kw: Any) -> graph_mod.ValuationOutcome:
+        return graph_mod.ValuationOutcome("unavailable", "not fetched in tests", None, "")
 
     monkeypatch.setattr(graph_mod, "_compute_run_valuation", fake_valuation)
 

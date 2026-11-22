@@ -75,6 +75,13 @@ async def translate_chunks(
                 "ok": bool(tr.get("ok", True)),
                 "preview": preview,
             }
+        valuation = values.get("valuation")
+        if valuation:
+            yield {
+                "type": "valuation",
+                "status": valuation.get("status"),
+                "reason": valuation.get("reason"),
+            }
         debate = values.get("debate")
         if debate:
             yield {

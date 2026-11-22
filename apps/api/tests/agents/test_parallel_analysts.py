@@ -24,6 +24,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.services.agents import graph as graph_mod
 from app.services.agents import llm_config
+from app.services.agents.graph import ValuationOutcome
 from app.services.agents.llm_config import LlmRuntimeConfig, RoleModel
 from app.services.agents.streaming import translate_chunks
 
@@ -82,6 +83,9 @@ class FakeLlm:
                 return AIMessage(content="", tool_calls=[call])
             if self.fail_once == role:
                 self.fail_once = None
+                # The step's other analysts all slept the same delay; let them
+                # save their reports before this one halts the step.
+                time.sleep(4 * self.delay)
                 raise RuntimeError(f"{role} provider outage")
             return AIMessage(content=f"{role} report")
 
@@ -132,9 +136,9 @@ def llm(monkeypatch: pytest.MonkeyPatch) -> FakeLlm:
 def valuation_delay(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
     delay = {"seconds": 0.0}
 
-    async def fake_valuation(*_a: Any, **_kw: Any) -> tuple[None, str]:
+    async def fake_valuation(*_a: Any, **_kw: Any) -> ValuationOutcome:
         await asyncio.sleep(delay["seconds"])
-        return None, VALUATION_MARKER
+        return ValuationOutcome("ok", None, None, VALUATION_MARKER)
 
     monkeypatch.setattr(graph_mod, "_compute_run_valuation", fake_valuation)
     return delay
@@ -270,26 +274,52 @@ async def test_result_shape_is_unchanged(
     assert set(final) == {
         "market_report", "sentiment_report", "news_report", "fundamentals_report",
         "investment_plan", "trader_investment_plan", "final_trade_decision",
-        "investment_debate_state", "risk_debate_state",
+        "investment_debate_state", "risk_debate_state", "valuation",
     }
+    assert final["valuation"] == {"status": "ok", "reason": None}
     assert final["sentiment_report"] == "social report"
     assert not any(key.endswith("_messages") for key in final)
 
 
-async def test_valuation_overlaps_the_analysts_and_reaches_both_judges(
+async def test_valuation_overlaps_the_analysts_and_reaches_every_debate_prompt(
     llm: FakeLlm, valuation_delay: dict[str, float], tmp_path: Any
 ) -> None:
-    # Still running when the Research Manager's turn comes (analysts, bull and
-    # bear take about 4 LLM delays), so only a gate gets it to the judges.
-    valuation_delay["seconds"] = 8 * LLM_DELAY_S
+    # Still running when the Bull Researcher's turn comes (the analysts take
+    # about 2 LLM delays), so only a gate gets it into the first argument.
+    valuation_delay["seconds"] = 4 * LLM_DELAY_S
     graph = _build(tmp_path)
 
-    _, reports_done = await _run(graph)
+    events, reports_done = await _run(graph)
 
-    judged = [p for p in llm.prompts if VALUATION_MARKER in p]
-    assert len(judged) == 2  # Research Manager and Risk Manager
+    assert len(llm.prompts) == 8
+    for prompt in llm.prompts:
+        assert prompt.count(VALUATION_MARKER) == 1
     # The reports did not wait for the valuation.
     assert reports_done < valuation_delay["seconds"]
+    types = [e["type"] for e in events]
+    assert types.count("valuation") == 1
+    assert types.index("valuation") < types.index("debate-round")
+    assert next(e for e in events if e["type"] == "valuation") == {
+        "type": "valuation", "status": "ok", "reason": None,
+    }
+
+
+async def test_a_failed_valuation_is_said_to_the_debate_and_the_stream(
+    llm: FakeLlm, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    async def boom(_symbol: str) -> None:
+        raise RuntimeError("yahoo timed out")
+
+    monkeypatch.setattr(graph_mod, "fetch_valuation_input", boom)
+
+    events, _ = await _run(_build(tmp_path))
+
+    unavailable = {"status": "unavailable", "reason": "yahoo timed out"}
+    assert next(e for e in events if e["type"] == "valuation") == {"type": "valuation", **unavailable}
+    assert next(e for e in events if e["type"] == "final-state")["state"]["valuation"] == unavailable
+    for prompt in llm.prompts:
+        assert "Valuation unavailable for this run: yahoo timed out" in prompt
+    assert next(e for e in events if e["type"] == "decision")["rating"] == "buy"
 
 
 async def test_resume_after_one_analyst_fails_reruns_only_that_analyst(
@@ -323,7 +353,8 @@ async def test_resume_after_one_analyst_fails_reruns_only_that_analyst(
     ):
         assert final[field] == f"{role} report"
     assert next(e for e in events if e["type"] == "decision")["rating"] == "buy"
-    assert len([p for p in fake.prompts if VALUATION_MARKER in p]) == 2
+    assert len([p for p in fake.prompts if VALUATION_MARKER in p]) == 8
+    assert [e["type"] for e in events].count("valuation") == 1
 
 
 REPLY = "Argument. FINAL TRANSACTION PROPOSAL: **BUY**"
