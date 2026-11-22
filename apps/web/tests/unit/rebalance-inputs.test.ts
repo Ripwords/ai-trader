@@ -10,7 +10,7 @@ const yahoo = vi.hoisted(() => ({
 
 vi.mock('../../server/lib/yahoo', () => ({
   ...yahoo,
-  toYahooSymbol: (s: string) => (s.startsWith('US.') ? s.slice(3) : s === 'MY.1066' ? '1066.KL' : s),
+  toYahooSymbol: (s: string) => (s.startsWith('US.') ? s.slice(3) : s === 'MY.1066' ? '1066.KL' : s === 'HK.00700' ? '0700.HK' : s),
 }))
 
 function position(symbol: string, assetClass: string, value: number, price: number, currency: string): FullPortfolioPosition {
@@ -52,8 +52,8 @@ describe('loadRebalanceInputs', () => {
     const { loadRebalanceInputs } = await import('../../server/lib/rebalance-inputs')
     const out = await loadRebalanceInputs(portfolio, summary, [])
     expect(out.instruments).toEqual([
-      { symbol: 'MSFT', name: 'MSFT name', bucket: 'equity', price: 500, currency: 'USD', fx_rate: 4.5, held_shares: 9, held_value: 45_000, candidate: false },
-      { symbol: '1066.KL', name: '1066.KL name', bucket: 'equity', price: 7.2, currency: 'MYR', fx_rate: 1, held_shares: 10, held_value: 7_000, candidate: false },
+      { symbol: 'MSFT', name: 'MSFT name', bucket: 'equity', price: 500, currency: 'USD', fx_rate: 4.5, held_shares: 9, held_value: 45_000, lot_size: 1, candidate: false },
+      { symbol: '1066.KL', name: '1066.KL name', bucket: 'equity', price: 7.2, currency: 'MYR', fx_rate: 1, held_shares: 10, held_value: 7_000, lot_size: 100, candidate: false },
     ])
     expect(out).toMatchObject({ skipped: [], broker_cash: { MYR: 2_000, USD: 12.5 }, broker_status: 'ok', fetched_at: '2026-11-22T01:00:00.000Z' })
   })
@@ -66,13 +66,31 @@ describe('loadRebalanceInputs', () => {
     expect(out.skipped).toEqual([{ symbol: 'MSFT', reason: 'no_fx_rate' }])
   })
 
+  it('leaves out a holding or candidate on a market whose lot size varies by stock, instead of guessing a share count', async () => {
+    yahoo.getFxRate.mockImplementation(async (from: string) => (from === 'HKD' ? 0.55 : 1))
+    yahoo.resolveSymbol.mockResolvedValue({ status: 'resolved', symbol: 'HK.00005', moomoo: 'HK.00005', yahoo: '0005.HK', name: 'HSBC', exchange: 'HKG', quoteType: 'EQUITY' })
+    yahoo.getYahooQuote.mockResolvedValue({ name: 'HSBC', lastPrice: 70, currency: 'HKD' })
+    const withHk: FullPortfolio = {
+      ...portfolio,
+      positions: [...portfolio.positions, position('0700.HK', 'EQUITY', 9_000, 400, 'HKD')],
+      moomoo_live: [...portfolio.moomoo_live, live('HK.00700', 100)],
+    }
+    const { loadRebalanceInputs } = await import('../../server/lib/rebalance-inputs')
+    const out = await loadRebalanceInputs(withHk, buildPlanningSummary(withHk, normalizePlanningSettings({})), [{ symbol: 'HK.00005', bucket: 'equity' }])
+    expect(out.instruments.map(i => i.symbol)).toEqual(['MSFT', '1066.KL'])
+    expect(out.skipped).toEqual([
+      { symbol: '0700.HK', reason: 'lot_size_unknown' },
+      { symbol: '0005.HK', reason: 'lot_size_unknown' },
+    ])
+  })
+
   it('prices a candidate the broker can trade and marks a held one as a candidate', async () => {
     yahoo.resolveSymbol.mockResolvedValue({ status: 'resolved', symbol: 'US.VOO', moomoo: 'US.VOO', yahoo: 'VOO', name: 'Vanguard S&P 500 ETF', exchange: 'PCX', quoteType: 'ETF' })
     yahoo.getYahooQuote.mockResolvedValue({ name: 'Vanguard S&P 500 ETF', lastPrice: 600, currency: 'USD' })
     const { loadRebalanceInputs } = await import('../../server/lib/rebalance-inputs')
     const out = await loadRebalanceInputs(portfolio, summary, [{ symbol: 'voo', bucket: 'equity' }, { symbol: 'US.MSFT' }])
     expect(out.instruments).toEqual(expect.arrayContaining([
-      { symbol: 'VOO', name: 'Vanguard S&P 500 ETF', bucket: 'equity', price: 600, currency: 'USD', fx_rate: 4.5, held_shares: 0, held_value: 0, candidate: true },
+      { symbol: 'VOO', name: 'Vanguard S&P 500 ETF', bucket: 'equity', price: 600, currency: 'USD', fx_rate: 4.5, held_shares: 0, held_value: 0, lot_size: 1, candidate: true },
       expect.objectContaining({ symbol: 'MSFT', held_shares: 9, candidate: true }),
     ]))
     expect(out.instruments).toHaveLength(3)

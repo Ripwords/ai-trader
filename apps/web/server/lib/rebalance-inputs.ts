@@ -3,6 +3,22 @@ import { normalizeAssetClass, type PlanningBucketKey, type PlanningSummary } fro
 import type { Instrument, RebalanceInputs, SkippedSymbol } from './planning-assistant'
 import { getFxRate, getYahooQuote, resolveSymbol, toYahooSymbol } from './yahoo'
 
+/**
+ * Shares per board lot, by Yahoo exchange suffix. US listings carry no suffix
+ * and trade single shares; Bursa Malaysia trades lots of 100, and an odd lot
+ * goes to a separate, thin market. Markets where the lot is set per stock
+ * (Hong Kong, Singapore) are left out: neither Yahoo nor the quote API reports
+ * a lot size, and a guessed share count is an order the exchange refuses.
+ */
+const LOT_SIZE_BY_SUFFIX: Record<string, number> = { '': 1, 'KL': 100 }
+
+function lotSizeOf(yahooSymbol: string): number | null {
+  const dot = yahooSymbol.lastIndexOf('.')
+  return LOT_SIZE_BY_SUFFIX[dot < 0 ? '' : yahooSymbol.slice(dot + 1).toUpperCase()] ?? null
+}
+
+type Unpriced = Omit<Instrument, 'fx_rate' | 'lot_size'>
+
 export interface RebalanceCandidate {
   symbol: string
   /** Required unless the live broker account already holds the symbol. */
@@ -34,16 +50,21 @@ export async function loadRebalanceInputs(
     if (!rates.has(currency)) rates.set(currency, getFxRate(currency, base))
     return rates.get(currency)!
   }
-  const priced = async (i: Omit<Instrument, 'fx_rate'>): Promise<Instrument | null> => {
+  const priced = async (i: Unpriced): Promise<Instrument | null> => {
+    const lot_size = lotSizeOf(i.symbol)
+    if (lot_size == null) {
+      skipped.push({ symbol: i.symbol, reason: 'lot_size_unknown' })
+      return null
+    }
     const fx_rate = i.price > 0 ? await rateOf(i.currency) : null
     if (fx_rate == null) {
       skipped.push({ symbol: i.symbol, reason: i.price > 0 ? 'no_fx_rate' : 'no_price' })
       return null
     }
-    return { ...i, fx_rate }
+    return { ...i, fx_rate, lot_size }
   }
 
-  const held = new Map<string, Omit<Instrument, 'fx_rate'>>()
+  const held = new Map<string, Unpriced>()
   for (const p of portfolio.positions) {
     const bucket = normalizeAssetClass(p.asset_class)
     const key = p.symbol.toUpperCase()

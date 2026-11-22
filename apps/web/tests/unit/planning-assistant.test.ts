@@ -155,7 +155,7 @@ describe('buildRebalancePlan', () => {
   const USD = 4.5
   const inst = (symbol: string, bucket: Instrument['bucket'], price: number, currency: 'USD' | 'MYR', held_value: number, patch: Partial<Instrument> = {}): Instrument => {
     const fx_rate = currency === 'USD' ? USD : 1
-    return { symbol, name: symbol, bucket, price, currency, fx_rate, held_value, held_shares: held_value / (price * fx_rate), candidate: false, ...patch }
+    return { symbol, name: symbol, bucket, price, currency, fx_rate, held_value, held_shares: held_value / (price * fx_rate), lot_size: 1, candidate: false, ...patch }
   }
   const inputs = (instruments: Instrument[], patch: Partial<RebalanceInputs> = {}): RebalanceInputs => ({
     instruments, skipped: [], broker_cash: { MYR: 2_000, USD: 12.5 }, broker_status: 'ok', fetched_at: '2026-11-22T01:00:00.000Z', ...patch,
@@ -167,7 +167,7 @@ describe('buildRebalancePlan', () => {
   it('gives each trade its price, currency, FX rate, whole shares and the value those shares come to', () => {
     const plan = buildRebalancePlan(summary, inputs([voo, nvda, agg]), { mode: 'contribute_only', contribution: 2_000 })
     expect(plan.trades).toEqual([
-      { bucket: 'bond', symbol: 'AGG', name: 'AGG', side: 'buy', shares: 4, price: 98, currency: 'USD', fx_rate: 4.5, value_native: 392, value: 1_764 },
+      { bucket: 'bond', symbol: 'AGG', name: 'AGG', side: 'buy', shares: 4, lot_size: 1, price: 98, currency: 'USD', fx_rate: 4.5, value_native: 392, value: 1_764 },
     ])
     expect(plan).toMatchObject({ mode: 'contribute_only', base_currency: 'MYR', contribution: 2_000, unallocated: 236 })
   })
@@ -184,9 +184,29 @@ describe('buildRebalancePlan', () => {
     for (const maxPerBucket of [3, 1]) {
       const plan = buildRebalancePlan(equityShort, inputs([dear, cheap]), { mode: 'contribute_only', contribution: 2_000, maxPerBucket })
       expect(plan.trades.map(t => [t.symbol, t.shares, t.value])).toEqual([['CHEAP', 22, 1_980]])
-      expect(plan.skipped).toEqual([{ symbol: 'DEAR', reason: 'below_one_share', one_share: 2_250 }])
+      expect(plan.skipped).toEqual([{ symbol: 'DEAR', reason: 'below_one_lot', lot_size: 1, one_lot: 2_250 }])
       expect(plan).toMatchObject({ unallocated: 20 })
     }
+  })
+
+  it('buys in whole board lots and reports a holding the money cannot buy one lot of, with what a lot costs', () => {
+    const us = inst('US', 'equity', 100, 'USD', 60_000)
+    const bursa = inst('1066.KL', 'equity', 6.5, 'MYR', 5_000, { lot_size: 100 })
+    const split = buildRebalancePlan(equityShort, inputs([us, bursa]), { mode: 'contribute_only', contribution: 2_000 })
+    expect(split.trades.map(t => [t.symbol, t.shares])).toEqual([['US', 4]])
+    expect(split.skipped).toEqual([{ symbol: '1066.KL', reason: 'below_one_lot', lot_size: 100, one_lot: 650 }])
+
+    const alone = buildRebalancePlan(equityShort, inputs([bursa]), { mode: 'contribute_only', contribution: 2_000 })
+    expect(alone.trades).toEqual([
+      { bucket: 'equity', symbol: '1066.KL', name: '1066.KL', side: 'buy', shares: 300, lot_size: 100, price: 6.5, currency: 'MYR', fx_rate: 1, value_native: 1_950, value: 1_950 },
+    ])
+    expect(alone).toMatchObject({ unallocated: 50 })
+  })
+
+  it('sells whole board lots only, leaving an odd lot the normal market cannot take', () => {
+    const odd = inst('ODD.KL', 'equity', 10, 'MYR', 80_000, { lot_size: 100, held_shares: 1_250 })
+    const plan = buildRebalancePlan(summary, inputs([odd, agg]), { mode: 'full' })
+    expect(plan.trades.filter(t => t.side === 'sell').map(t => [t.symbol, t.shares])).toEqual([['ODD.KL', 1_200]])
   })
 
   it('leaves the money unallocated when the broker holds nothing in the bucket, instead of naming a ticker', () => {
