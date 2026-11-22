@@ -478,6 +478,34 @@ cd apps/web && pnpm exec playwright test
 
 The e2e test passes if either a chart canvas OR an inline error message appears — so it works with or without a working model key.
 
+### Chat evals (real model)
+
+`apps/web/tests/eval/` measures the chat prompts against the models chosen in Settings. The tools are stubbed with fixed data, so nothing is read from the broker, no order is placed and no debate is run. The evals are skipped unless `EVAL_LLM=1` is set, and they spend API credit: one pass of the three `chat-*` suites at the default 3 runs measured about 140 model requests.
+
+```sh
+cd apps/web && EVAL_LLM=1 DATABASE_URL=postgresql://<user>:<password>@localhost:5435/<db> ENCRYPTION_KEY=<key> pnpm exec vitest run tests/eval
+```
+
+`DATABASE_URL` must reach the compose Postgres from the host (port 5435), because the model choice and provider keys are read from it. `ENCRYPTION_KEY` is the one in `.env`.
+
+| File | What it measures |
+|---|---|
+| `portfolio-answers.eval.test.ts` | Portfolio answers use the right figures and currency basis. |
+| `chat-settled-risks.eval.test.ts` | With memories saying the USD exposure and tech tilt are settled, replies do not warn about them again and still carry the figures. Reports reply length per scenario. |
+| `chat-buy-debate.eval.test.ts` | A debate (or a reused fresh run) backs a buy recommendation, no debate runs for a fact, a sell-side question or an order you already decided on, and a disagreeing verdict leads the reply. |
+| `chat-memory-extract.eval.test.ts` | The memory extractor saves standing preferences and nothing else. |
+
+Each scenario runs several times. A gated check must hold in at least two thirds of the runs; observations are reported and never fail the test. One quick-model request per judged reply grades what a regular expression cannot (is this sentence a warning, does the reply open with the answer).
+
+| Variable | Effect |
+|---|---|
+| `EVAL_RUNS` | Runs per scenario. Default 3. |
+| `EVAL_REPORT_DIR` | Writes one JSON file per suite with every reply, tool call, check result and the request count. |
+| `EVAL_CHAT_SYSTEM_FILE` | Uses the text in this file as the chat system prompt, to compare a prompt version against the current default. |
+| `EVAL_REPLAY_DIR` | Re-scores the replies saved in a report directory instead of calling the model, after a check changes. |
+
+Add `-t "<scenario name>"` to run one scenario.
+
 `scripts/repro/` holds runtime checks for the streaming behaviour above (dropped chat connections, long silent debate steps, api restarts mid-run, resume). They run against the compose stack; see `scripts/repro/README.md`. The debate checks restart the api with `AGENTS_STUB_RUN_SECONDS` set, which swaps the TradingAgents graph for a stub that sleeps that long and decides `hold` without calling a model. Never set it in `.env`.
 
 ## What's next (later plans)
