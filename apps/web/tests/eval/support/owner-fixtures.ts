@@ -1,4 +1,5 @@
 import { buildRunVerdict, type PersistedRun } from '../../../server/lib/agents/verdict'
+import { ALLOCATION_RULE } from '../../../server/lib/planning-assistant'
 import type { Stubs } from './harness'
 
 /**
@@ -24,7 +25,7 @@ interface Holding {
   cost: number
 }
 
-const HOLDINGS: Holding[] = [
+export const HOLDINGS: Holding[] = [
   { symbol: 'NVDA', name: 'NVIDIA Corporation', qty: 40, last: 172.14, prevClose: 169.8, cost: 118.5 },
   { symbol: 'MSFT', name: 'Microsoft Corporation', qty: 6, last: 498.3, prevClose: 501.15, cost: 402.1 },
   { symbol: 'TSM', name: 'Taiwan Semiconductor Manufacturing Company Limited', qty: 12, last: 245, prevClose: 242.6, cost: 198 },
@@ -426,7 +427,6 @@ export const PLANNING_GET = {
   ],
   goals: [
     { key: 'cash_reserve', label: 'Cash Reserve', current_value: 10485.18, target_value: 4378.8, progress_pct: 100, reached: true, note: 'Cash meets the 5% reserve target.' },
-    { key: 'concentration', label: 'Concentration Control', current_value: 1, target_value: 0, progress_pct: 0, reached: false, note: '1 position is above 20% of investable assets.' },
   ],
   concentration: {
     top_position: { symbol: 'NVDA', allocation_pct: 32.63 },
@@ -452,29 +452,26 @@ export const PLANNING_GET = {
 export const REBALANCE_PLAN = {
   mode: 'contribute_only',
   base_currency: 'MYR',
+  allocation_rule: ALLOCATION_RULE.contribute_only,
   buckets: [
-    { key: 'equity', actual_pct: 88.03, target_pct: 95, planned: 2000, traded: 1428.76, instruments: 8 },
+    { key: 'equity', actual_pct: 88.03, target_pct: 95, planned: 2000, traded: 1996.73, instruments: 8 },
   ],
   trades: [
-    { bucket: 'equity', symbol: 'NVDA', name: 'NVIDIA Corporation', side: 'buy', shares: 2, price: 172.14, currency: 'USD', fx_rate: 4.15, value_native: 344.28, value: 1428.76 },
+    { bucket: 'equity', symbol: 'TSM', name: 'Taiwan Semiconductor Manufacturing Company Limited', side: 'buy', shares: 1, lot_size: 1, price: 245, currency: 'USD', fx_rate: 4.15, value_native: 245, value: 1016.75 },
+    { bucket: 'equity', symbol: 'NVDA', name: 'NVIDIA Corporation', side: 'buy', shares: 1, lot_size: 1, price: 172.14, currency: 'USD', fx_rate: 4.15, value_native: 172.14, value: 714.38 },
+    { bucket: 'equity', symbol: 'PLTR', name: 'Palantir Technologies Inc.', side: 'buy', shares: 1, lot_size: 1, price: 64, currency: 'USD', fx_rate: 4.15, value_native: 64, value: 265.6 },
   ],
   skipped: [
-    { symbol: 'MSFT', reason: 'below_one_share', one_share: 2067.95 },
-    { symbol: 'TSM', reason: 'below_one_share', one_share: 1016.75 },
-    { symbol: 'AAPL', reason: 'below_one_share', one_share: 962.8 },
-    { symbol: 'JNJ', reason: 'below_one_share', one_share: 655.7 },
-    { symbol: 'MU', reason: 'below_one_share', one_share: 490.53 },
-    { symbol: 'KO', reason: 'below_one_share', one_share: 291.21 },
-    { symbol: 'PLTR', reason: 'below_one_share', one_share: 265.6 },
+    { symbol: 'MSFT', reason: 'below_one_lot', lot_size: 1, one_lot: 2067.95 },
   ],
   currencies: [
-    { currency: 'USD', fx_rate: 4.15, buy: 344.28, sell: 0 },
+    { currency: 'USD', fx_rate: 4.15, buy: 481.14, sell: 0 },
   ],
   broker_cash: { USD: 1634.12, MYR: 2000 },
   broker_status: 'ok',
   fetched_at: '2026-11-22T01:00:00.000Z',
   contribution: 2000,
-  unallocated: 571.24,
+  unallocated: 3.27,
 }
 
 export const PAPER_ORDER_ACCEPTED = {

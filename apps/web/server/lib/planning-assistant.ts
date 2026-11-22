@@ -138,7 +138,7 @@ export function planForChat(summary: PlanningSummary, settings: PlanningSettings
   }
 }
 
-/** Something the broker can trade, with what one share costs. */
+/** Something the broker can trade, with what one share costs and how many shares make a lot. */
 export interface Instrument {
   symbol: string
   name: string
@@ -152,16 +152,18 @@ export interface Instrument {
   held_shares: number
   /** In the base currency. */
   held_value: number
+  /** Shares per board lot. The broker's normal market takes whole lots only: 1 in the US, 100 on Bursa Malaysia. */
+  lot_size: number
   /** Named by the caller, not picked from the holdings. */
   candidate: boolean
 }
 
 export type SkippedSymbol =
-  /** one_share is in the base currency. */
-  | { symbol: string, reason: 'below_one_share', one_share: number }
-  | { symbol: string, reason: 'locked' | 'bucket_required' | 'not_found' | 'not_tradable' | 'no_price' | 'no_fx_rate' | 'no_amount_for_bucket' }
+  /** one_lot is what lot_size shares cost, in the base currency. */
+  | { symbol: string, reason: 'below_one_lot', lot_size: number, one_lot: number }
+  | { symbol: string, reason: 'locked' | 'bucket_required' | 'not_found' | 'not_tradable' | 'no_price' | 'no_fx_rate' | 'lot_size_unknown' | 'no_amount_for_bucket' }
 
-/** What server/lib/rebalance-inputs.ts reads for a plan: every instrument is priced and has its rate. */
+/** What server/lib/rebalance-inputs.ts reads for a plan: every instrument is priced and has its rate and lot size. */
 export interface RebalanceInputs {
   instruments: Instrument[]
   skipped: SkippedSymbol[]
@@ -176,7 +178,9 @@ export interface RebalanceTrade {
   symbol: string
   name: string
   side: 'buy' | 'sell'
+  /** A whole number of lots. */
   shares: number
+  lot_size: number
   price: number
   currency: string
   fx_rate: number
@@ -192,7 +196,7 @@ export interface RebalanceBucket {
   target_pct: number
   /** Base currency the bucket should move by; negative for a sale. */
   planned: number
-  /** What the whole-share trades come to. */
+  /** What the whole-lot trades come to. */
   traded: number
   /** How many instruments the bucket could trade. */
   instruments: number
@@ -200,6 +204,8 @@ export interface RebalanceBucket {
 
 export type RebalancePlan = Pick<RebalanceInputs, 'skipped' | 'broker_cash' | 'broker_status' | 'fetched_at'> & {
   base_currency: string
+  /** How the amounts were shared out, in one sentence. */
+  allocation_rule: string
   buckets: RebalanceBucket[]
   trades: RebalanceTrade[]
   /** Per currency traded, in that currency: set `buy` against broker_cash to see what must be converted. */
@@ -207,51 +213,46 @@ export type RebalancePlan = Pick<RebalanceInputs, 'skipped' | 'broker_cash' | 'b
 } & (
   /** cash_change: sales less buys, in the base currency. */
   | { mode: 'full', cash_change: number }
-  /** unallocated: the part of the contribution no trade spends. */
+  /** unallocated: the part of the contribution no trade spends, because no further lot fits or every bucket is at target. */
   | { mode: 'contribute_only', contribution: number, unallocated: number }
 )
 
 const sum = (values: number[]) => values.reduce((total, v) => total + v, 0)
-const shareCost = (i: Instrument) => i.price * i.fx_rate
+const lotCost = (i: Instrument) => i.price * i.fx_rate * i.lot_size
 
 /**
- * Whole shares of `ranked` that come to at most `budget`. The first `count`
- * take part, by `weight`. One that cannot trade a single share is dropped,
- * dearest first, and the next in rank takes its place.
+ * Whole lots of `ranked` that come to at most `budget`. The first `count`
+ * split the budget by `weight`, rounded down to lots. What is left then goes
+ * one lot at a time to the split holding that has the least of its part, and
+ * to the rest of `ranked` in order once no split holding can take a lot.
  */
-function wholeShares(
+function wholeLots(
   budget: number,
   ranked: Instrument[],
   count: number,
   side: 'buy' | 'sell',
-): { shares: Map<Instrument, number>, dropped: Instrument[] } {
-  const cap = (i: Instrument) => (side === 'sell' ? Math.floor(i.held_shares) : Infinity)
+): { lots: Map<Instrument, number>, unfilled: Instrument[] } {
+  const maxLots = (i: Instrument) => (side === 'sell' ? Math.floor(i.held_shares / i.lot_size) : Infinity)
   const weight = (i: Instrument) => (i.candidate ? 1 : i.held_value)
-  const pool = ranked.filter(i => cap(i) >= 1)
-  let chosen = pool.splice(0, count)
-  const dropped: Instrument[] = []
-  let target = new Map<Instrument, number>()
-  for (;;) {
-    const total = sum(chosen.map(weight))
-    target = new Map(chosen.map(i => [i, budget * weight(i) / total]))
-    const short = chosen.filter(i => target.get(i)! < shareCost(i))
-    if (!short.length) break
-    const out = short.reduce((a, b) => (shareCost(b) > shareCost(a) ? b : a))
-    dropped.push(out)
-    chosen = chosen.filter(i => i !== out)
-    const next = pool.shift()
-    if (next) chosen.push(next)
-  }
+  const pool = ranked.filter(i => maxLots(i) >= 1)
+  const split = pool.slice(0, count)
+  const total = sum(split.map(weight))
+  const part = new Map(split.map(i => [i, budget * weight(i) / total]))
+  const lots = new Map(pool.map(i => [i, Math.min(maxLots(i), Math.floor((part.get(i) ?? 0) / lotCost(i)))]))
+  const filled = (i: Instrument) => (part.has(i) ? lots.get(i)! * lotCost(i) / part.get(i)! : Infinity)
 
-  const shares = new Map(chosen.map(i => [i, Math.min(cap(i), Math.floor(target.get(i)! / shareCost(i)))]))
-  const gap = (i: Instrument) => target.get(i)! - shares.get(i)! * shareCost(i)
-  let left = budget - sum(chosen.map(i => shares.get(i)! * shareCost(i)))
-  for (const i of [...chosen].sort((a, b) => gap(b) - gap(a))) {
-    if (shareCost(i) > left + 1e-9 || shares.get(i)! >= cap(i)) continue
-    shares.set(i, shares.get(i)! + 1)
-    left -= shareCost(i)
+  let left = budget - sum(pool.map(i => lots.get(i)! * lotCost(i)))
+  for (;;) {
+    let next: Instrument | undefined
+    for (const i of pool) {
+      if (lotCost(i) > left + 1e-9 || lots.get(i)! >= maxLots(i)) continue
+      if (!next || filled(i) < filled(next)) next = i
+    }
+    if (!next) break
+    lots.set(next, lots.get(next)! + 1)
+    left -= lotCost(next)
   }
-  return { shares, dropped }
+  return { lots, unfilled: split.filter(i => lots.get(i) === 0) }
 }
 
 /** How many of the largest holdings a sale of `sell` needs, and at least `count`. */
@@ -262,13 +263,21 @@ function countCovering(ranked: Instrument[], count: number, sell: number): numbe
   return n
 }
 
+const WITHIN_A_BUCKET = 'split within a bucket over its largest holdings by size (equally over named candidates) in whole lots; the leftover then trades one more lot at a time of the holding furthest behind its part, then of the next-largest holdings in the bucket, until no lot fits'
+
+/** The rule buildRebalancePlan follows, as the chat relays it. */
+export const ALLOCATION_RULE = {
+  full: `Each bucket is bought or sold to its target, the amount ${WITHIN_A_BUCKET}.`,
+  contribute_only: `New money goes to the buckets below target in proportion to their shortfall, never past a target, ${WITHIN_A_BUCKET}.`,
+} as const
+
 /**
- * Whole-share trades that move the portfolio toward the target model. Full
- * mode buys and sells each bucket to its target. Contribute-only mode spends
- * new money on the underweight buckets in proportion to their shortfall and
- * never sells. A bucket trades the candidates given for it in equal parts,
- * or else its largest maxPerBucket holdings by size (more when a sale needs
- * them). Money that buys no whole share stays unallocated.
+ * Whole-lot trades that move the portfolio toward the target model, by
+ * ALLOCATION_RULE. Full mode buys and sells each bucket to its target.
+ * Contribute-only mode never sells, and money beyond the shortfalls stays
+ * unallocated. A bucket splits its amount over the candidates given for it,
+ * or else its largest maxPerBucket holdings (more when a sale needs them).
+ * A bucket's leftover stays in that bucket: it never funds another one.
  */
 export function buildRebalancePlan(
   summary: PlanningSummary,
@@ -300,13 +309,14 @@ export function buildRebalancePlan(
     const ranked = named.length ? named : [...inBucket].sort((a, b) => b.held_value - a.held_value)
     const max = Math.max(1, opts.maxPerBucket ?? 3)
     const count = named.length || (side === 'sell' ? countCovering(ranked, max, -amount) : max)
-    const { shares, dropped } = wholeShares(Math.abs(amount), ranked, count, side)
-    for (const i of dropped) skipped.push({ symbol: i.symbol, reason: 'below_one_share', one_share: round(shareCost(i)) })
+    const { lots, unfilled } = wholeLots(Math.abs(amount), ranked, count, side)
+    for (const i of unfilled) skipped.push({ symbol: i.symbol, reason: 'below_one_lot', lot_size: i.lot_size, one_lot: round(lotCost(i)) })
 
-    const made: RebalanceTrade[] = [...shares].filter(([, n]) => n > 0).map(([i, n]) => ({
-      bucket: key, symbol: i.symbol, name: i.name, side, shares: n, price: i.price, currency: i.currency, fx_rate: i.fx_rate,
-      value_native: round(n * i.price),
-      value: round(n * shareCost(i)),
+    const made: RebalanceTrade[] = [...lots].filter(([, n]) => n > 0).map(([i, n]) => ({
+      bucket: key, symbol: i.symbol, name: i.name, side, shares: n * i.lot_size, lot_size: i.lot_size,
+      price: i.price, currency: i.currency, fx_rate: i.fx_rate,
+      value_native: round(n * i.lot_size * i.price),
+      value: round(n * lotCost(i)),
     }))
     trades.push(...made)
     const row = rows.find(r => r.key === key)!
@@ -323,6 +333,7 @@ export function buildRebalancePlan(
     round(sum(trades.filter(t => t.side === side && (!currency || t.currency === currency)).map(of)))
   const common = {
     base_currency: summary.base_currency,
+    allocation_rule: ALLOCATION_RULE[opts.mode],
     buckets,
     trades,
     skipped,

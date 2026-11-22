@@ -4,7 +4,6 @@ import type { PortfolioPerformance } from '../../server/lib/portfolio-history'
 import type { AllocationRow, PlanningSummary } from '../../server/lib/planning'
 import {
   attentionItems,
-  concentrationTone,
   driftLevel,
   fmtCurrency,
   fmtPct,
@@ -221,7 +220,7 @@ describe('attentionItems', () => {
     expect(attentionItems(plan())).toEqual([])
   })
 
-  it('lists buckets off target, the largest position and goals not reached, biggest trade first', () => {
+  it('lists buckets off target and goals not reached, biggest trade first, and never a large position', () => {
     const cash: AllocationRow = { key: 'cash', label: 'Cash', target_pct: 30, actual_pct: 20, current_value: 200, target_value: 300, drift_pct: -10, action_value: 100, action: 'buy' }
     const near: AllocationRow = { key: 'bond', label: 'Bonds', target_pct: 10, actual_pct: 8, current_value: 80, target_value: 100, drift_pct: -2, action_value: 20, action: 'buy' }
     const items = attentionItems(plan({
@@ -232,15 +231,14 @@ describe('attentionItems', () => {
         { key: 'x', label: 'Done', current_value: 2, target_value: 2, progress_pct: 100, reached: true, note: '' },
       ],
     }))
-    expect(items.map(i => i.label)).toEqual(['Equity', 'Cash', 'NVDA', 'Cash reserve'])
+    expect(items.map(i => i.label)).toEqual(['Equity', 'Cash', 'Cash reserve'])
     expect(items[0]).toMatchObject({ tone: 'accent', detail: 'sell MYR 200.00 · 80.0% vs 60.0% target' })
-    expect(items[2]).toMatchObject({ tone: 'down', detail: '31.4% of investable assets in one position' })
-    expect(items[3]).toMatchObject({ tone: 'accent', detail: 'MYR 1 short' })
+    expect(items[2]).toMatchObject({ tone: 'accent', detail: 'MYR 1 short' })
   })
 
-  it('leaves out a largest position under 5%', () => {
+  it('asks for no attention for a position of any size', () => {
     const items = attentionItems(plan({
-      concentration: { top_position: { symbol: 'VT', allocation_pct: 4.9 }, positions_over_10_pct: 0, positions_over_20_pct: 0 },
+      concentration: { top_position: { symbol: 'NVDA', allocation_pct: 62 }, positions_over_10_pct: 1, positions_over_20_pct: 1 },
     }))
     expect(items).toEqual([])
   })
@@ -263,9 +261,5 @@ describe('lockableHoldings', () => {
 describe('tones the pages derive from the plan numbers', () => {
   it('grades drift by its size in either direction', () => {
     expect([0, 2.99, -3, 9.99, -10, 40].map(driftLevel)).toEqual(['on', 'on', 'off', 'off', 'far', 'far'])
-  })
-
-  it('grades a position by its share of investable assets', () => {
-    expect([4.99, 5, 19.99, 20].map(concentrationTone)).toEqual(['neutral', 'accent', 'accent', 'down'])
   })
 })

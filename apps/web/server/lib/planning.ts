@@ -461,7 +461,6 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
   const top = sortedPositions[0] ?? null
   const positionsOver10 = sortedPositions.filter(p => p.allocation_pct >= 10).length
   const positionsOver20 = sortedPositions.filter(p => p.allocation_pct >= 20).length
-  const concentrationOk = positionsOver20 === 0
   const debtLoadGoal: PlanningGoal | null = liabilities.total_balance > 0
     ? {
         key: 'debt_load',
@@ -497,17 +496,6 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
         note: cashProgressPct >= 100
           ? `Cash meets the ${cashReserveLabel} reserve target.`
           : `Cash is below the ${cashReserveLabel} reserve target.`,
-      },
-      {
-        key: 'concentration',
-        label: 'Concentration Control',
-        current_value: positionsOver20,
-        target_value: 0,
-        progress_pct: concentrationOk ? 100 : 0,
-        reached: concentrationOk,
-        note: concentrationOk
-          ? 'No single position is above 20% of investable assets.'
-          : `${positionsOver20} position${positionsOver20 === 1 ? ' is' : 's are'} above 20% of investable assets.`,
       },
       ...(debtLoadGoal ? [debtLoadGoal] : []),
     ],
