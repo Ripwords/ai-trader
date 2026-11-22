@@ -178,7 +178,39 @@ describe('buildRebalancePlan', () => {
     expect(plan).toMatchObject({ broker_cash: { MYR: 2_000, USD: 12.5 }, broker_status: 'ok', fetched_at: '2026-11-22T01:00:00.000Z' })
   })
 
-  it('drops a holding the money cannot buy one share of, spends its part on the rest and says so', () => {
+  it('puts the leftover into one more lot of a smaller holding once the split holdings can take no more', () => {
+    const big = inst('BIG', 'equity', 450, 'MYR', 60_000)
+    const small = inst('SMALL', 'equity', 150, 'MYR', 5_000)
+    const plan = buildRebalancePlan(equityShort, inputs([big, small]), { mode: 'contribute_only', contribution: 2_000, maxPerBucket: 1 })
+    expect(plan.trades.map(t => [t.symbol, t.shares, t.value])).toEqual([['BIG', 4, 1_800], ['SMALL', 1, 150]])
+    expect(plan.skipped).toEqual([])
+    expect(plan).toMatchObject({ unallocated: 50 })
+  })
+
+  it('spends RM 2,000 on a book of dear US shares down to less than the cheapest share', () => {
+    const rate = 4.15
+    const book: [string, number, number][] = [['NVDA', 40, 172.14], ['MSFT', 6, 498.3], ['TSM', 12, 245], ['AAPL', 8, 232], ['MU', 15, 118.2], ['JNJ', 5, 158], ['KO', 10, 70.17], ['PLTR', 10, 64]]
+    const held = book.map(([symbol, qty, price]) => inst(symbol, 'equity', price, 'USD', qty * price * rate, { fx_rate: rate, held_shares: qty }))
+    const plan = buildRebalancePlan(equityShort, inputs(held), { mode: 'contribute_only', contribution: 2_000 })
+    expect(plan.trades.map(t => [t.symbol, t.shares, t.value])).toEqual([['TSM', 1, 1_016.75], ['NVDA', 1, 714.38], ['PLTR', 1, 265.6]])
+    expect(plan.skipped).toEqual([{ symbol: 'MSFT', reason: 'below_one_lot', lot_size: 1, one_lot: 2_067.95 }])
+    expect(plan).toMatchObject({ unallocated: 3.27 })
+    const cheapest = Math.min(...held.map(i => i.price * i.fx_rate))
+    expect(plan.mode === 'contribute_only' && plan.unallocated).toBeLessThan(cheapest)
+  })
+
+  it('states its allocation rule in one sentence for each mode', () => {
+    const buy = buildRebalancePlan(summary, inputs([voo, nvda, agg]), { mode: 'contribute_only', contribution: 2_000 })
+    const full = buildRebalancePlan(summary, inputs([voo, nvda, agg]), { mode: 'full' })
+    for (const plan of [buy, full]) {
+      expect(plan.allocation_rule).toMatch(/one more lot at a time/)
+      expect(plan.allocation_rule.match(/\./g)).toHaveLength(1)
+    }
+    expect(buy.allocation_rule).toMatch(/^New money/)
+    expect(full.allocation_rule).toMatch(/^Each bucket is bought or sold to its target/)
+  })
+
+  it('leaves a holding out when neither its part nor the leftover buys one lot, spends the money on the rest and says so', () => {
     const dear = inst('DEAR', 'equity', 500, 'USD', 60_000)
     const cheap = inst('CHEAP', 'equity', 20, 'USD', 20_000)
     for (const maxPerBucket of [3, 1]) {

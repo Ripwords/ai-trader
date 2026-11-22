@@ -45,9 +45,9 @@ const quiet = { noUsdWarning, noConcentrationWarning }
 
 const BUY_THIS_MONTH = 'I have RM 2,000 to invest this month. What should I buy to get closer to my target? Do not place any orders and do not change my plan.'
 
-/** RM 2,000 buys whole shares of one holding only: the trade's value and what is left unspent, in MYR. */
+/** RM 2,000 buys one share each of three holdings: each trade's value and what is left unspent, in MYR. */
 const planAmounts = (run: RunResult): boolean =>
-  [/(?<!\d)(1428\.76|1429)(?!\d)/, /(?<!\d)571(\.24)?(?!\d)/].every(amount => amount.test(digits(run.text)))
+  [/(?<!\d)(1016\.75|1017)(?!\d)/, /(?<!\d)714(\.38)?(?!\d)/, /(?<!\d)(265\.60?|266)(?!\d)/, /(?<!\d)3\.27(?!\d)/].every(amount => amount.test(digits(run.text)))
 
 /** The pension is locked out of the plan's percentages; a reply that still calls it a concentration is relaying a nag. */
 const relaysPensionFlag = (run: RunResult): boolean =>
