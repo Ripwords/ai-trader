@@ -12,8 +12,6 @@ import logging
 import re
 from typing import Any, Protocol
 
-from pydantic import BaseModel
-
 from .prompts import JUDGE_PROMPT, get_override
 
 logger = logging.getLogger(__name__)
@@ -53,16 +51,9 @@ JUDGE_PROMPT_TEMPLATE = (
 )
 
 
-def _as_dict(sub: Any) -> dict:
-    """Upstream debate states are pydantic models; checkpoints and tests give dicts."""
-    if isinstance(sub, BaseModel):
-        return sub.model_dump()
-    return sub or {}
-
-
 def build_judge_prompt(state: dict, rating: str, horizon_days: int = HORIZON_DAYS) -> str:
-    inv = _as_dict(state.get("investment_debate_state"))
-    risk = _as_dict(state.get("risk_debate_state"))
+    inv = state.get("investment_debate_state") or {}
+    risk = state.get("risk_debate_state") or {}
     sections = [
         ("Bull researcher", inv.get("bull_history")),
         ("Bear researcher", inv.get("bear_history")),
