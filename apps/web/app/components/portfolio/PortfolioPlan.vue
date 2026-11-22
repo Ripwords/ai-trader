@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { AllocationRow, PlanningSeverity, PlanningSnapshot, PlanningSummary } from '../../../server/lib/planning'
-import { fmtCurrency, pnlTone } from '../../utils/portfolio-view'
+import type { AllocationRow, PlanningSnapshot, PlanningSummary } from '../../../server/lib/planning'
+import { driftLevel, fmtCurrency, pnlTone, type DriftLevel } from '../../utils/portfolio-view'
 
 const props = defineProps<{
   planning: PlanningSummary
@@ -16,12 +16,12 @@ const ccy = computed(() => props.planning.base_currency)
 const driftRows = computed(() => props.planning.allocation_rows.filter(r => r.target_pct > 0 || r.current_value > 0))
 const recent = computed(() => [...props.history].slice(-5).reverse())
 
-const SEVERITY_CLASS: Record<PlanningSeverity, string> = {
-  ok: 'text-[var(--paper-3)]',
-  watch: 'text-[var(--paper-1)]',
-  alert: 'text-[var(--accent)]',
-  critical: 'text-[var(--tape-down)]',
+const DRIFT_CLASS: Record<DriftLevel, string> = {
+  on: 'text-[var(--paper-3)]',
+  off: 'text-[var(--paper-1)]',
+  far: 'text-[var(--accent)]',
 }
+const lockedNames = computed(() => props.planning.locked.holdings.map(h => h.name || h.symbol).join(', '))
 const ACTION_CLASS: Record<AllocationRow['action'], string> = {
   buy: 'tape-up',
   sell: 'tape-down',
@@ -58,10 +58,10 @@ const savingsRate = computed(() => {
           <li v-for="row in driftRows" :key="row.key">
             <div class="flex items-baseline justify-between gap-3 font-mono text-xs">
               <span class="text-[var(--paper-1)]">{{ row.label }}</span>
-              <span :class="SEVERITY_CLASS[row.severity]" data-mono>{{ row.drift_pct >= 0 ? '+' : '' }}{{ row.drift_pct.toFixed(1) }} pts</span>
+              <span :class="DRIFT_CLASS[driftLevel(row.drift_pct)]" data-mono>{{ row.drift_pct >= 0 ? '+' : '' }}{{ row.drift_pct.toFixed(1) }} pts</span>
             </div>
             <div class="drift" aria-hidden="true">
-              <span class="drift__fill" :class="row.severity === 'ok' ? 'drift__fill--ok' : 'drift__fill--off'" :style="{ width: `${Math.min(100, Math.max(0, row.actual_pct))}%` }" />
+              <span class="drift__fill" :class="driftLevel(row.drift_pct) === 'on' ? 'drift__fill--ok' : 'drift__fill--off'" :style="{ width: `${Math.min(100, Math.max(0, row.actual_pct))}%` }" />
               <span class="drift__target" :style="{ left: `${Math.min(100, Math.max(0, row.target_pct))}%` }" />
             </div>
             <div class="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 font-mono text-xs text-[var(--paper-3)]">
@@ -70,6 +70,10 @@ const savingsRate = computed(() => {
             </div>
           </li>
         </ul>
+        <p v-if="planning.locked.total > 0" class="border-t hairline pt-3 font-mono text-sm text-[var(--paper-2)]" data-testid="plan-locked">
+          Locked, not counted above: <span class="text-[var(--paper-0)]" data-mono>{{ fmtCurrency(planning.locked.total, ccy) }}</span> in {{ lockedNames }}.
+          The percentages are of the <span data-mono>{{ fmtCurrency(planning.investable_total, ccy) }}</span> you can invest.
+        </p>
       </section>
 
       <section class="surface-1 p-4 sm:p-6 space-y-4">
@@ -79,10 +83,10 @@ const savingsRate = computed(() => {
           <li v-for="goal in planning.goals" :key="goal.key">
             <div class="flex items-baseline justify-between gap-3 font-mono text-xs">
               <span class="text-[var(--paper-1)]">{{ goal.label }}</span>
-              <span :class="goal.status === 'behind' ? 'text-[var(--accent)]' : 'text-[var(--paper-3)]'" data-mono>{{ goal.progress_pct.toFixed(0) }}%</span>
+              <span :class="goal.reached ? 'text-[var(--paper-3)]' : 'text-[var(--accent)]'" data-mono>{{ goal.progress_pct.toFixed(0) }}%</span>
             </div>
             <div class="drift" aria-hidden="true">
-              <span class="drift__fill" :class="goal.status === 'behind' ? 'drift__fill--off' : 'drift__fill--ok'" :style="{ width: `${Math.min(100, Math.max(0, goal.progress_pct))}%` }" />
+              <span class="drift__fill" :class="goal.reached ? 'drift__fill--ok' : 'drift__fill--off'" :style="{ width: `${Math.min(100, Math.max(0, goal.progress_pct))}%` }" />
             </div>
             <p v-if="goal.note" class="mt-1 font-mono text-xs text-[var(--paper-3)]">{{ goal.note }}</p>
           </li>

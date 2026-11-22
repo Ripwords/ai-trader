@@ -1040,6 +1040,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           amount: z.number().positive().describe('Monthly amount in the base currency'),
         })).optional(),
         remove_cashflow_ids: z.array(z.string()).optional(),
+        locked_symbols: z.array(z.string().min(1)).optional().describe('Holdings the owner cannot or will not trade, such as a pension. Replaces the whole list: send every symbol that stays locked, [] to unlock all. Locked holdings count toward net worth and are left out of allocation, concentration and rebalance trades.'),
       }),
       execute: async (patch) => {
         const [{ getFullPortfolioCached }, { getPlanningSettings, savePlanningSettings }, { buildPlanningSummary }, { applyPlanningPatch }] = await Promise.all([

@@ -28,6 +28,8 @@ export interface PlanningPatch {
   remove_liability_ids?: string[]
   upsert_cashflow_items?: (Omit<PlanningCashflowItem, 'id'> & { id?: string })[]
   remove_cashflow_ids?: string[]
+  /** Replaces the whole list of locked holdings. */
+  locked_symbols?: string[]
 }
 
 export interface PlanningChange {
@@ -66,6 +68,7 @@ export function applyPlanningPatch(
     monthly_contribution: patch.monthly_contribution ?? current.monthly_contribution,
     liabilities: upsert(current.liabilities, patch.remove_liability_ids, patch.upsert_liabilities, 'liability'),
     cashflow_items: upsert(current.cashflow_items, patch.remove_cashflow_ids, patch.upsert_cashflow_items, 'cashflow'),
+    locked_symbols: patch.locked_symbols ?? current.locked_symbols,
   })
   return { next, changes: diffSettings(current, next) }
 }
@@ -98,7 +101,7 @@ function diffSettings(before: PlanningSettings, after: PlanningSettings): Planni
   for (const field of ['monthly_expenses', 'emergency_fund_months', 'monthly_contribution'] as const) {
     if (before[field] !== after[field]) changes.push({ field, before: before[field], after: after[field] })
   }
-  for (const field of ['liabilities', 'cashflow_items'] as const) {
+  for (const field of ['liabilities', 'cashflow_items', 'locked_symbols'] as const) {
     if (JSON.stringify(before[field]) !== JSON.stringify(after[field])) changes.push({ field, before: before[field], after: after[field] })
   }
   return changes
@@ -168,11 +171,12 @@ export function buildRebalancePlan(
     unallocated = round(money - spend)
   }
 
+  const locked = new Set(summary.locked.holdings.map(h => h.symbol))
   const trades: RebalanceTrade[] = []
   for (const [bucket, amount] of amounts) {
     const side = amount > 0 ? 'buy' : 'sell'
     const held = largestCovering(
-      portfolio.positions.filter(p => normalizeAssetClass(p.asset_class) === bucket && p.market_value > 0),
+      portfolio.positions.filter(p => normalizeAssetClass(p.asset_class) === bucket && p.market_value > 0 && !locked.has(p.symbol)),
       Math.max(1, opts.maxPerBucket ?? 3),
       side === 'sell' ? -amount : 0,
     )

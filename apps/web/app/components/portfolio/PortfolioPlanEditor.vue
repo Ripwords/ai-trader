@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, toRaw, watch } from 'vue'
 import type { PlanningCashflowKind, PlanningSettings } from '../../../server/lib/planning'
+import type { LockableHolding } from '../../utils/portfolio-view'
 
 const props = defineProps<{
   settings: PlanningSettings | null
+  holdings: LockableHolding[]
   saving: boolean
   error: string
 }>()
@@ -49,6 +51,15 @@ function normalizeTargets() {
     running += next
   })
 }
+
+// A locked symbol that is no longer held stays listed so it can be unlocked.
+const lockable = computed(() => {
+  const held = props.holdings.map(h => ({ label: h.name, value: h.symbol }))
+  const gone = (draft.value?.locked_symbols ?? [])
+    .filter(symbol => !props.holdings.some(h => h.symbol === symbol))
+    .map(symbol => ({ label: symbol, value: symbol }))
+  return [...held, ...gone]
+})
 
 function addLiability() {
   draft.value?.liabilities.push({ id: `liability-${Date.now()}`, name: 'Loan', balance: 0, interest_rate_pct: 0, minimum_payment: 0 })
@@ -104,6 +115,23 @@ function submit() {
             </span>
             <UButton v-if="!targetsBalanced" size="xs" variant="soft" label="scale to 100%" @click="normalizeTargets()" />
           </div>
+        </fieldset>
+
+        <fieldset class="space-y-3">
+          <legend class="label-eyebrow mb-1">locked holdings</legend>
+          <p class="text-sm text-[var(--paper-3)]">
+            Holdings you cannot or will not trade, such as a pension. They still count toward net worth. Targets, concentration and rebalance trades leave them out.
+          </p>
+          <UFormField label="locked" name="locked_symbols">
+            <USelectMenu
+              v-model="draft.locked_symbols"
+              :items="lockable"
+              value-key="value"
+              multiple
+              placeholder="none locked"
+              class="w-full"
+            />
+          </UFormField>
         </fieldset>
 
         <fieldset class="space-y-3">

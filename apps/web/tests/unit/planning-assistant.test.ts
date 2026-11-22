@@ -85,6 +85,19 @@ describe('applyPlanningPatch', () => {
     expect(out).toEqual({ error: expect.stringContaining('nope') })
   })
 
+  it('replaces the locked holdings with the list given and reports the change', () => {
+    const out = applyPlanningPatch(settings(), { locked_symbols: ['GF_KWSP', 'GF_ASB'] })
+    if ('error' in out) throw new Error(out.error)
+    expect(out.next.locked_symbols).toEqual(['GF_KWSP', 'GF_ASB'])
+    expect(out.changes).toEqual([{ field: 'locked_symbols', before: ['GF_KWSP'], after: ['GF_KWSP', 'GF_ASB'] }])
+  })
+
+  it('keeps the locked holdings when the patch does not mention them, including an emptied list', () => {
+    const out = applyPlanningPatch(settings({ locked_symbols: [] }), { monthly_expenses: 4000 })
+    if ('error' in out) throw new Error(out.error)
+    expect(out.next.locked_symbols).toEqual([])
+  })
+
   it('reports no changes when the patch matches the current settings', () => {
     const out = applyPlanningPatch(settings(), { monthly_expenses: 3000 })
     if ('error' in out) throw new Error(out.error)
@@ -110,6 +123,14 @@ describe('buildRebalancePlan', () => {
       expect.objectContaining({ symbol: 'AGG', side: 'buy', value: 20_000 }),
     ]))
     expect(plan.trades.some(t => t.bucket === 'cash')).toBe(false)
+  })
+
+  it('never proposes selling a locked holding', () => {
+    const withPension = portfolio([...p.positions, position('GF_KWSP', 'FIXED_INCOME', 50_000)])
+    const s = buildPlanningSummary(withPension, settings({ target_model: [{ key: 'cash', target_pct: 10 }, { key: 'equity', target_pct: 85 }, { key: 'bond', target_pct: 5 }] }))
+    const plan = buildRebalancePlan(s, withPension, { mode: 'full' })
+    expect(plan.trades.map(t => t.symbol)).not.toContain('GF_KWSP')
+    expect(plan.trades).toContainEqual(expect.objectContaining({ symbol: 'AGG', side: 'sell', value: 5_000 }))
   })
 
   it('in contribute-only mode never sells and splits the new money by shortfall', () => {

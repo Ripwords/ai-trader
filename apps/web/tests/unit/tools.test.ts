@@ -160,9 +160,20 @@ const planningMock = vi.hoisted(() => {
       { symbol: 'VOO', name: 'VOO', quantity: 100, market_price: 900, market_value: 90_000, investment: 80_000, allocation_pct: 90, pnl_pct: 12, asset_class: 'EQUITY', data_source: null, sectors: [], currency: 'USD' },
     ],
   }
+  const withPension = {
+    ...portfolio,
+    net_worth_total: 140_000,
+    positions_value: 140_000,
+    positions: [
+      ...portfolio.positions,
+      { symbol: 'GF_KWSP', name: 'KWSP', quantity: 1, market_price: 40_000, market_value: 40_000, investment: 30_000, allocation_pct: 28.57, pnl_pct: 33, asset_class: 'FIXED_INCOME', data_source: 'MANUAL', sectors: [], currency: 'MYR' },
+    ],
+  }
   return {
     portfolio,
-    stored: { target_model: [{ key: 'cash', label: 'Cash', target_pct: 10 }, { key: 'equity', label: 'Equity', target_pct: 90 }, { key: 'bond', label: 'Bonds', target_pct: 0 }], monthly_expenses: 3000, emergency_fund_months: 6, monthly_contribution: 1000, liabilities: [], cashflow_items: [] } as Record<string, unknown>,
+    withPension,
+    current: portfolio as typeof portfolio,
+    stored: { target_model: [{ key: 'cash', label: 'Cash', target_pct: 10 }, { key: 'equity', label: 'Equity', target_pct: 90 }, { key: 'bond', label: 'Bonds', target_pct: 0 }], monthly_expenses: 3000, emergency_fund_months: 6, monthly_contribution: 1000, liabilities: [], cashflow_items: [], locked_symbols: ['GF_KWSP'] } as Record<string, unknown>,
     save: vi.fn(async (input: unknown) => input),
   }
 })
@@ -173,7 +184,7 @@ vi.mock('../../server/lib/planning-settings', () => ({
 }))
 
 vi.mock('../../server/lib/portfolio-cache', () => ({
-  getFullPortfolioCached: async () => planningMock.portfolio,
+  getFullPortfolioCached: async () => planningMock.current,
 }))
 
 // Stand-in for ApiClient — only the methods our tools call.
@@ -803,6 +814,36 @@ describe('tool catalogue', () => {
       settings: { monthly_expenses: 3000 },
       summary: { allocation_rows: expect.arrayContaining([expect.objectContaining({ key: 'equity', actual_pct: 90 })]) },
     })
+  })
+
+  it('planning_get keeps a locked pension out of the allocation and reports it once', async () => {
+    planningMock.current = planningMock.withPension
+    try {
+      const tools = makeTools(fakeClient() as unknown as ApiClient)
+      const out = await (tools['planning_get'] as { execute: (args: { force: boolean }) => Promise<unknown> }).execute({ force: false })
+      expect(out).toMatchObject({
+        summary: {
+          investable_total: 100_000,
+          locked: { total: 40_000, holdings: [{ symbol: 'GF_KWSP', name: 'KWSP', value: 40_000 }] },
+          allocation_rows: expect.arrayContaining([expect.objectContaining({ key: 'equity', actual_pct: 90 })]),
+          concentration: { top_position: { symbol: 'VOO', allocation_pct: 90 } },
+        },
+      })
+      const text = JSON.stringify(out)
+      expect(text.match(/GF_KWSP/g)).toHaveLength(2)
+      expect(text).not.toMatch(/critical|alert|behind|severity/i)
+    } finally {
+      planningMock.current = planningMock.portfolio
+    }
+  })
+
+  it('planning_update locks a holding the owner names', async () => {
+    planningMock.save.mockClear()
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const out = await (tools['planning_update'] as { execute: (args: unknown) => Promise<unknown> })
+      .execute({ locked_symbols: ['GF_KWSP', 'VOO'] })
+    expect(planningMock.save).toHaveBeenCalledWith(expect.objectContaining({ locked_symbols: ['GF_KWSP', 'VOO'] }))
+    expect(out).toMatchObject({ changes: [{ field: 'locked_symbols', before: ['GF_KWSP'], after: ['GF_KWSP', 'VOO'] }] })
   })
 
   it('planning_update saves the patched settings and returns what changed, so the user can ask to undo it', async () => {
