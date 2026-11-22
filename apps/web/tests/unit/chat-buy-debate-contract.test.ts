@@ -56,7 +56,7 @@ describe('chat.system default: debate before a buy', () => {
   })
 
   it('caps debates per turn so a screen cannot launch one per row', () => {
-    expect(rule()).toMatch(/at most 2 per turn/)
+    expect(rule()).toMatch(/1 debate per turn/)
     expect(rule()).toMatch(/shortlist/i)
   })
 
