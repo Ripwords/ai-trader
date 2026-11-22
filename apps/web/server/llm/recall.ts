@@ -1,4 +1,4 @@
-import type { LatestRunSummary } from '../lib/agents/runs-query'
+import type { LatestRunSummary, ResearchedSymbol } from '../lib/agents/runs-query'
 
 // Uppercase words that look like tickers but almost never are, in a trading
 // chat. Keeps the bare-word path from injecting noise.
@@ -42,40 +42,83 @@ function ageText(finishedAtIso: string | null, nowMs: number): string {
   return `${Math.round(hrs / 24)}d ago`
 }
 
+// Tickers and company names that are also words a trader types. A lowercase
+// "now" or "target" is the word; NOW or $now is the ticker.
+const EVERYDAY_WORDS = new Set([
+  'all', 'any', 'beat', 'best', 'block', 'both', 'box', 'can', 'care', 'cash', 'core', 'cost', 'earn', 'edge',
+  'even', 'ever', 'fast', 'fund', 'gap', 'gold', 'good', 'grow', 'has', 'key', 'life', 'love', 'low', 'main',
+  'match', 'new', 'next', 'now', 'one', 'open', 'out', 'path', 'peak', 'plan', 'play', 'post', 'real', 'run',
+  'safe', 'see', 'square', 'target', 'tell', 'true', 'two', 'well',
+])
+
+const CORPORATE_SUFFIX = /(?:[\s,]+(?:inc|incorporated|corp|corporation|co|company|ltd|limited|plc|llc|holdings?|group|technologies|technology|platforms)\.?|\.com)$/i
+
+/** "Amazon.com, Inc." is "Amazon" in conversation. */
+function spokenCompanyName(name: string): string {
+  let spoken = name.trim()
+  while (CORPORATE_SUFFIX.test(spoken)) spoken = spoken.replace(CORPORATE_SUFFIX, '')
+  return spoken
+}
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+function firstMention(text: string, { symbol, companyName }: ResearchedSymbol): number | null {
+  const ticker = symbol.replace(/^[A-Z]{2}\./, '')
+  const positions: number[] = []
+  const find = (pattern: string, accept: (written: string) => boolean = () => true) => {
+    for (const m of text.matchAll(new RegExp(`(?<![A-Za-z0-9.])${pattern}(?![A-Za-z0-9])`, 'gi'))) {
+      if (accept(m[0])) positions.push(m.index)
+    }
+  }
+  const everyday = (word: string) => EVERYDAY_WORDS.has(word.toLowerCase())
+
+  if (symbol !== ticker) find(escapeRegExp(symbol))
+  find(`\\$${escapeRegExp(ticker)}`)
+  find(escapeRegExp(ticker), written =>
+    !STOPWORDS.has(ticker) && (written === ticker || (ticker.length >= 3 && !everyday(ticker))))
+  const name = companyName ? spokenCompanyName(companyName) : ''
+  if (name.length >= 4 && !everyday(name)) find(escapeRegExp(name))
+
+  return positions.length ? Math.min(...positions) : null
+}
+
+/**
+ * Which of the symbols the user has researched does `text` mention: by full
+ * symbol, cashtag, bare ticker in any case, or company name. Matching against
+ * what was researched, not against anything ticker-shaped, is what lets a
+ * lowercase "nvda" or "amazon" count without every short word becoming a hit.
+ * Ordered by first mention.
+ */
+export function matchResearchedSymbols(text: string, researched: ResearchedSymbol[], max = 3): string[] {
+  return researched
+    .map(r => ({ symbol: r.symbol, at: firstMention(text, r) }))
+    .filter((m): m is { symbol: string; at: number } => m.at !== null)
+    .sort((a, b) => a.at - b.at)
+    .slice(0, max)
+    .map(m => m.symbol)
+}
+
 /** One compact hint line for the system prompt. */
 export function formatRecallLine(s: LatestRunSummary, nowMs: number): string {
-  const verdict = s.rating
-    ? `${s.rating}${s.confidence != null ? ` conf ${s.confidence}` : ''}`
-    : s.status
+  const cap = s.originalRating ? ` (valuation capped it from ${s.originalRating})` : ''
+  const confidence = s.confidence === null ? 'no confidence score' : `${s.confidence}% 7-trading-day probability`
+  const verdict = s.rating ? `${s.rating}${cap}, ${confidence}` : s.status
   return `${s.symbol} — research ${ageText(s.finishedAt, nowMs)}: ${verdict} (run ${s.runId})`
 }
 
 /**
- * Build the recent-run hint block for the tickers mentioned in ``text``.
- * Validates candidates against the watchlist OR canonical resolution to kill
- * false positives, then looks up each symbol's latest non-running run. Returns
- * '' when nothing matches — callers omit the block entirely.
+ * The recent-run hint block for the researched symbols `text` mentions: each
+ * one's latest complete run. Returns '' when nothing matches, and callers
+ * omit the block.
  */
-export async function buildRecallContext(opts: { userId: string; text: string; watchlist: string[] }): Promise<string> {
-  const { getLatestRunForSymbol } = await import('../lib/agents/runs-query')
-  const { resolveSymbol } = await import('../lib/yahoo')
-  const candidates = extractTickerCandidates(opts.text)
-  if (candidates.length === 0) return ''
-
-  const watch = new Set(opts.watchlist.map(w => w.toUpperCase()))
+export async function buildRecallContext(opts: { userId: string; text: string }): Promise<string> {
+  if (!opts.text.trim()) return ''
+  const { getLatestRunForSymbol, listResearchedSymbols } = await import('../lib/agents/runs-query')
+  const symbols = matchResearchedSymbols(opts.text, await listResearchedSymbols(opts.userId))
+  const runs = await Promise.all(symbols.map(symbol => getLatestRunForSymbol(opts.userId, symbol)))
   const nowMs = Date.now()
-  const lineOrNulls = await Promise.all(candidates.map(async (cand): Promise<string | null> => {
-    // Cheap path: on the watchlist (bare symbol, possibly market-prefixed like US.NVDA).
-    const onWatch = watch.has(cand) || [...watch].some(w => w.endsWith(`.${cand}`))
-    let symbol = cand
-    if (!onWatch) {
-      const r = await resolveSymbol(cand)
-      if (r.status !== 'resolved') return null
-      symbol = r.symbol
-    }
-    const latest = await getLatestRunForSymbol(opts.userId, symbol)
-      ?? (symbol !== cand ? await getLatestRunForSymbol(opts.userId, cand) : null)
-    return latest ? formatRecallLine(latest, nowMs) : null
-  }))
-  return lineOrNulls.filter((l): l is string => l !== null).join('\n')
+  const lines = new Map<string, string>()
+  for (const run of runs) if (run) lines.set(run.runId, formatRecallLine(run, nowMs))
+  return [...lines.values()].join('\n')
 }
+
