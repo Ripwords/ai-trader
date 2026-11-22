@@ -710,6 +710,11 @@ _VERDICT_MARKER_PATTERN = re.compile(
 )
 
 
+_FINAL_MARKER_PATTERN = re.compile(
+    r"FINAL\s+TRANSACTION\s+PROPOSAL\s*:[\s*]*(BUY|SELL|HOLD)\b", re.IGNORECASE
+)
+
+
 def _regex_rating(text: str) -> str | None:
     """First matching 5-bucket rating from the priority-ordered regex, or None.
 
@@ -731,7 +736,14 @@ def _canonical_signal(text: str) -> str | None:
     The extractor prioritises the canonical ``FINAL TRANSACTION PROPOSAL: <X>``
     marker the Risk Manager is prompted to emit and rejects ambiguous text
     (raising ``ValueError``), which we treat as "no authoritative signal".
+
+    The extractor also gives up when two markers disagree. The Risk Manager
+    refines the trader's plan and can quote the trader's marker before its
+    own, so the last marker is the verdict.
     """
+    markers = _FINAL_MARKER_PATTERN.findall(text)
+    if markers:
+        return markers[-1].lower()
     try:
         from tradingagents.graph.signal_processing import extract_trade_signal
         signal = extract_trade_signal(text).lower()

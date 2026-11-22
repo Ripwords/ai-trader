@@ -440,6 +440,8 @@ The run says how the valuation went in a `valuation` event before the first deba
 
 A resumed run computes the valuation again and sends the event again.
 
+Upstream TradingAgents gives the Trader and the Portfolio Manager only the plan and the debate, so a fact no debater repeated never reached the final call. This app appends the four analyst reports to their input, with an instruction to check the debate against them. The reports are prompt input only and are not saved into the trader plan or the decision.
+
 #### Deciding for the owner
 
 Upstream TradingAgents rules for a short-term trading desk. Every run started from this app (the chat's debate and the research page) also tells the debate who it is deciding for. A direct call to the api without `owner_context`, and a backtest, run as before.
@@ -473,7 +475,11 @@ If the line appears more than once, the last one counts. Without the line, `rati
 
 The confidence judge is unchanged. Its number is still the probability that the rating is right over the next 7 trading days, which is a shorter horizon than the mandate rules for.
 
-Upstream TradingAgents gives the Trader and the Portfolio Manager only the plan and the debate, so a fact no debater repeated never reached the final call. This app appends the four analyst reports to their input, with an instruction to check the debate against them. The reports are prompt input only and are not saved into the trader plan or the decision.
+#### How the rating is read
+
+Without an owner verdict, the rating comes from the Portfolio Manager's `FINAL TRANSACTION PROPOSAL` line. The Portfolio Manager sometimes quotes the Trader's line before writing its own, so the last such line counts. Only when there is none does the reader fall back to a `Recommendation:` style header and then to the words in the text.
+
+Two runs on the same day can still disagree. The models run without a fixed seed, and the debate is free text.
 
 #### Reading earnings below the headline
 
