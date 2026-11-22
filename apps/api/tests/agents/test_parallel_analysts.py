@@ -249,6 +249,8 @@ async def test_result_shape_is_unchanged(
     decision = next(e for e in events if e["type"] == "decision")
     assert decision["rating"] == "buy"
     assert decision["confidence"] == 70
+    # The Research Manager's judge decision is the same text as its plan, so
+    # it is not streamed as a second card.
     assert [e["stage"] for e in events if e["type"] == "synthesis"] == [
         "investment-plan", "trader-plan",
     ]
@@ -256,6 +258,7 @@ async def test_result_shape_is_unchanged(
     assert set(final) == {
         "market_report", "sentiment_report", "news_report", "fundamentals_report",
         "investment_plan", "trader_investment_plan", "final_trade_decision",
+        "investment_debate_state", "risk_debate_state",
     }
     assert final["sentiment_report"] == "social report"
     assert not any(key.endswith("_messages") for key in final)
