@@ -94,11 +94,6 @@ describe('research tools: buy-gate support', () => {
     vi.doUnmock('../../server/lib/yahoo')
   })
 
-  const assessment = (runId: string, finishedAt: string | null) => ({
-    runId, symbol: 'NVDA', status: finishedAt ? 'complete' : 'running', finishedAt,
-    rating: finishedAt ? 'buy' : null, confidence: finishedAt ? 71 : null, rationale: null,
-  })
-
   it('carries the buy rule in the tool descriptions, which a saved prompt override cannot drop', () => {
     const tools = makeTools({} as ApiClient)
     expect(tools.agents_debate!.description).toMatch(/before recommending that the user buy or add/)
@@ -113,40 +108,65 @@ describe('research tools: buy-gate support', () => {
     expect(tools.research_start!.description).not.toMatch(/30-90s/)
   })
 
-  it('reports how old a finished run is, in whole days', async () => {
-    const finishedAt = new Date(Date.now() - 3 * 86_400_000 - 60_000).toISOString()
+  const verdict = (runId: string) => ({ runId, symbol: 'US.NVDA', status: 'complete', rating: 'buy', confidence: 71, age_days: 3 })
+  const mockRuns = (over: Record<string, unknown>) => {
     vi.doMock('../../server/db/repo', () => ({ getOwnerId: async () => 'user-1' }))
     vi.doMock('../../server/lib/agents/runs-query', () => ({
-      getRunAssessment: vi.fn(async (_u: string, runId: string) => assessment(runId, finishedAt)),
+      getRunVerdict: vi.fn(async (_u: string, runId: string) => verdict(runId)),
       getLatestRunForSymbol: vi.fn(async () => null),
+      getLatestAttemptForSymbol: vi.fn(async () => null),
+      ...over,
     }))
+  }
+
+  it('returns the stored verdict for a runId, age included', async () => {
+    mockRuns({})
     const out = await makeTools({} as ApiClient).research_get!.execute({ runId: 'run-1' }, {})
-    expect(out).toMatchObject({ runId: 'run-1', rating: 'buy', age_days: 3 })
+    expect(out).toEqual(verdict('run-1'))
   })
 
-  it('gives a running run no age', async () => {
-    vi.doMock('../../server/db/repo', () => ({ getOwnerId: async () => 'user-1' }))
-    vi.doMock('../../server/lib/agents/runs-query', () => ({
-      getRunAssessment: vi.fn(async (_u: string, runId: string) => assessment(runId, null)),
-      getLatestRunForSymbol: vi.fn(async () => null),
-    }))
+  it('says so when the run does not exist', async () => {
+    mockRuns({ getRunVerdict: vi.fn(async () => null) })
     const out = await makeTools({} as ApiClient).research_get!.execute({ runId: 'run-1' }, {})
-    expect(out).toMatchObject({ status: 'running', age_days: null })
+    expect(out).toEqual({ error: 'run not found', runId: 'run-1' })
   })
 
-  it('finds a run stored under the resolved symbol when asked with a market prefix', async () => {
-    const finishedAt = new Date(Date.now() - 60_000).toISOString()
+  it('finds a run stored under the resolved symbol when the stored symbol does not match what was asked', async () => {
     const latest = vi.fn(async (_u: string, symbol: string) =>
-      symbol === 'NVDA' ? { runId: 'run-7', symbol, status: 'complete', finishedAt, rating: 'buy', confidence: 71 } : null)
-    vi.doMock('../../server/db/repo', () => ({ getOwnerId: async () => 'user-1' }))
-    vi.doMock('../../server/lib/agents/runs-query', () => ({
-      getRunAssessment: vi.fn(async (_u: string, runId: string) => assessment(runId, finishedAt)),
-      getLatestRunForSymbol: latest,
-    }))
+      symbol === 'US.BRK.B' ? { runId: 'run-7', symbol } : null)
+    mockRuns({ getLatestRunForSymbol: latest })
     vi.doMock('../../server/lib/yahoo', () => ({
-      resolveSymbol: async () => ({ status: 'resolved', symbol: 'NVDA' }),
+      resolveSymbol: async () => ({ status: 'resolved', symbol: 'US.BRK.B' }),
     }))
-    const out = await makeTools({} as ApiClient).research_get!.execute({ symbol: 'US.NVDA' }, {})
-    expect(out).toMatchObject({ runId: 'run-7', age_days: 0 })
+    const out = await makeTools({} as ApiClient).research_get!.execute({ symbol: 'BRK-B' }, {})
+    expect(out).toMatchObject({ runId: 'run-7' })
+    expect(out).not.toHaveProperty('latest_attempt')
+  })
+
+  it('reports a newer failed attempt beside the latest complete verdict, not in its place', async () => {
+    const attempt = { runId: 'run-9', status: 'failed', error: 'agents service unreachable', startedAt: '2026-11-20T10:00:00.000Z' }
+    mockRuns({
+      getLatestRunForSymbol: vi.fn(async () => ({ runId: 'run-7', symbol: 'US.NVDA' })),
+      getLatestAttemptForSymbol: vi.fn(async () => attempt),
+    })
+    const out = await makeTools({} as ApiClient).research_get!.execute({ symbol: 'NVDA' }, {})
+    expect(out).toEqual({ ...verdict('run-7'), latest_attempt: attempt })
+  })
+
+  it('reports the run in progress when the symbol has no finished run', async () => {
+    mockRuns({
+      getRunVerdict: vi.fn(async (_u: string, runId: string) => ({ runId, status: 'running', rating: null })),
+      getLatestAttemptForSymbol: vi.fn(async () => ({ runId: 'run-9', status: 'running', error: null, startedAt: '2026-11-20T10:00:00.000Z' })),
+    })
+    vi.doMock('../../server/lib/yahoo', () => ({ resolveSymbol: async () => ({ status: 'resolved', symbol: 'NVDA' }) }))
+    const out = await makeTools({} as ApiClient).research_get!.execute({ symbol: 'NVDA' }, {})
+    expect(out).toEqual({ runId: 'run-9', status: 'running', rating: null })
+  })
+
+  it('says so when the symbol has no run at all', async () => {
+    mockRuns({})
+    vi.doMock('../../server/lib/yahoo', () => ({ resolveSymbol: async () => ({ status: 'resolved', symbol: 'NVDA' }) }))
+    const out = await makeTools({} as ApiClient).research_get!.execute({ symbol: 'NVDA' }, {})
+    expect(out).toEqual({ error: 'no research run found for symbol', symbol: 'NVDA' })
   })
 })

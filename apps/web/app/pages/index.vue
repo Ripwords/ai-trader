@@ -680,11 +680,6 @@ const liveStatusText = computed(() => {
   if (chat.status === 'streaming') return 'streaming response'
   return ''
 })
-function agentsVerdict(output: unknown) {
-  const o = output as { rating?: 'strong-buy' | 'buy' | 'hold' | 'reduce' | 'sell'; confidence?: number | null; rationale?: string } | undefined
-  if (!o?.rating) return null
-  return { rating: o.rating, confidence: o.confidence ?? null, rationale: o.rationale ?? '' }
-}
 </script>
 
 <template>
@@ -786,10 +781,8 @@ function agentsVerdict(output: unknown) {
               />
               <AgentsDebateCard
                 v-else-if="toolOutputOf(part, 'agents_debate')"
-                :events="toolOutputOf(part, 'agents_debate')!.events ?? []"
-                :verdict="agentsVerdict(getToolOutput(part))"
-                :error="toolOutputOf(part, 'agents_debate')!.error ?? null"
-                :running="isToolStreaming(part) && !agentsVerdict(getToolOutput(part))"
+                :output="getToolOutput(part)"
+                :running="isToolStreaming(part)"
               />
               <ValuationCard
                 v-else-if="toolOutputOf(part, 'value_stock')"

@@ -16,15 +16,7 @@ async function failureReason(res: Response): Promise<string> {
   return body.statusMessage ? `${res.status} ${body.statusMessage}` : String(res.status)
 }
 
-const DAY_MS = 86_400_000
-
-/** Adds the run's age so the model can apply a freshness window without date arithmetic. */
-function withAgeDays<T extends { finishedAt: string | null }>(run: T): T & { age_days: number | null } {
-  const finished = run.finishedAt ? Date.parse(run.finishedAt) : Number.NaN
-  return { ...run, age_days: Number.isNaN(finished) ? null : Math.max(0, Math.floor((Date.now() - finished) / DAY_MS)) }
-}
-
-/** Runs are stored under the resolved symbol (NVDA), which the model may spell US.NVDA. */
+/** For a spelling the stored symbol does not match on its own, which only symbol resolution maps to it. */
 async function latestRunUnderResolvedSymbol(userId: string, symbol: string) {
   const { resolveSymbol } = await import('../lib/yahoo')
   const { getLatestRunForSymbol } = await import('../lib/agents/runs-query')
@@ -745,19 +737,20 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       }),
       execute: async ({ runId, symbol }) => {
         const { getOwnerId } = await import('../db/repo')
-        const { getRunAssessment, getLatestRunForSymbol } = await import('../lib/agents/runs-query')
+        const { getRunVerdict, getLatestRunForSymbol, getLatestAttemptForSymbol } = await import('../lib/agents/runs-query')
         const userId = await getOwnerId()
-        if (runId) {
-          const a = await getRunAssessment(userId, runId)
-          return a ? withAgeDays(a) : { error: 'run not found', runId }
-        }
-        if (symbol) {
-          const latest = await getLatestRunForSymbol(userId, symbol) ?? await latestRunUnderResolvedSymbol(userId, symbol)
-          if (!latest) return { error: 'no research run found for symbol', symbol }
-          const a = await getRunAssessment(userId, latest.runId)
-          return a ? withAgeDays(a) : { error: 'run not found', runId: latest.runId }
-        }
-        return { error: 'pass runId or symbol' }
+        if (runId) return await getRunVerdict(userId, runId) ?? { error: 'run not found', runId }
+        if (!symbol) return { error: 'pass runId or symbol' }
+
+        const latest = await getLatestRunForSymbol(userId, symbol) ?? await latestRunUnderResolvedSymbol(userId, symbol)
+        const attempt = await getLatestAttemptForSymbol(userId, latest?.symbol ?? symbol)
+        const cited = latest?.runId ?? attempt?.runId
+        if (!cited) return { error: 'no research run found for symbol', symbol }
+        const verdict = await getRunVerdict(userId, cited)
+        if (!verdict) return { error: 'run not found', runId: cited }
+        // The verdict is the latest complete run's; a newer run that failed or
+        // is still going is reported beside it, not in its place.
+        return attempt && attempt.runId !== cited ? { ...verdict, latest_attempt: attempt } : verdict
       },
     }),
 
@@ -826,7 +819,9 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       // `tool-output-available` frame, which keeps the chat stream moving
       // during the run and drives AgentsDebateCard's node timeline. The SDK
       // takes the LAST YIELD as the final output the LLM consumes and drops
-      // the return value, so every outcome, errors included, is yielded.
+      // the return value, so every outcome, errors included, is yielded. The
+      // node events are progress for the card, so only the yields before the
+      // last carry them; the last is the verdict research_get would return.
       execute: async function* (args, { abortSignal }) {
         const events: Array<{ type: 'node-start'; node: string }> = []
         yield { events: [...events] }
@@ -848,13 +843,13 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           // A run is already in flight for this symbol; report on that one.
           const body = await res.json().catch(() => ({})) as { data?: { run_id?: string | null } }
           if (!body.data?.run_id) {
-            yield { events, error: 'a run is already in progress for this symbol' }
+            yield { error: 'a run is already in progress for this symbol' }
             return
           }
           runId = body.data.run_id
         }
         else if (!res.ok) {
-          yield { events, error: `run could not start: ${await failureReason(res)}` }
+          yield { error: `run could not start: ${await failureReason(res)}` }
           return
         }
         else {
@@ -862,28 +857,23 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         }
 
         const { tailRun } = await import('../lib/agents/run-events')
-        let verdict: { rating?: string; confidence?: number | null; rationale?: string } = {}
+        let failure: string | null = null
         for await (const frame of tailRun(runId, { signal: abortSignal })) {
           if (frame.kind === 'end') {
-            if (frame.status !== 'complete') {
-              yield { runId, events, ...verdict, error: `run ${frame.status}: ${frame.error ?? 'no reason recorded'}` }
-              return
-            }
+            if (frame.status !== 'complete') failure = `run ${frame.status}: ${frame.error ?? 'no reason recorded'}`
             break
           }
-          const ev = frame.event
-          if (ev.type === 'node-start') events.push({ type: 'node-start', node: ev.node })
-          if (ev.type === 'decision') {
-            verdict = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
-          }
-          yield { runId, events: [...events], ...verdict }
+          if (frame.event.type === 'node-start') events.push({ type: 'node-start', node: frame.event.node })
+          yield { runId, events: [...events] }
         }
 
-        if (!verdict.rating) {
-          yield { runId, events, error: 'no decision emitted' }
-          return
-        }
-        yield { runId, events, ...verdict }
+        // The tee stores the decision, the final state and every event before
+        // the terminal status, so the run is fully readable once the tail ends.
+        const { getOwnerId } = await import('../db/repo')
+        const { getRunVerdict } = await import('../lib/agents/runs-query')
+        const verdict = await getRunVerdict(await getOwnerId(), runId) ?? { runId, rating: null }
+        const error = failure ?? (verdict.rating === null ? 'no decision emitted' : null)
+        yield error ? { ...verdict, error } : verdict
       },
     }),
 
