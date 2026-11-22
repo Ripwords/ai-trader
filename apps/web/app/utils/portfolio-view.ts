@@ -1,6 +1,6 @@
 import type { FullPortfolio, FullPortfolioAccount } from '../../server/lib/holdings'
 import type { PortfolioPerformance } from '../../server/lib/portfolio-history'
-import type { PlanningSummary } from '../../server/lib/planning'
+import { normalizeAssetClass, type PlanningSummary } from '../../server/lib/planning'
 
 export const PORTFOLIO_TABS = [
   { value: 'overview', label: 'overview' },
@@ -134,6 +134,18 @@ export function partitionAccounts(accounts: FullPortfolioAccount[]): { funded: F
   }
 }
 
+export interface LockableHolding {
+  symbol: string
+  name: string
+}
+
+/** Holdings the plan editor offers to lock: everything held except cash. */
+export function lockableHoldings(p: FullPortfolio): LockableHolding[] {
+  return p.positions
+    .filter(pos => pos.market_value > 0 && normalizeAssetClass(pos.asset_class) !== 'cash')
+    .map(pos => ({ symbol: pos.symbol, name: pos.name || pos.symbol }))
+}
+
 export interface KeyFigure {
   label: string
   value: string
@@ -181,27 +193,45 @@ export interface AttentionItem {
   tone: Tone
 }
 
-/** What the plan says needs doing, worst first: rebalance trades, an
- *  over-weight position, then goals that are behind. Empty means on track. */
+/** The plan reports numbers only; how loudly to show them is decided here.
+ *  A bucket is off target from 3 points of drift and far off from 10. */
+export type DriftLevel = 'on' | 'off' | 'far'
+
+export function driftLevel(driftPct: number): DriftLevel {
+  const abs = Math.abs(driftPct)
+  return abs >= 10 ? 'far' : abs >= 3 ? 'off' : 'on'
+}
+
+/** A single position is worth a look from 5% of investable assets and is
+ *  flagged from 20%. */
+export function concentrationTone(allocationPct: number): Tone {
+  return allocationPct >= 20 ? 'down' : allocationPct >= 5 ? 'accent' : 'neutral'
+}
+
+/** What the plan says needs doing: buckets off target with the biggest trade
+ *  first, the largest position, then goals not reached. Empty means on track. */
 export function attentionItems(plan: PlanningSummary): AttentionItem[] {
   const ccy = plan.base_currency
-  const trades = plan.rebalance_actions.map((row): AttentionItem => ({
-    key: `trade-${row.key}`,
-    label: row.label,
-    detail: `${row.action} ${fmtCurrency(Math.abs(row.action_value), ccy)} · ${row.actual_pct.toFixed(1)}% vs ${row.target_pct.toFixed(1)}% target`,
-    tone: row.severity === 'critical' ? 'down' : 'accent',
-  }))
+  const trades = plan.allocation_rows
+    .filter(row => row.action !== 'hold' && driftLevel(row.drift_pct) !== 'on')
+    .sort((a, b) => Math.abs(b.action_value) - Math.abs(a.action_value))
+    .map((row): AttentionItem => ({
+      key: `trade-${row.key}`,
+      label: row.label,
+      detail: `${row.action} ${fmtCurrency(Math.abs(row.action_value), ccy)} · ${row.actual_pct.toFixed(1)}% vs ${row.target_pct.toFixed(1)}% target`,
+      tone: 'accent',
+    }))
   const top = plan.concentration.top_position
-  const concentration: AttentionItem[] = top && top.severity !== 'ok'
+  const concentration: AttentionItem[] = top && concentrationTone(top.allocation_pct) !== 'neutral'
     ? [{
         key: 'concentration',
         label: top.symbol,
-        detail: `${top.allocation_pct.toFixed(1)}% of net worth in one position`,
-        tone: top.severity === 'critical' ? 'down' : 'accent',
+        detail: `${top.allocation_pct.toFixed(1)}% of investable assets in one position`,
+        tone: concentrationTone(top.allocation_pct),
       }]
     : []
   const goals = plan.goals
-    .filter(g => g.status === 'behind')
+    .filter(g => !g.reached)
     .map((g): AttentionItem => ({ key: `goal-${g.key}`, label: g.label, detail: g.note, tone: 'accent' }))
   return [...trades, ...concentration, ...goals]
 }

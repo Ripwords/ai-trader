@@ -9,7 +9,7 @@ import type { PlanningSettings, PlanningSnapshot, PlanningSummary } from '../../
 import type { CaptureResult, PortfolioPerformance } from '../../../server/lib/portfolio-history'
 import { captureDailySnapshot } from '../../../composables/useDailySnapshotCapture'
 import { apiErrorMessage } from '~/lib/api-error'
-import { PORTFOLIO_TABS, attentionItems, keyFigures, parseTab, type PortfolioTab } from '~/utils/portfolio-view'
+import { PORTFOLIO_TABS, attentionItems, concentrationTone, keyFigures, lockableHoldings, parseTab, type PortfolioTab } from '~/utils/portfolio-view'
 
 useHead({ title: 'portfolio' })
 
@@ -238,7 +238,8 @@ async function savePlanningSettings(draft: PlanningSettings) {
               <StatTile
                 label="its weight"
                 :value="`${planning.concentration.top_position.allocation_pct.toFixed(1)}%`"
-                :tone="planning.concentration.top_position.severity === 'ok' ? 'neutral' : planning.concentration.top_position.severity === 'critical' ? 'down' : 'accent'"
+                sub="of investable assets"
+                :tone="concentrationTone(planning.concentration.top_position.allocation_pct)"
               />
               <StatTile
                 label="positions over 20%"
@@ -260,6 +261,7 @@ async function savePlanningSettings(draft: PlanningSettings) {
     <PortfolioPlanEditor
       v-model:open="editorOpen"
       :settings="planningSettings ?? null"
+      :holdings="data ? lockableHoldings(data) : []"
       :saving="settingsSaving"
       :error="settingsError"
       @save="savePlanningSettings"
