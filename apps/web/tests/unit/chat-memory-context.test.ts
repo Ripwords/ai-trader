@@ -25,6 +25,7 @@ describe('buildMemoryContext', () => {
     expect(block).toMatch(/materially changed/i)
     expect(block).toMatch(/the owner asks/i)
     expect(block).toMatch(/sizing/i)
+    expect(block).toMatch(/without a remark on it/)
   })
 
   it('stays bounded at the caps', () => {
