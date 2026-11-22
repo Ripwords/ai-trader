@@ -16,6 +16,23 @@ async function failureReason(res: Response): Promise<string> {
   return body.statusMessage ? `${res.status} ${body.statusMessage}` : String(res.status)
 }
 
+const DAY_MS = 86_400_000
+
+/** Adds the run's age so the model can apply a freshness window without date arithmetic. */
+function withAgeDays<T extends { finishedAt: string | null }>(run: T): T & { age_days: number | null } {
+  const finished = run.finishedAt ? Date.parse(run.finishedAt) : Number.NaN
+  return { ...run, age_days: Number.isNaN(finished) ? null : Math.max(0, Math.floor((Date.now() - finished) / DAY_MS)) }
+}
+
+/** Runs are stored under the resolved symbol (NVDA), which the model may spell US.NVDA. */
+async function latestRunUnderResolvedSymbol(userId: string, symbol: string) {
+  const { resolveSymbol } = await import('../lib/yahoo')
+  const { getLatestRunForSymbol } = await import('../lib/agents/runs-query')
+  const resolution = await resolveSymbol(symbol)
+  if (resolution.status !== 'resolved' || resolution.symbol === symbol) return null
+  return getLatestRunForSymbol(userId, resolution.symbol)
+}
+
 interface MakeToolsOptions {
   event?: H3Event
   latestUserText?: string
@@ -686,7 +703,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'research_start': tool({
       description:
-        'Start a research run (the multi-agent analyst → debate → trader → risk pipeline) on a symbol ASYNCHRONOUSLY. Returns immediately with a runId; the run finishes in the background (~30-90s) and the user gets a browser notification. Use this when the user asks to "research X", "kick off analysis on X", or wants to keep chatting while it runs. Use agents_debate instead only when the user explicitly wants to watch the debate stream inline now.',
+        'Start a research run (the multi-agent analyst → debate → trader → risk pipeline) on a symbol ASYNCHRONOUSLY. Returns immediately with a runId; the run finishes in the background (~30-90s) and the user gets a browser notification. Use this when the user asks to "research X", "kick off analysis on X", or wants to keep chatting while it runs. Use agents_debate instead when the user wants to watch the debate stream inline now, or when you need the verdict in this turn (before recommending a buy).',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
         max_debate_rounds: z.number().int().min(1).max(3).default(1),
@@ -721,7 +738,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'research_get': tool({
       description:
-        "Fetch the assessment from a research run so you can cite the agents' actual verdict. Pass runId if you have it (e.g. from an auto-injected recent-run hint or research_start), otherwise pass symbol to get that ticker's latest completed run. Returns status, rating, confidence, and rationale; a run that is still running comes back with its status and no verdict yet, so this is also how to answer \"is it done yet\" after research_start. Use this whenever the user references a ticker that has a recent run — do NOT re-run research_start if a recent assessment already exists.",
+        "Fetch the assessment from a research run so you can cite the agents' actual verdict. Pass runId if you have it (e.g. from an auto-injected recent-run hint or research_start), otherwise pass symbol to get that ticker's latest completed run. Returns status, rating, confidence, rationale and age_days (whole days since the run finished); a run that is still running comes back with its status and no verdict yet, so this is also how to answer \"is it done yet\" after research_start. Use this whenever the user references a ticker that has a recent run, and before agents_debate when you are about to recommend a buy: a complete run with age_days of 7 or less is reused, not re-run.",
       inputSchema: z.object({
         runId: z.string().optional(),
         symbol: z.string().optional(),
@@ -732,13 +749,13 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         const userId = await getOwnerId()
         if (runId) {
           const a = await getRunAssessment(userId, runId)
-          return a ?? { error: 'run not found', runId }
+          return a ? withAgeDays(a) : { error: 'run not found', runId }
         }
         if (symbol) {
-          const latest = await getLatestRunForSymbol(userId, symbol)
+          const latest = await getLatestRunForSymbol(userId, symbol) ?? await latestRunUnderResolvedSymbol(userId, symbol)
           if (!latest) return { error: 'no research run found for symbol', symbol }
           const a = await getRunAssessment(userId, latest.runId)
-          return a ?? { error: 'run not found', runId: latest.runId }
+          return a ? withAgeDays(a) : { error: 'run not found', runId: latest.runId }
         }
         return { error: 'pass runId or symbol' }
       },
@@ -799,7 +816,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'agents_debate': tool({
       description:
-        'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker.',
+        'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker. Also call it, without being asked, before recommending that the user buy or add to a specific stock, unless research_get shows a complete run for it with age_days of 7 or less. Never one call per row of a screen: at most 2 per turn, for the names you are about to recommend.',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
         max_debate_rounds: z.number().int().min(1).max(3).default(1),

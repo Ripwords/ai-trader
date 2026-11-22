@@ -254,7 +254,7 @@ export const TOOL_CATALOG: Record<NativeToolName, ToolCatalogEntry> = {
   agents_debate: {
     category: 'Agent research runs',
     what: 'Runs the analyst, bull/bear debate, trader and risk pipeline here in the chat, with progress.',
-    useWhen: 'You want to watch the agents deliberate and wait for the verdict now.',
+    useWhen: 'You want to watch the agents deliberate and wait for the verdict now. The assistant also runs it on its own before it recommends buying a stock.',
     example: 'Run the agents on NVDA',
   },
   research_start: {
