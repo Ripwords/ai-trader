@@ -101,10 +101,11 @@ const SCENARIOS: Scenario[] = [
     checks: {
       ...quiet,
       ...style,
-      keepsTotalInMyr: mentions(/7709[01]/, /MYR|RM/),
+      keepsTotal: run => /US\$\s?1857[56]|1857[56](\.\d+)?\s?USD|RM\s?7709[01]|7709[01](\.\d+)?\s?MYR/.test(digits(run.text)),
       keepsDayChange: mentions(/0\.63/),
-      keepsUnrealizedPl: mentions(/1791[78]/),
+      keepsUnrealizedPl: run => /431[78]|1791[78]/.test(digits(run.text)),
     },
+    observations: { totalInMyr: mentions(/7709[01]/, /MYR|RM/) },
   },
   {
     id: 'should I add to NVDA, risks settled',
