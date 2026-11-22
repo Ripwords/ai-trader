@@ -45,11 +45,11 @@ const quiet = { noUsdWarning, noConcentrationWarning }
 
 const BUY_THIS_MONTH = 'I have RM 2,000 to invest this month. What should I buy to get closer to my target? Do not place any orders and do not change my plan.'
 
-/** The plan's largest buys, in MYR. A reply that keeps its detail names at least three. */
+/** RM 2,000 buys whole shares of one holding only: the trade's value and what is left unspent, in MYR. */
 const planAmounts = (run: RunResult): boolean =>
-  ['290', '285.5', '281.25', '277.75', '242'].map(figure).filter(re => re.test(digits(run.text))).length >= 3
+  [/(?<!\d)(1428\.76|1429)(?!\d)/, /(?<!\d)571(\.24)?(?!\d)/].every(amount => amount.test(digits(run.text)))
 
-/** The planning tools mark the pension fund `critical`; a reply that relays it is the tool's nag, not the prompt's. */
+/** The pension is locked out of the plan's percentages; a reply that still calls it a concentration is relaying a nag. */
 const relaysPensionFlag = (run: RunResult): boolean =>
   /KWSP|EPF/i.test(run.text) && /critical|concentrat|threshold/i.test(run.text)
 

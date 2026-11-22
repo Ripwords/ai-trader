@@ -2,9 +2,9 @@ import type { Stubs } from './harness'
 
 /**
  * One coherent, invented owner for the chat evals: MYR base currency, a moomoo
- * live book that is all USD and about 92% tech and semiconductors, and a plan
- * that is far under its equity target. Shapes follow what the tools return;
- * the planning outputs keep the severity flags the real tools emit.
+ * live book that is all USD and about 92% tech and semiconductors, a locked
+ * pension, and a plan that is under its equity target. Shapes follow what the
+ * tools return.
  */
 
 export const MEMORY_USD_INTENTIONAL = 'The owner\'s holdings are mostly USD against a MYR base currency; this is intentional and needs no warning.'
@@ -359,79 +359,78 @@ export const FRESH_NVDA_RUN = {
 }
 
 /**
- * planning_get and portfolio_rebalance_plan as the tools returned them for a
- * real "what should I buy this month" turn (amounts changed, shape and flags
- * kept), including the `critical` concentration flag on the pension fund.
+ * planning_get and portfolio_rebalance_plan as the tools return them for this
+ * book: the output of the tools' own builders, with the KWSP pension locked, a
+ * 95/5 equity/cash target and a RM 2,000 contribute-only plan.
  */
-const ALLOCATION_ROWS = [
-  { key: 'cash', label: 'Cash', action: 'sell', severity: 'ok', drift_pct: 2.17, actual_pct: 12.17, target_pct: 10, action_value: -2604, target_value: 12_000, current_value: 14_604 },
-  { key: 'equity', label: 'Equity', action: 'buy', severity: 'alert', drift_pct: -37.65, actual_pct: 47.35, target_pct: 85, action_value: 45_180, target_value: 102_000, current_value: 56_820 },
-  { key: 'bond', label: 'Bonds', action: 'sell', severity: 'alert', drift_pct: 31.45, actual_pct: 36.45, target_pct: 5, action_value: -37_740, target_value: 6000, current_value: 43_740 },
-  { key: 'commodity', label: 'Commodities', action: 'sell', severity: 'watch', drift_pct: 4.03, actual_pct: 4.03, target_pct: 0, action_value: -4836, target_value: 0, current_value: 4836 },
-]
-
-const TARGET_MODEL = [
-  { key: 'cash', label: 'Cash', target_pct: 10 },
-  { key: 'equity', label: 'Equity', target_pct: 85 },
-  { key: 'bond', label: 'Bonds', target_pct: 5 },
-]
-
 export const PLANNING_GET = {
-  summary: {
-    goals: [
-      { key: 'cash_reserve', note: 'Cash meets the 10% reserve target.', label: 'Cash Reserve', status: 'complete', progress_pct: 100, target_value: 12_000, current_value: 14_604 },
-      { key: 'monthly_contribution', note: 'Set a monthly contribution to project progress against goals.', label: 'Monthly Contribution', status: 'behind', progress_pct: 0, target_value: 12_000, current_value: 0 },
-      { key: 'concentration', note: '1 position above the 20% critical threshold.', label: 'Concentration Control', status: 'behind', progress_pct: 0, target_value: 0, current_value: 1 },
+  base_currency: 'MYR',
+  net_worth_total: 120000,
+  net_worth_adjusted: 120000,
+  investable_total: 87576,
+  locked: {
+    total: 32424,
+    holdings: [
+      { symbol: 'GF_KWSP', name: 'KWSP (EPF)', value: 32424 },
     ],
-    cashflow: { monthly_income: 0, monthly_savings: 0, monthly_surplus: 0, monthly_expenses: 0, savings_rate_pct: null },
-    cash_total: 8781.6,
-    assumptions: { monthly_expenses: 0, monthly_contribution: 0, emergency_fund_months: 6 },
-    liabilities: { rows: [], total_balance: 0, monthly_minimum_payment: 0, weighted_interest_rate_pct: null },
-    data_quality: 'ok',
-    target_model: TARGET_MODEL,
-    base_currency: 'MYR',
-    concentration: {
-      top_position: { symbol: 'GF_KWSP', severity: 'critical', allocation_pct: 27.02 },
-      positions_over_10_pct: 1,
-      positions_over_20_pct: 1,
-    },
-    allocation_rows: ALLOCATION_ROWS,
-    net_worth_total: NET_WORTH_MYR,
-    positions_value: 109_380,
-    rebalance_actions: ALLOCATION_ROWS.filter(row => row.key !== 'cash'),
-    net_worth_adjusted: NET_WORTH_MYR,
   },
-  settings: {
-    liabilities: [],
-    target_model: TARGET_MODEL,
-    cashflow_items: [],
-    monthly_expenses: 0,
-    monthly_contribution: 0,
+  data_quality: 'ok',
+  allocation_rows: [
+    { key: 'cash', label: 'Cash', target_pct: 5, actual_pct: 11.97, current_value: 10485.18, target_value: 4378.8, drift_pct: 6.97, action_value: -6106.38, action: 'sell' },
+    { key: 'equity', label: 'Equity', target_pct: 95, actual_pct: 88.03, current_value: 77090.82, target_value: 83197.2, drift_pct: -6.97, action_value: 6106.38, action: 'buy' },
+    { key: 'bond', label: 'Bonds', target_pct: 0, actual_pct: 0, current_value: 0, target_value: 0, drift_pct: 0, action_value: 0, action: 'hold' },
+  ],
+  goals: [
+    { key: 'cash_reserve', label: 'Cash Reserve', current_value: 10485.18, target_value: 4378.8, progress_pct: 100, reached: true, note: 'Cash meets the 5% reserve target.' },
+    { key: 'concentration', label: 'Concentration Control', current_value: 1, target_value: 0, progress_pct: 0, reached: false, note: '1 position is above 20% of investable assets.' },
+  ],
+  concentration: {
+    top_position: { symbol: 'NVDA', allocation_pct: 32.63 },
+    positions_over_10_pct: 3,
+    positions_over_20_pct: 1,
+  },
+  liabilities: {
+    total_balance: 0,
+    monthly_minimum_payment: 0,
+    weighted_interest_rate_pct: null,
+    rows: [],
+  },
+  cashflow: { monthly_income: 0, monthly_expenses: 0, monthly_savings: 0, monthly_surplus: 0, savings_rate_pct: null },
+  inputs: {
+    monthly_expenses: 'not set',
     emergency_fund_months: 6,
+    monthly_contribution: 'not set',
+    cashflow_items: [],
+    locked_symbols: ['GF_KWSP'],
   },
 }
 
-const REBALANCE_BUYS: Array<[symbol: string, name: string, value: number, approxQuantity: number | null]> = [
-  ['MSFT', 'Microsoft Corporation', 290, null],
-  ['AAPL', 'Apple Inc.', 285.5, null],
-  ['NVDA', 'NVIDIA Corporation', 281.25, null],
-  ['TSM', 'Taiwan Semiconductor Manufacturing Company Limited', 277.75, null],
-  ['MU', 'Micron Technology, Inc.', 242, null],
-  ['JNJ', 'Johnson & Johnson', 187, null],
-  ['GOOG', 'Alphabet Inc.', 115, null],
-  ['KO', 'The Coca-Cola Company', 105, null],
-  ['1066.KL', 'RHB Bank Berhad', 100.5, 13.49],
-  ['CVX', 'Chevron Corporation', 96, null],
-  ['PLTR', 'Palantir Technologies Inc.', 20, null],
-]
-
 export const REBALANCE_PLAN = {
   mode: 'contribute_only',
-  trades: REBALANCE_BUYS.map(([symbol, name, value, approx_quantity]) => ({ name, side: 'buy', value, bucket: 'equity', symbol, approx_quantity })),
-  cash_change: 0,
   base_currency: 'MYR',
-  allocation_rows: ALLOCATION_ROWS,
-  unallocated_contribution: 0,
+  buckets: [
+    { key: 'equity', actual_pct: 88.03, target_pct: 95, planned: 2000, traded: 1428.76, instruments: 8 },
+  ],
+  trades: [
+    { bucket: 'equity', symbol: 'NVDA', name: 'NVIDIA Corporation', side: 'buy', shares: 2, price: 172.14, currency: 'USD', fx_rate: 4.15, value_native: 344.28, value: 1428.76 },
+  ],
+  skipped: [
+    { symbol: 'MSFT', reason: 'below_one_share', one_share: 2067.95 },
+    { symbol: 'TSM', reason: 'below_one_share', one_share: 1016.75 },
+    { symbol: 'AAPL', reason: 'below_one_share', one_share: 962.8 },
+    { symbol: 'JNJ', reason: 'below_one_share', one_share: 655.7 },
+    { symbol: 'MU', reason: 'below_one_share', one_share: 490.53 },
+    { symbol: 'KO', reason: 'below_one_share', one_share: 291.21 },
+    { symbol: 'PLTR', reason: 'below_one_share', one_share: 265.6 },
+  ],
+  currencies: [
+    { currency: 'USD', fx_rate: 4.15, buy: 344.28, sell: 0 },
+  ],
+  broker_cash: { USD: 1634.12, MYR: 2000 },
+  broker_status: 'ok',
+  fetched_at: '2026-11-22T01:00:00.000Z',
+  contribution: 2000,
+  unallocated: 571.24,
 }
 
 export const PAPER_ORDER_ACCEPTED = {

@@ -40,7 +40,9 @@ describe('currency prompt contract', () => {
 
   it('distrusts flagged or out-of-regime DCF output', () => {
     const b = block('VALUATION OUTPUT')
-    expect(b).toContain('warnings')
+    expect(b).toContain('relay the reason')
+    expect(b).toContain('veto.triggered')
+    expect(b).toContain('not corroborated')
     expect(b).toContain('reverse_dcf_implied_growth')
   })
 
