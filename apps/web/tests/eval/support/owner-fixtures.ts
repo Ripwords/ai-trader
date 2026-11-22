@@ -377,7 +377,7 @@ function persisted(symbol: string, runId: string, finishedAt: string, v: Verdict
     status: 'complete',
     error: null,
     finishedAt: new Date(finishedAt),
-    decision: { rating: v.rating, confidence: v.confidence, rationale: v.rationale },
+    decision: { rating: v.rating, confidence: v.confidence, rationale: v.rationale, ownerVerdict: null },
     cap: v.cap ?? null,
     valuation: null,
     valuationUnavailableReason: null,

@@ -177,7 +177,8 @@ export async function getRunAssessment(userId: string, runId: string): Promise<R
 }
 
 const VetoEvent = z.object({ original_rating: z.string(), reason: z.string() })
-const ValuationUnavailableEvent = z.object({ reason: z.string() })
+const ValuationEvent = z.object({ status: z.literal('unavailable'), reason: z.string() })
+const DecisionEvent = z.object({ owner_verdict: z.enum(['add', 'hold', 'trim', 'do-not-add']) })
 
 const stateText = (...path: string[]) =>
   sql<string | null>`${agentRuns.finalState} #>> ${`{${path.join(',')}}`}`
@@ -209,7 +210,7 @@ export async function getRunVerdict(userId: string, runId: string, nowMs = Date.
     db
       .select({ kind: agentMessages.kind, payload: agentMessages.payload })
       .from(agentMessages)
-      .where(and(eq(agentMessages.runId, runId), inArray(agentMessages.kind, ['valuation-veto', 'valuation-unavailable'])))
+      .where(and(eq(agentMessages.runId, runId), inArray(agentMessages.kind, ['valuation-veto', 'valuation', 'decision'])))
       .orderBy(desc(agentMessages.seq)),
     db
       .select({
@@ -227,7 +228,8 @@ export async function getRunVerdict(userId: string, runId: string, nowMs = Date.
   if (!run) return null
 
   const veto = VetoEvent.safeParse(events.find(e => e.kind === 'valuation-veto')?.payload)
-  const unavailable = ValuationUnavailableEvent.safeParse(events.find(e => e.kind === 'valuation-unavailable')?.payload)
+  const unavailable = ValuationEvent.safeParse(events.find(e => e.kind === 'valuation')?.payload)
+  const owner = DecisionEvent.safeParse(events.find(e => e.kind === 'decision')?.payload)
   const valuation = valuations[0]
   return buildRunVerdict({
     runId,
@@ -237,7 +239,10 @@ export async function getRunVerdict(userId: string, runId: string, nowMs = Date.
     finishedAt: run.finishedAt,
     decision: run.rating === null || run.rationale === null
       ? null
-      : { rating: run.rating, confidence: run.confidence, rationale: run.rationale },
+      : {
+          rating: run.rating, confidence: run.confidence, rationale: run.rationale,
+          ownerVerdict: owner.success ? owner.data.owner_verdict : null,
+        },
     cap: veto.success ? { originalRating: veto.data.original_rating, reason: veto.data.reason } : null,
     valuation: valuation
       ? {

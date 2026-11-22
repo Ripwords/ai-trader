@@ -3,6 +3,7 @@
  * persisted. `agents_debate` and `research_get` both return it, so a run read
  * inline and the same run read later cannot disagree.
  */
+import type { OwnerVerdict } from '~~/types/agents'
 import { excerptKeyPoints } from './excerpt'
 
 export type RiskSpeaker = 'aggressive' | 'conservative' | 'neutral'
@@ -14,7 +15,8 @@ export interface PersistedRun {
   status: string
   error: string | null
   finishedAt: Date | null
-  decision: { rating: string; confidence: number | null; rationale: string } | null
+  /** `ownerVerdict` is null when the run had no owner mandate to answer. */
+  decision: { rating: string; confidence: number | null; rationale: string; ownerVerdict?: OwnerVerdict | null } | null
   /** Set only when the valuation veto changed the rating the agents reached. */
   cap: { originalRating: string; reason: string } | null
   valuation: {
@@ -48,6 +50,8 @@ interface RunIdentity {
 
 export interface RunVerdict extends RunIdentity {
   rating: string
+  /** The run's answer for this owner's position; `rating` follows it. Null when the run was not given the owner's context. */
+  owner_verdict: OwnerVerdict | null
   rating_cap: { original_rating: string; reason: string } | null
   confidence: number | null
   confidence_measures: string
@@ -197,6 +201,7 @@ export function buildRunVerdict(run: PersistedRun, nowMs: number): RunVerdictRes
   return {
     ...identity,
     rating,
+    owner_verdict: run.decision.ownerVerdict ?? null,
     rating_cap: run.cap ? { original_rating: run.cap.originalRating, reason: run.cap.reason } : null,
     confidence,
     confidence_measures: `probability (0-100) that over the ${CONFIDENCE_HORIZON_DAYS} trading days after the run ${correctIf}; a short-horizon forecast of this rating, not conviction in the long-term thesis`,

@@ -36,7 +36,8 @@ describe('chat.system default: debate before a buy', () => {
   })
 
   it('reports the cap, both cases and the run link, and keeps the 7-day probability from reading as conviction', () => {
-    expect(rule()).toMatch(/rating_cap is set, say the agents reached original_rating/)
+    expect(rule()).toMatch(/rating_cap is set, the capped rating stands even over an owner_verdict of add: say the agents reached original_rating/)
+    expect(rule()).toMatch(/When owner_verdict is set, lead with it/)
     expect(rule()).toMatch(/the bull case and the bear case in one line each/)
     expect(rule()).toMatch(/a markdown link to run_url/)
     expect(rule()).toMatch(/add no host/)

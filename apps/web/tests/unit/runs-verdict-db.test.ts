@@ -183,11 +183,24 @@ describe.skipIf(!url)('run verdict queries (TEST_DATABASE_URL)', () => {
     it('uses the reason the run recorded when it could not be valued', async () => {
       const runId = await seedRun({
         startedAt: '2026-11-19T10:00:00Z', decision: HOLD,
-        messages: [{ type: 'valuation-unavailable', reason: 'fundamentals fetch timed out' }],
+        messages: [{ type: 'valuation', status: 'unavailable', reason: 'fundamentals fetch timed out' }],
       })
       expect(await q.getRunVerdict(userId, runId, NOW)).toMatchObject({
         valuation: { status: 'unavailable', reason: 'fundamentals fetch timed out' },
       })
+    })
+
+    it('carries the owner verdict the run reached for this owner', async () => {
+      const runId = await seedRun({
+        startedAt: '2026-11-19T10:00:00Z', decision: HOLD,
+        messages: [{ type: 'decision', rating: 'hold', confidence: null, rationale: 'r', owner_verdict: 'do-not-add' }],
+      })
+      expect(await q.getRunVerdict(userId, runId, NOW)).toMatchObject({ rating: 'hold', owner_verdict: 'do-not-add' })
+    })
+
+    it('has no owner verdict for a run that had no owner mandate', async () => {
+      const runId = await seedRun({ startedAt: '2026-11-19T10:00:00Z', decision: HOLD })
+      expect(await q.getRunVerdict(userId, runId, NOW)).toMatchObject({ owner_verdict: null })
     })
 
     it('reports a failed run without a decision', async () => {

@@ -29,7 +29,7 @@ function run(over: Partial<PersistedRun> = {}): PersistedRun {
     status: 'complete',
     error: null,
     finishedAt: new Date('2026-11-19T11:00:00Z'),
-    decision: { rating: 'hold', confidence: 33, rationale: LONG_RATIONALE },
+    decision: { rating: 'hold', confidence: 33, rationale: LONG_RATIONALE, ownerVerdict: null },
     cap: null,
     valuation: {
       fairValue: 301.5, currentPrice: 240.35, marginOfSafetyPct: 0.2028, dataQuality: 'full',
