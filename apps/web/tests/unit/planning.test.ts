@@ -117,11 +117,18 @@ describe('planning summary', () => {
   it('has no goal for the monthly contribution, which is an input and not a target to reach', () => {
     for (const monthly_contribution of [0, 4_000]) {
       const out = buildPlanningSummary(portfolio(), { monthly_contribution })
-      expect(out.goals.map(g => g.key)).toEqual(['cash_reserve', 'concentration'])
+      expect(out.goals.map(g => g.key)).toEqual(['cash_reserve'])
     }
   })
 
-  it('surfaces cash reserve and concentration goals', () => {
+  it('reports position concentration once, as numbers, and never as a goal to reach', () => {
+    const out = buildPlanningSummary(portfolio())
+    expect(out.concentration).toEqual({ top_position: { symbol: 'VOO', allocation_pct: 70 }, positions_over_10_pct: 2, positions_over_20_pct: 2 })
+    expect(out.goals.map(g => g.key)).not.toContain('concentration')
+    expect(JSON.stringify(out.goals)).not.toMatch(/concentration|above 20%/i)
+  })
+
+  it('surfaces the cash reserve goal', () => {
     const out = buildPlanningSummary(portfolio())
 
     expect(out.goals).toContainEqual({
