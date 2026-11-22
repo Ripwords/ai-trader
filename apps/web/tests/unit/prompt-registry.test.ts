@@ -24,6 +24,7 @@ describe('prompt registry', () => {
       'chat.system',
       'chat.moomoo_rules',
       'chat.title',
+      'chat.memory',
       'research.risk_report',
       'news.contextual_angles',
       'algo.codegen',

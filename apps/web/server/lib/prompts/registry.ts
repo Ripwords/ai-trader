@@ -1,6 +1,7 @@
 import type { PromptGroup } from '../../../types/prompts'
 import {
   ALGO_CODEGEN_DEFAULT,
+  CHAT_MEMORY_DEFAULT,
   CHAT_SYSTEM_DEFAULT,
   CHAT_TITLE_DEFAULT,
   CONTEXTUAL_ANGLES_DEFAULT,
@@ -59,6 +60,14 @@ const WEB_PROMPTS = [
     description: 'Names a new chat thread from its first question, for the History list and notifications. Runs on the quick model; if it fails the question itself stays as the title.',
     engine: 'web',
     default: CHAT_TITLE_DEFAULT,
+  },
+  {
+    id: 'chat.memory',
+    group: 'chat',
+    label: 'Chat memory',
+    description: 'Decides what to remember about you after each chat message: standing preferences, intentional decisions, acknowledged risks, constraints and goals. Runs on the quick model; the output shape is fixed by a schema. The saved memories are under Settings → memory.',
+    engine: 'web',
+    default: CHAT_MEMORY_DEFAULT,
   },
   {
     id: 'research.risk_report',

@@ -78,6 +78,13 @@
       "when": 1792223382659,
       "tag": "0010_notification_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795355006607,
+      "tag": "0011_chat_memories",
+      "breakpoints": true
     }
   ]
 }

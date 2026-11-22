@@ -61,6 +61,25 @@ export const chatMessages = pgTable('chat_messages', {
   thread: index('chat_messages_thread_idx').on(t.threadId),
 }))
 
+// Durable facts about the owner that every chat thread shares: standing
+// preferences, intentional decisions, acknowledged risks, constraints, goals.
+// All of a user's rows go into each chat turn's system prompt, so the count
+// and length are capped (types/memory.ts). `source` ∈ {'manual','auto'} is
+// who wrote the current text: the owner in Settings, or the extractor that
+// runs after a chat turn.
+export const chatMemories = pgTable('chat_memories', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  content: text('content').notNull(),
+  source: varchar('source', { length: 8 }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  user: index('chat_memories_user_idx').on(t.userId),
+}))
+
 // Algo trading: strategies, runs, signals.
 // `code` is a Python source string executed inside the FastAPI container's
 // AST-allowlisted sandbox. `cadence` is one of '1m','5m','15m','1h','1d' —

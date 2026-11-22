@@ -56,15 +56,21 @@ const deps = vi.hoisted(() => ({
   listWatchlist: async (): Promise<unknown[]> => [],
   getGhostfolioTools: async (): Promise<Record<string, unknown>> => ({}),
   getGhostfolioStatus: async (): Promise<string> => 'ok',
-  buildSystemPrompt: (status: string, _recall: string) => `sys:${status}`,
+  buildSystemPrompt: (status: string, _recall: string, _parts?: { memories?: readonly string[] }) => `sys:${status}`,
   makeTools: (): Record<string, unknown> => ({}),
+  listMemories: async (_owner: string): Promise<Array<{ content: string }>> => [],
 }))
+const rememberFromTurn = vi.hoisted(() => vi.fn(async (_turn: { ownerId: string; userText: string; priorAssistantText: string }) => {}))
+vi.mock('../../server/lib/chat-memory', () => ({ listMemories: (owner: string) => deps.listMemories(owner) }))
+vi.mock('../../server/lib/chat-memory-extract', () => ({ rememberFromTurn }))
 vi.mock('../../server/llm/http', () => ({ getApiClient: () => ({ listWatchlist: () => deps.listWatchlist() }) }))
 vi.mock('../../server/llm/mcp', () => ({
   getGhostfolioTools: () => deps.getGhostfolioTools(),
   getGhostfolioStatus: () => deps.getGhostfolioStatus(),
 }))
-vi.mock('../../server/llm/chat-context', () => ({ buildSystemPrompt: (s: string, r: string) => deps.buildSystemPrompt(s, r) }))
+vi.mock('../../server/llm/chat-context', () => ({
+  buildSystemPrompt: (s: string, r: string, parts?: { memories?: readonly string[] }) => deps.buildSystemPrompt(s, r, parts),
+}))
 vi.mock('../../server/llm/tools', () => ({ makeTools: () => deps.makeTools() }))
 vi.mock('../../server/lib/prompts/chat-runtime', () => ({ loadChatPromptInputs: async () => ({}) }))
 vi.mock('../../server/llm/recall', () => ({ buildRecallContext: async () => '' }))
@@ -438,6 +444,98 @@ describe('chat reply notification', () => {
 
     expect(assistantSaves()).toHaveLength(1)
     expect(queued()).toEqual([])
+  })
+})
+
+describe('POST /api/chat shared memory', () => {
+  const USD = 'The owner holds mostly USD assets against a MYR base; this is intentional.'
+  const realPrompt = deps.buildSystemPrompt
+
+  beforeEach(() => {
+    rememberFromTurn.mockReset().mockResolvedValue(undefined)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    deps.listMemories = async () => []
+    deps.buildSystemPrompt = realPrompt
+  })
+
+  it('gives every turn the saved memories in its system prompt', async () => {
+    deps.listMemories = async () => [{ content: USD }]
+    const seen: Array<readonly string[] | undefined> = []
+    deps.buildSystemPrompt = (status, recall, parts) => {
+      seen.push(parts?.memories)
+      return realPrompt(status, recall)
+    }
+    const res = await post(event({ messages: [userMessage('should I buy more NVDA?')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    finish()
+    await res.text()
+    expect(seen).toEqual([[USD]])
+  })
+
+  it('starts the reply without memories when the store is down or slow', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    deps.listMemories = async () => { throw new Error('db down') }
+    const res = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    finish()
+    await res.text()
+    await until(() => !chatStreams.isActive('th-1'))
+    err.mockRestore()
+
+    vi.useFakeTimers()
+    deps.listMemories = () => new Promise<never>(() => {})
+    feeder = undefined
+    const slow = await post(event({ messages: [userMessage('hi')], chatId: 'th-1' }))
+    await vi.advanceTimersByTimeAsync(2_100)
+    expect(feeder).toBeDefined()
+    finish()
+    await slow.body!.cancel()
+  })
+
+  it('extracts from the owner\'s message once the reply is saved, with the previous reply as context', async () => {
+    const history = [
+      { id: 'u0', role: 'user', parts: [{ type: 'text', text: 'how is my book?' }] },
+      { id: 'a0', role: 'assistant', parts: [{ type: 'text', text: 'It is 80% tech. Is that intended?' }] },
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'yes, on purpose' }] },
+    ]
+    const res = await post(event({ messages: history, chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    feed.enqueue({ type: 'text-delta', id: 'x', delta: 'Noted.' })
+    expect(rememberFromTurn).not.toHaveBeenCalled()
+    finish()
+    await res.text()
+    await until(() => rememberFromTurn.mock.calls.length > 0)
+
+    expect(rememberFromTurn).toHaveBeenCalledExactlyOnceWith({
+      ownerId: 'user-1',
+      userText: 'yes, on purpose',
+      priorAssistantText: 'It is 80% tech. Is that intended?',
+    })
+    expect(assistantSaves()).toHaveLength(1)
+  })
+
+  it('does not hold the reply open while extraction runs', async () => {
+    rememberFromTurn.mockReturnValue(new Promise<never>(() => {}))
+    const res = await post(event({ messages: [userMessage('usd is on purpose')], chatId: 'th-1' }))
+    await until(() => feeder !== undefined)
+    finish()
+    expect((await res.text()).trimEnd().endsWith('data: [DONE]')).toBe(true)
+    await until(() => !chatStreams.isActive('th-1'))
+    expect(rememberFromTurn).toHaveBeenCalledOnce()
+  })
+
+  it('does not extract from a reply the owner stopped, or from /tools', async () => {
+    await post(event({ messages: [userMessage('usd is on purpose')], chatId: 'th-1' }))
+    await until(() => chatStreams.isActive('th-1') && feeder !== undefined)
+    expect(await stop(event(undefined, { id: 'th-1' }))).toEqual({ stopped: true })
+    await until(() => !chatStreams.isActive('th-1'))
+
+    const res = await post(event({ messages: [userMessage('/tools')], chatId: 'th-1' }))
+    await res.text()
+    await until(() => !chatStreams.isActive('th-1'))
+    expect(rememberFromTurn).not.toHaveBeenCalled()
   })
 })
 

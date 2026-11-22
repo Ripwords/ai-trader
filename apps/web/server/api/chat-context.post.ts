@@ -5,6 +5,8 @@ import { getApiClient } from '../llm/http'
 import { getGhostfolioStatus, getGhostfolioTools } from '../llm/mcp'
 import { getModelInfo, resolveModel } from '../llm/model'
 import { makeTools } from '../llm/tools'
+import { getOwnerId } from '../db/repo'
+import { listMemories } from '../lib/chat-memory'
 
 interface ChatContextBody {
   messages?: Array<{ id?: string; role: string; parts?: unknown[]; [k: string]: unknown }>
@@ -14,17 +16,18 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<ChatContextBody>(event)
   const messages = Array.isArray(body?.messages) ? body.messages : []
   const model = getModelInfo(await resolveModel('chat'))
-  const [ghostfolioStatus, ghostfolioTools, promptParts] = await Promise.all([
+  const [ghostfolioStatus, ghostfolioTools, promptParts, memories] = await Promise.all([
     getGhostfolioStatus(),
     getGhostfolioTools(),
     loadChatPromptInputs(),
+    getOwnerId().then(listMemories).then(ms => ms.map(m => m.content)).catch(() => []),
   ])
   const modelMessages = messages.length
     ? await convertToModelMessages(messages as Parameters<typeof convertToModelMessages>[0])
     : []
   const toolNames = Object.keys({ ...makeTools(getApiClient(), event), ...ghostfolioTools })
   const estimate = estimateChatInputTokens({
-    system: buildSystemPrompt(ghostfolioStatus, undefined, promptParts),
+    system: buildSystemPrompt(ghostfolioStatus, undefined, { ...promptParts, memories }),
     modelMessages,
     toolNames,
   })
