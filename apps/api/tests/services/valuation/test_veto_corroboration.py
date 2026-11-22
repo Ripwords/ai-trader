@@ -7,9 +7,10 @@ carried the engine's own "treat the fair value as out-of-regime" warning, yet
 kept both the fair value and the veto.
 
 The inputs below are rebuilt per share from those stored results (the table
-keeps results, not inputs): shares are 1, the FCF base comes from the stored
-P/FCF, and net debt is whatever makes the engine's DCF land on the stored
-fair value under the stored growth and discount rate.
+keeps results, not inputs): shares are 1, net debt is 0, and the FCF base is
+whatever makes the engine's DCF land on the stored fair value under the
+stored growth and discount rate. For NVDA and V that also reproduces the
+stored scenarios and reverse-DCF growth.
 """
 
 from dataclasses import dataclass
@@ -36,22 +37,17 @@ class Stored:
     ps: D
     hist_pe: D
     hist_ps: D
-    p_fcf: D | None
 
 
 STORED = {
     "US.AAPL": Stored(D("344.630005"), D("106.112426"), D("-0.029587976"), D("0.09345"),
-                      D("39.52179"), D("10.774089"), D("35.700371"), D("9.608778"),
-                      D("46.690538")),
-    # The stored MSFT P/FCF predates the OCF − capex base, so it is not used.
+                      D("39.52179"), D("10.774089"), D("35.700371"), D("9.608778")),
     "US.MSFT": Stored(D("521.909973"), D("116.209026"), D("0.030332969"), D("0.09495"),
-                      D("27.239561"), D("11.18736"), D("30.117378"), D("11.393740"), None),
+                      D("27.239561"), D("11.18736"), D("30.117378"), D("11.393740")),
     "US.NVDA": Stored(D("204.639999"), D("69.410039"), D("0.15"), D("0.15"),
-                      D("25.87105"), D("16.310003"), D("51.250530"), D("28.572147"),
-                      D("118.188387")),
+                      D("25.87105"), D("16.310003"), D("51.250530"), D("28.572147")),
     "US.V": Stored(D("413.589996"), D("244.449835"), D("0.034996601"), D("0.07855"),
-                   D("33.570618"), D("16.839905"), D("27.147362"), D("13.746280"),
-                   D("36.603296")),
+                   D("33.570618"), D("16.839905"), D("27.147362"), D("13.746280")),
 }
 
 
@@ -66,15 +62,11 @@ def _rebuild(symbol: str, **changes) -> ValuationInput:
         HistoryPeriod(period="2025", fcf=D("1")),
     ]
     beta = (s.discount - D("0.04")) / D("0.05")
-    rates = [s.growth] * 5
-    unit = dcf(D("1"), rates, s.discount, TERMINAL_GROWTH, D("0"), D("1"))
-    if s.p_fcf is None:
-        fcf_base, net_debt = s.fair_value / unit, D("0")
-    else:
-        fcf_base = s.price / s.p_fcf
-        net_debt = fcf_base * unit - s.fair_value
+    fair_value_per_unit_fcf = dcf(
+        D("1"), [s.growth] * 5, s.discount, TERMINAL_GROWTH, D("0"), D("1"))
     vi = ValuationInput(
-        symbol=symbol, current_price=s.price, fcf_base=fcf_base, net_debt=net_debt,
+        symbol=symbol, current_price=s.price,
+        fcf_base=s.fair_value / fair_value_per_unit_fcf, net_debt=D("0"),
         shares_outstanding=D("1"), beta=beta, history=history,
         metrics=Metrics(market_cap=s.price, pe_ratio=s.pe, ps_ratio=s.ps,
                         shares_outstanding=D("1"), beta=beta),
@@ -93,6 +85,18 @@ def test_rebuilt_inputs_land_on_the_stored_assumptions_and_fair_value(symbol):
     fv = dcf(vi.fcf_base, a.growth_rates, a.discount_rate, a.terminal_growth,
              vi.net_debt, vi.shares_outstanding)
     assert abs(fv - s.fair_value) < D("0.01")
+
+
+@pytest.mark.parametrize("symbol,scenarios,implied_growth", [
+    ("US.NVDA", ["77.47", "69.41", "62.08"], "0.468706"),
+    ("US.V", ["278.44", "244.45", "214.01"], "0.160314"),
+])
+def test_rebuilt_inputs_reproduce_the_stored_scenarios_and_implied_growth(
+        symbol, scenarios, implied_growth):
+    r = value(_rebuild(symbol))
+    assert [f"{s.fair_value:.2f}" for s in r.scenarios] == scenarios
+    assert r.reverse_dcf_implied_growth is not None
+    assert abs(r.reverse_dcf_implied_growth - D(implied_growth)) < D("0.001")
 
 
 @pytest.mark.parametrize("symbol", ["US.AAPL", "US.MSFT"])

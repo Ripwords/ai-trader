@@ -82,6 +82,11 @@ class Veto(_Model):
     triggered: bool
     reason: str | None
     rating_cap: str | None
+    # Whether the stock's own historical P/E or P/S backed a DCF overvaluation
+    # signal. The DCF caps the rating only when "corroborated"; "unavailable"
+    # means there was no own-history multiple to compare, so the signal is
+    # unverified rather than cleared. None when the DCF raised no signal.
+    corroboration: Literal["corroborated", "not_corroborated", "unavailable"] | None = None
 
 
 class ValuationResult(_Model):
