@@ -8,7 +8,7 @@ Input contract: an async iterator of **normalized** chunks shaped like::
             "tool_calls":   list[{"name", "args"}],
             "tool_results": list[{"name", "ok", "preview"}],
             "debate":       {"round", "side", "text"},
-            "decision":     {"rating", "confidence", "rationale"},
+            "decision":     {"rating", "confidence", "rationale", "owner_verdict"?},
             "messages":     list[{"role", "content"}],
         }
     }
@@ -75,6 +75,13 @@ async def translate_chunks(
                 "ok": bool(tr.get("ok", True)),
                 "preview": preview,
             }
+        valuation = values.get("valuation")
+        if valuation:
+            yield {
+                "type": "valuation",
+                "status": valuation.get("status"),
+                "reason": valuation.get("reason"),
+            }
         debate = values.get("debate")
         if debate:
             yield {
@@ -112,12 +119,16 @@ async def translate_chunks(
             }
         decision = values.get("decision")
         if decision:
-            yield {
+            event = {
                 "type": "decision",
                 "rating": decision.get("rating"),
                 "confidence": decision.get("confidence"),
                 "rationale": decision.get("rationale", ""),
             }
+            # Present only on a run that had an owner mandate to answer.
+            if decision.get("owner_verdict"):
+                event["owner_verdict"] = decision["owner_verdict"]
+            yield event
         veto = values.get("valuation_veto")
         if veto:
             yield {

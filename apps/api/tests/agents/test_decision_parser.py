@@ -147,6 +147,22 @@ def test_canonical_buy_marker_beats_body_hold_mentions() -> None:
     assert _decision_for(text)["rating"] == "buy"
 
 
+@pytest.mark.parametrize(
+    ("quoted", "own", "rating"),
+    [("BUY", "HOLD", "hold"), ("SELL", "HOLD", "hold"), ("HOLD", "BUY", "buy"), ("BUY", "SELL", "sell")],
+)
+def test_the_judges_own_final_marker_beats_one_it_quotes(quoted: str, own: str, rating: str) -> None:
+    """The Risk Manager refines the trader's plan and often quotes its marker.
+    Two different markers made the canonical extractor give up, and the
+    whole-text scan then read a HOLD verdict as BUY or SELL."""
+    text = (
+        f"The trader ended with FINAL TRANSACTION PROPOSAL: **{quoted}**. "
+        "That call does not survive the risk debate.\n\n"
+        f"FINAL TRANSACTION PROPOSAL: **{own}**"
+    )
+    assert _decision_for(text)["rating"] == rating
+
+
 # ---- DB compatibility (NOT NULL) --------------------------------------------------
 
 

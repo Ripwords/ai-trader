@@ -125,6 +125,12 @@ const AGENTS_PROMPTS: readonly AgentsPromptMeta[] = [
     'FINAL TRANSACTION PROPOSAL',
   ),
   agents(
+    'owner_mandate',
+    'Owner mandate',
+    'Who the debate decides for and how: your horizon, what you never do, and the verdicts you want. Added after your position to the research manager, the trader and the risk manager on every run started from this app. Its text must keep the OWNER VERDICT line format, which the verdict is read from.',
+    'OWNER VERDICT',
+  ),
+  agents(
     'confidence_judge',
     'Confidence judge',
     'Audits the final call and states the probability it is right. Its reply must keep a CONFIDENCE: line, which the confidence score is read from.',

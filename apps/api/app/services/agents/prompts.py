@@ -2,7 +2,7 @@
 
 The defaults are TradingAgents' own ``.md`` prompts (with our earnings
 rules appended to the fundamentals and news analysts) plus our confidence
-judge.
+judge and the owner mandate.
 Settings in the web app stores overrides; each run fetches them once, at the
 start, and keeps them in a ``ContextVar`` so concurrent runs never see each
 other's text. Every node module calls ``load_prompt(name)`` from its own
@@ -105,8 +105,10 @@ def raw_node_prompt(name: str) -> str:
 
 def prompt_defaults() -> dict[str, PromptDefault]:
     from .confidence import JUDGE_PROMPT_TEMPLATE
+    from .owner import OWNER_MANDATE_DEFAULT, OWNER_MANDATE_PROMPT
 
     texts = {name: raw_node_prompt(name) for name in NODE_PROMPTS}
+    texts[OWNER_MANDATE_PROMPT] = OWNER_MANDATE_DEFAULT
     texts[JUDGE_PROMPT] = JUDGE_PROMPT_TEMPLATE
     return {name: {"text": text, "placeholders": placeholders(text)} for name, text in texts.items()}
 
