@@ -202,9 +202,14 @@ export function driftLevel(driftPct: number): DriftLevel {
   return abs >= 10 ? 'far' : abs >= 3 ? 'off' : 'on'
 }
 
+/** A single position is worth a look from 5% of investable assets and is
+ *  flagged from 20%. */
+export function concentrationTone(allocationPct: number): Tone {
+  return allocationPct >= 20 ? 'down' : allocationPct >= 5 ? 'accent' : 'neutral'
+}
+
 /** What the plan says needs doing: buckets off target with the biggest trade
- *  first, then goals not reached. Empty means on track. How much sits in one
- *  position is the owner's choice: the risk tab states it and nothing grades it. */
+ *  first, the largest position, then goals not reached. Empty means on track. */
 export function attentionItems(plan: PlanningSummary): AttentionItem[] {
   const ccy = plan.base_currency
   const trades = plan.allocation_rows
@@ -216,8 +221,17 @@ export function attentionItems(plan: PlanningSummary): AttentionItem[] {
       detail: `${row.action} ${fmtCurrency(Math.abs(row.action_value), ccy)} · ${row.actual_pct.toFixed(1)}% vs ${row.target_pct.toFixed(1)}% target`,
       tone: 'accent',
     }))
+  const top = plan.concentration.top_position
+  const concentration: AttentionItem[] = top && concentrationTone(top.allocation_pct) !== 'neutral'
+    ? [{
+        key: 'concentration',
+        label: top.symbol,
+        detail: `${top.allocation_pct.toFixed(1)}% of investable assets in one position`,
+        tone: concentrationTone(top.allocation_pct),
+      }]
+    : []
   const goals = plan.goals
     .filter(g => !g.reached)
     .map((g): AttentionItem => ({ key: `goal-${g.key}`, label: g.label, detail: g.note, tone: 'accent' }))
-  return [...trades, ...goals]
+  return [...trades, ...concentration, ...goals]
 }

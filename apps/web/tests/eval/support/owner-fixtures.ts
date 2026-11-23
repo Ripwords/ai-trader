@@ -427,6 +427,7 @@ export const PLANNING_GET = {
   ],
   goals: [
     { key: 'cash_reserve', label: 'Cash Reserve', current_value: 10485.18, target_value: 4378.8, progress_pct: 100, reached: true, note: 'Cash meets the 5% reserve target.' },
+    { key: 'concentration', label: 'Concentration Control', current_value: 1, target_value: 0, progress_pct: 0, reached: false, note: '1 position is above 20% of investable assets.' },
   ],
   concentration: {
     top_position: { symbol: 'NVDA', allocation_pct: 32.63 },
