@@ -46,12 +46,27 @@ interface ValuationVetoRecord {
   rating_cap: string
 }
 
+type ValuationStatus = Extract<AgentEvent, { type: 'valuation' }>['status']
+
+const VALUATION_LABEL: Record<ValuationStatus, string> = {
+  ok: 'DCF fair value computed',
+  multiples_only: 'multiples only',
+  unavailable: 'unavailable',
+}
+
+// The api appends "; multiples-only (…)" to its reason, which the label already says.
+function valuationReason(reason: string | null): string | null {
+  const first = reason?.split(';')[0]?.trim().replace(/\.$/, '')
+  return first ? `${first.charAt(0).toUpperCase()}${first.slice(1)}.` : null
+}
+
 type RenderItem =
   | ({ kind: 'node' } & NodeRecord)
   | ({ kind: 'debate' } & DebateRecord)
   | { kind: 'risk-debate'; turns: RiskTurn[] }
   | ({ kind: 'synthesis' } & SynthesisRecord)
   | ({ kind: 'valuation-veto' } & ValuationVetoRecord)
+  | { kind: 'valuation'; label: string; reason: string | null }
 
 // Aggregate the wire stream into renderable timeline items. Order is
 // preserved by the *first* event that touches each item — node-start /
@@ -74,7 +89,10 @@ const items = computed<RenderItem[]>(() => {
     | { kind: 'risk-debate' }
     | { kind: 'synthesis'; stage: SynthesisStage }
     | { kind: 'valuation-veto'; idx: number }
+    | { kind: 'valuation' }
   > = []
+  // A resumed run reports its valuation again; the latest one stands.
+  let valuation: { label: string; reason: string | null } | null = null
   const vetoRecords: ValuationVetoRecord[] = []
 
   for (const ev of props.events) {
@@ -152,6 +170,10 @@ const items = computed<RenderItem[]>(() => {
         order.push({ kind: 'synthesis', stage: ev.stage })
       }
     }
+    else if (ev.type === 'valuation') {
+      if (valuation === null) order.push({ kind: 'valuation' })
+      valuation = { label: VALUATION_LABEL[ev.status], reason: valuationReason(ev.reason) }
+    }
     else if (ev.type === 'valuation-veto') {
       const idx = vetoRecords.length
       vetoRecords.push({
@@ -175,6 +197,7 @@ const items = computed<RenderItem[]>(() => {
     if (o.kind === 'debate')         return { kind: 'debate', ...debates.get(o.round)! }
     if (o.kind === 'risk-debate')    return { kind: 'risk-debate', turns: riskTurns ?? [] }
     if (o.kind === 'valuation-veto') return { kind: 'valuation-veto', ...vetoRecords[o.idx]! }
+    if (o.kind === 'valuation')      return { kind: 'valuation', ...valuation! }
     return { kind: 'synthesis', ...synth.get(o.stage)! }
   })
 })
@@ -199,6 +222,15 @@ const items = computed<RenderItem[]>(() => {
         :node="item.node"
         :content="item.content"
       />
+      <p
+        v-else-if="item.kind === 'valuation'"
+        class="valuation-state"
+        data-testid="valuation-state"
+      >
+        <span class="valuation-state__label">Valuation:</span>
+        {{ item.label }}.
+        <template v-if="item.reason">{{ item.reason }}</template>
+      </p>
       <div
         v-else-if="item.kind === 'valuation-veto'"
         class="valuation-veto-banner"
@@ -229,6 +261,20 @@ const items = computed<RenderItem[]>(() => {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
+}
+
+.valuation-state {
+  margin: 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--ink-line);
+  border-radius: var(--radius-card);
+  color: var(--paper-2);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.valuation-state__label {
+  color: var(--paper-1);
+  font-weight: 600;
 }
 
 .valuation-veto-banner {

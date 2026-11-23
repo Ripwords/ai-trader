@@ -27,4 +27,56 @@ describe('AgentTimeline', () => {
     const wrapper = mount(AgentTimeline, { props: { events } })
     expect(wrapper.find('[data-testid=debate-round]').exists()).toBe(true)
   })
+
+  const valuationText = (extra: AgentEvent[]) =>
+    mount(AgentTimeline, { props: { events: [...events, ...extra] } }).find('[data-testid=valuation-state]')
+
+  it('states that the run was priced on multiples only, and why the DCF was skipped', () => {
+    const row = valuationText([{
+      type: 'valuation',
+      status: 'multiples_only',
+      reason: 'DCF skipped: non-positive FCF or missing shares; multiples-only (no fabricated fair value)',
+    }])
+    expect(row.text().replace(/\s+/g, ' ')).toBe('Valuation: multiples only. DCF skipped: non-positive FCF or missing shares.')
+  })
+
+  it('states a computed DCF and an unavailable valuation in plain words', () => {
+    expect(valuationText([{ type: 'valuation', status: 'ok', reason: null }]).text().replace(/\s+/g, ' '))
+      .toBe('Valuation: DCF fair value computed.')
+    expect(valuationText([{ type: 'valuation', status: 'unavailable', reason: 'no financial statements' }]).text().replace(/\s+/g, ' '))
+      .toBe('Valuation: unavailable. No financial statements.')
+  })
+
+  it('shows the valuation once when a resumed run reports it again', () => {
+    const wrapper = mount(AgentTimeline, {
+      props: {
+        events: [
+          ...events,
+          { type: 'valuation', status: 'unavailable', reason: 'fetch failed' },
+          { type: 'valuation', status: 'ok', reason: null },
+        ],
+      },
+    })
+    const rows = wrapper.findAll('[data-testid=valuation-state]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.text()).toContain('DCF fair value computed')
+  })
+
+  it('shows no valuation line for a run that recorded none', () => {
+    expect(valuationText([]).exists()).toBe(false)
+  })
+
+  it('keeps the veto next to the valuation it came from', () => {
+    const wrapper = mount(AgentTimeline, {
+      props: {
+        events: [
+          ...events,
+          { type: 'valuation', status: 'ok', reason: null },
+          { type: 'valuation-veto', original_rating: 'buy', effective_rating: 'hold', reason: 'price is 40% above fair value', rating_cap: 'hold' },
+        ],
+      },
+    })
+    expect(wrapper.find('[data-testid=valuation-state]').exists()).toBe(true)
+    expect(wrapper.find('.valuation-veto-banner').text()).toContain('price is 40% above fair value')
+  })
 })
