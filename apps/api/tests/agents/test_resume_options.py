@@ -73,8 +73,8 @@ class _Propagator:
 
 
 class _Compiled:
-    """Mimics LangGraph resume: raw AgentState snapshots, starting with the
-    checkpoint itself, then one per superstep."""
+    """Mimics LangGraph resume: raw AgentState snapshots in the ``values``
+    mode, starting with the checkpoint itself, then one per superstep."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[Any, dict[str, Any]]] = []
@@ -84,10 +84,10 @@ class _Compiled:
 
     async def astream(self, input: Any, **kw: Any):
         self.calls.append((input, kw))
-        yield dict(CHECKPOINT)
+        yield "values", dict(CHECKPOINT)
         state = {**CHECKPOINT, "fundamentals_report": "fundamentals are fine"}
-        yield state
-        yield {**state, "final_trade_decision": "FINAL TRANSACTION PROPOSAL: **SELL**"}
+        yield "values", state
+        yield "values", {**state, "final_trade_decision": "FINAL TRANSACTION PROPOSAL: **SELL**"}
 
 
 class _JudgeLlm:
@@ -128,7 +128,7 @@ async def test_resume_streams_the_same_shape_as_a_normal_run(
 
     [(input_, kw)] = built.graph.calls
     assert input_ is None
-    assert kw["stream_mode"] == "values"
+    assert kw["stream_mode"] == ["values", "custom"]
     assert kw["config"]["configurable"]["thread_id"] == "run-1"
     assert kw["config"]["recursion_limit"] == 77
 

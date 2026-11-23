@@ -14,9 +14,10 @@ What we take from tradingagents (0.5.0, pinned in ``uv.lock``) and what we own:
    debate, trader and risk stages are upstream's nodes in upstream's order.
 3. ``max_debate_rounds`` is read once, when the graph is compiled. Per-run
    overrides must be passed to :func:`build_graph`.
-4. The stream is ``graph_obj.graph.astream(state, **graph_args)`` with
-   ``stream_mode="values"``: one full state snapshot per graph step, with no
-   ``metadata.langgraph_node``. A step can hold several analysts' work.
+4. The stream is ``graph_obj.graph.astream(state, **graph_args)`` in two
+   modes. ``values`` gives one full state snapshot per graph step, with no
+   ``metadata.langgraph_node``; a step can hold several analysts' work.
+   ``custom`` carries each debate node's own notice that it has started.
 5. Conversations hold langchain ``BaseMessage`` subclasses; tool calls live on
    ``AIMessage.tool_calls`` and tool results arrive as ``ToolMessage``.
 
@@ -52,6 +53,7 @@ from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, RemoveMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -259,6 +261,17 @@ def with_analyst_reports(plan: str, state: Any) -> str:
     )
 
 
+class _NoMemory:
+    """Stands in for upstream's per-role memory of past trades. Nothing here
+    ever stores a lesson, and upstream's empty memory hands the node an empty
+    string (or "No past memories found."), which a prompt asking for lessons
+    reads as lessons to make up. The default prompts no longer ask; a saved
+    override that still has ``{past_memory_str}`` gets this instead."""
+
+    def get_memories(self, _situation: str, n_matches: int = 1) -> list[dict[str, str]]:
+        return [{"recommendation": prompts_mod.NO_MEMORY_VALUE}]
+
+
 def trader_with_reports(llm: Any, memory: Any) -> Callable[[Any], dict[str, Any]]:
     node = _upstream_create_trader(llm, memory)
 
@@ -277,6 +290,25 @@ def risk_manager_with_reports(llm: Any, memory: Any) -> Callable[[Any], dict[str
         return node(state.model_copy(update={"trader_investment_plan": plan}))
 
     return risk_manager_node
+
+
+# The stream has always called the Risk Judge node the Risk Manager.
+_WIRE_LABELS = {"Risk Judge": "Risk Manager"}
+
+
+def _announcing(label: str, node: Callable[[Any], dict[str, Any]]) -> Callable[[Any], dict[str, Any]]:
+    """``node``, saying on the graph's ``custom`` stream that it has started.
+
+    A state snapshot only shows a node once it has written its field, so
+    without this the stream names a debate node the moment it finishes. A
+    node restored from a checkpoint does not run, and so is not announced.
+    """
+
+    def announced(state: Any) -> dict[str, Any]:
+        get_stream_writer()({"node_started": label})
+        return node(state)
+
+    return announced
 
 
 def _tool_nodes(toolkit: AgentToolkit) -> dict[str, Any]:
@@ -340,14 +372,19 @@ def _compile_graph(
     argues = ContextLlm(quick, ta.run_context)
     quick_decides = ContextLlm(quick, ta.run_context, decides=True)
     deep_decides = ContextLlm(deep, ta.run_context, decides=True)
-    workflow.add_node("Bull Researcher", create_bull_researcher(argues, ta.bull_memory))
-    workflow.add_node("Bear Researcher", create_bear_researcher(argues, ta.bear_memory))
-    workflow.add_node("Research Manager", create_research_manager(deep_decides, ta.invest_judge_memory))
-    workflow.add_node("Trader", trader_with_reports(quick_decides, ta.trader_memory))
-    workflow.add_node("Aggressive Analyst", create_aggressive_debator(argues))
-    workflow.add_node("Neutral Analyst", create_neutral_debator(argues))
-    workflow.add_node("Conservative Analyst", create_conservative_debator(argues))
-    workflow.add_node("Risk Judge", risk_manager_with_reports(deep_decides, ta.risk_manager_memory))
+    memory = _NoMemory()
+    debate_nodes = {
+        "Bull Researcher": create_bull_researcher(argues, memory),
+        "Bear Researcher": create_bear_researcher(argues, memory),
+        "Research Manager": create_research_manager(deep_decides, memory),
+        "Trader": trader_with_reports(quick_decides, memory),
+        "Aggressive Analyst": create_aggressive_debator(argues),
+        "Neutral Analyst": create_neutral_debator(argues),
+        "Conservative Analyst": create_conservative_debator(argues),
+        "Risk Judge": risk_manager_with_reports(deep_decides, memory),
+    }
+    for name, node in debate_nodes.items():
+        workflow.add_node(name, _announcing(_WIRE_LABELS.get(name, name), node))
 
     workflow.add_edge([analyst.clear_node for analyst in selected], "Bull Researcher")
     workflow.add_conditional_edges(
@@ -521,13 +558,44 @@ _STAGE_NODES = {
     "final_trade_decision": "Risk Manager",
 }
 
+# The node behind each ``side`` of the bull/bear debate and each ``speaker``
+# of the risk debate.
+_SPEAKER_NODES = {
+    "bull": "Bull Researcher",
+    "bear": "Bear Researcher",
+    "aggressive": "Aggressive Analyst",
+    "conservative": "Conservative Analyst",
+    "neutral": "Neutral Analyst",
+}
 
-def _detect_node(prev: dict, curr: dict) -> str | None:
-    """Pick a stage label by spotting which AgentState field changed."""
+
+def _stage_written(prev: dict, curr: dict) -> tuple[str, str] | None:
+    """The stage whose AgentState field changed, and what it wrote there."""
     for field, label in _STAGE_NODES.items():
-        if (curr.get(field) or "") != (prev.get(field) or ""):
-            return label
+        text = curr.get(field) or ""
+        if text != (prev.get(field) or ""):
+            return label, text
     return None
+
+
+SUMMARY_MAX_CHARS = 200
+_LINE_MARKUP = re.compile(r"^(#+|[-*+]|\d+\.)\s+")
+_SPEAKER_PREFIX = re.compile(r"^(Bull|Bear|Aggressive|Conservative|Neutral) Analyst:\s*")
+
+
+def _summary(text: str) -> str:
+    """The first line of prose in what a node wrote, as plain text, for the
+    ``node-end`` event. A heading is used only when there is nothing else."""
+    lines = [line.strip() for line in text.splitlines()]
+    lines = [line for line in lines if re.search(r"\w", line) and not line.startswith("|")]
+    if not lines:
+        return ""
+    line = next((line for line in lines if not line.startswith("#")), lines[0])
+    line = _SPEAKER_PREFIX.sub("", _LINE_MARKUP.sub("", line))
+    line = re.sub(r"[*`]", "", line).strip()
+    if len(line) > SUMMARY_MAX_CHARS:
+        line = line[: SUMMARY_MAX_CHARS - 1].rstrip() + "…"
+    return line
 
 
 def _new_messages(prev: list, curr: list) -> list:
@@ -1090,7 +1158,8 @@ def _graph_args(
     graph: TradingAgentsGraph, run_id: str | None, usage: AsyncCallbackHandler | None
 ) -> dict:
     """The propagator's stream args with our thread_id and usage callback merged
-    into its config (which already carries recursion_limit)."""
+    into its config (which already carries recursion_limit). The ``custom``
+    mode is added to its ``values`` so a debate node can say it has started."""
     args = graph.propagator.get_graph_args()
     existing_config = args.get("config") or {}
     configurable = dict(existing_config.get("configurable") or {})
@@ -1099,7 +1168,7 @@ def _graph_args(
     new_config = {**existing_config, "configurable": configurable}
     if usage is not None:
         new_config["callbacks"] = [*(new_config.get("callbacks") or []), usage]
-    return {**args, "config": new_config}
+    return {**args, "stream_mode": ["values", "custom"], "config": new_config}
 
 
 def _confidence_judge(graph: TradingAgentsGraph, args: dict) -> Judge:
@@ -1127,6 +1196,7 @@ def _analyst_chunk(analyst: Analyst, prev: dict, curr: dict, reports: list[dict]
         values["tool_results"] = results
     if mine:
         values["reports"] = mine
+        values["summary"] = _summary(mine[0]["content"])
     if not values:
         return None
     return _normalize_chunk(analyst.label, values, finished=bool(mine))
@@ -1150,12 +1220,18 @@ async def _translate_states(
     """Diff successive AgentState snapshots into normalized chunks, then yield
     the terminal state as a ``final_state`` chunk.
 
-    A snapshot covers one graph step, and several analysts can move in one
-    step. Each chunk still names a single node, so a step yields one chunk per
-    analyst that moved, then one for the debate stages.
+    ``states`` is the graph's stream in the ``values`` and ``custom`` modes, so
+    each item is a ``(mode, payload)`` pair. A ``custom`` payload is a debate
+    node saying it has started. A ``values`` payload is a snapshot of one
+    graph step, and several analysts can move in one step. Each chunk still
+    names a single node, so a step yields one chunk per analyst that moved,
+    then one for the debate node that wrote in it.
     """
-    async for chunk in states:
-        curr = _state_snapshot(chunk)
+    async for mode, payload in states:
+        if mode == "custom":
+            yield _normalize_chunk(payload["node_started"], {}, finished=False)
+            continue
+        curr = _state_snapshot(payload)
 
         reports = _extract_reports(prev, curr)
         for analyst in ANALYSTS:
@@ -1163,14 +1239,18 @@ async def _translate_states(
             if analyst_chunk:
                 yield analyst_chunk
 
-        node = _detect_node(prev, curr)
+        node, wrote = _stage_written(prev, curr) or (None, "")
         values: dict[str, Any] = {}
         debate = _extract_debate(prev, curr)
         if debate:
             values["debate"] = debate
+            node, wrote = _SPEAKER_NODES[debate["side"]], debate["text"]
         risk_debate = _extract_risk_debate(prev, curr)
         if risk_debate:
             values["risk_debate"] = risk_debate
+            node, wrote = _SPEAKER_NODES[risk_debate["speaker"]], risk_debate["text"]
+        if node:
+            values["summary"] = _summary(wrote)
         synthesis = _extract_synthesis(prev, curr)
         if synthesis:
             values["synthesis"] = synthesis
@@ -1188,8 +1268,8 @@ async def _translate_states(
                     **decision["veto"],
                 }
 
-        if values or node:
-            # A stage is named by the field it wrote, so naming it means it is done.
+        if values:
+            # A node is named here by what it wrote, so naming it means it is done.
             yield _normalize_chunk(node, values, finished=node is not None)
 
         # The graph only takes its next step when this loop asks for the next
