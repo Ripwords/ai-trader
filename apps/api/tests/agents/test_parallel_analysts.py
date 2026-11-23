@@ -229,7 +229,10 @@ async def test_every_started_node_ends(
 
     started = [e["node"] for e in events if e["type"] == "node-start"]
     ended = [e["node"] for e in events if e["type"] == "node-end"]
-    assert started[4:] == ["Research Manager", "Trader", "Risk Manager"]
+    assert started[4:] == [
+        "Bull Researcher", "Bear Researcher", "Research Manager", "Trader",
+        "Aggressive Analyst", "Conservative Analyst", "Neutral Analyst", "Risk Manager",
+    ]
     assert sorted(ended) == sorted(started)
     assert ended[4:] == started[4:]
 

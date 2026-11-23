@@ -65,6 +65,8 @@ def test_defaults_cover_every_node_prompt_and_the_judge() -> None:
             # Our earnings-discipline rules are appended to the upstream text.
             assert defaults[name]["text"].startswith(_raw(name))
             assert defaults[name]["text"] != _raw(name)
+        elif name in prompts_mod.DEFAULT_PROMPT_EDITS:
+            assert defaults[name]["text"] != _raw(name)
         else:
             assert defaults[name]["text"] == _raw(name)
         assert "Please respond in" not in defaults[name]["text"]
@@ -78,7 +80,8 @@ def test_defaults_route_requires_the_bearer(client: Any, client_with_bearer: Any
     assert client.get("/agents/prompts/defaults").status_code == 401
     res = client_with_bearer.get("/agents/prompts/defaults")
     assert res.status_code == 200
-    assert res.json()["risk_manager"]["text"] == _raw("risk_manager")
+    assert res.json()["risk_manager"]["text"] == prompts_mod.raw_node_prompt("risk_manager")
+    assert res.json()["market_analyst"]["text"] == _raw("market_analyst")
 
 
 # --- judge template -------------------------------------------------------------
@@ -170,7 +173,13 @@ def test_every_node_module_gets_the_patched_loader() -> None:
 
 
 def test_loader_returns_upstream_text_without_an_override() -> None:
-    assert prompts_mod.load_prompt_with_overrides("trader_system") == ta_prompts.load_prompt("trader_system")
+    assert prompts_mod.load_prompt_with_overrides("trader_user") == ta_prompts.load_prompt("trader_user")
+
+
+def test_loader_without_override_uses_the_default_with_our_edits() -> None:
+    assert prompts_mod.load_prompt_with_overrides("trader_system") == (
+        prompts_mod.raw_node_prompt("trader_system") + ta_prompts._language_instruction()
+    )
 
 
 @pytest.mark.parametrize("name", EARNINGS_AWARE)
@@ -250,7 +259,7 @@ async def test_override_reaches_a_sync_node_run_by_langgraph() -> None:
         asyncio.create_task(run({})),
     )
     assert with_override.startswith("RUN A MARKER")
-    assert without == ta_prompts.load_prompt("trader_system")
+    assert without == prompts_mod.raw_node_prompt("trader_system") + ta_prompts._language_instruction()
     # The node really ran off the event loop's thread, where only a copied context carries the var.
     assert threads and all(name != threading.current_thread().name for name in threads)
 

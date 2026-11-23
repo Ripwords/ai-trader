@@ -444,7 +444,9 @@ flowchart LR
 | **Confidence judge** | Reads the whole debate and the final call, then states the probability (0–100) that the rating is right over the next 7 trading days, scored the same way the backtest scores it. A failed or unreadable reply stores no confidence rather than a placeholder. | Debate + decision |
 | **Execution** | Places the order against `SIMULATE` (paper) by default; `REAL` is gated by `MAX_DAILY_LIVE_NOTIONAL_USD`. | Manager decision → moomoo OpenD |
 
-Each run starts fresh: agents do not carry lessons from past decisions into later runs. The extra context is the deterministic valuation and, on runs started from this app, the owner's position (see [Deciding for the owner](#deciding-for-the-owner)). It is computed while the analysts work, and the debate waits for it. Its summary is appended to the prompt of every node from the Bull Researcher to the Portfolio Manager, after whatever text Settings → Prompts has saved for that node, so an edited prompt receives it too. The analysts do not see it.
+Each run starts fresh: agents do not carry lessons from past decisions into later runs. Upstream's prompts tell the Bull, the Bear, the Research Manager, the Trader and the Portfolio Manager to learn from reflections on past trades, and hand them a memory that this app never fills. Asked for lessons it did not have, one run's Bull wrote "I've been burned before". The default prompts for those five roles therefore drop that wording and say instead that the role has no record of earlier debates or decisions and must not write as if it remembers any. `{past_memory_str}` is still an allowed placeholder for those five prompts, so a prompt saved under Settings → Prompts that uses it keeps working; it is filled with a fixed sentence saying nothing is on record. A saved prompt keeps its own wording, so reset any of those five you saved earlier to get the new default.
+
+The extra context is the deterministic valuation and, on runs started from this app, the owner's position (see [Deciding for the owner](#deciding-for-the-owner)). It is computed while the analysts work, and the debate waits for it. Its summary is appended to the prompt of every node from the Bull Researcher to the Portfolio Manager, after whatever text Settings → Prompts has saved for that node, so an edited prompt receives it too. The analysts do not see it.
 
 The run says how the valuation went in a `valuation` event before the first debate turn, and stores the same two fields under `valuation` in the run's final state:
 
@@ -456,7 +458,13 @@ The run says how the valuation went in a `valuation` event before the first deba
 
 A resumed run computes the valuation again and sends the event again.
 
+Every node in the table from the Market Analyst to the Portfolio Manager sends a `node-start` event when it starts work and a `node-end` event when it has written its output. The stream names the Portfolio Manager `Risk Manager`. The analysts all start together, so their four `node-start` events open the run. Each debate node sends its `node-start` when it is called, before its model has answered, so the page can show which node is working. A debater that speaks in more than one round sends one `node-start` and one `node-end` for each turn. `node-end` carries a `summary`: the first line of prose the node wrote, as plain text, at most 200 characters. A resumed run sends these events only for the nodes it runs again.
+
 Upstream TradingAgents gives the Trader and the Portfolio Manager only the plan and the debate, so a fact no debater repeated never reached the final call. This app appends the four analyst reports to their input, with an instruction to check the debate against them. The reports are prompt input only and are not saved into the trader plan or the decision.
+
+Each debater reads the debate so far once. Upstream's prompts for the Bull, the Bear and the three risk debaters send the debate history and then the latest arguments again, which the history already ends with. The default prompts for those five roles send the history only. `{current_response}` and the three `{current_..._response}` placeholders are still allowed in a prompt saved under Settings → Prompts.
+
+Most of a run's input tokens are the four analyst reports, which are sent whole to all eight nodes from the Bull Researcher to the Portfolio Manager. A longer report therefore costs eight times its length in the debate.
 
 #### Deciding for the owner
 
@@ -468,15 +476,17 @@ When a run starts, the web app reads the accounts and sends an `owner_context` o
 |---|---|
 | `position.status` | `held`, `not_held`, or `unknown` when the accounts could not be read. The debate is told not to assume either way on `unknown`. |
 | `position.quantity`, `market_value`, `currency`, `weight_pct`, `unrealized_pnl_pct` | Present on a held position. The weight is the share of investable assets from the tracker. |
-| `base_currency`, `investable_total` | From the tracker. Left out when it cannot be read. |
-| `monthly_contribution` | From the planning settings. Left out when it was never set. |
+| `base_currency`, `investable_total` | From the tracker. `null` when it cannot be read. |
+| `monthly_contribution` | From the planning settings. `null` when it was never set. |
 | `notes` | Your saved chat memories (see [Chat memory](#chat-memory)), at most 30 of 240 characters each. |
 
-A failed read never blocks a run: the part that failed is left out. The object is stored in the run's `config`, so a resumed run decides for the same owner it started with.
+A failed read never blocks a run: the part that failed is sent as `null`. The object is stored in the run's `config`, so a resumed run decides for the same owner it started with.
 
 The api turns the object into an `## Owner Context` section and appends it, after the valuation, to the prompt of every node from the Bull Researcher to the Portfolio Manager. The analysts do not see it.
 
-The Research Manager, the Trader and the Portfolio Manager also get the **owner mandate** after the owner context. It is the `Owner mandate` prompt under Settings → Prompts, so how the debate must rule for you is your text, not code. The default says you accumulate for the long term and add money monthly, that your US technology concentration is deliberate, and that you do not use stop-losses, tranche ladders, price-trigger exits or options. It asks for one of four answers with reasons, and says Hold is a complete answer, which upstream prompts discourage. Both sections are appended after whatever text is saved for a node, so an edited node prompt receives them too.
+The section has one line for every value, whether or not the run has it. A missing value is written as `unknown` and the debate is told not to assume, estimate or invent a figure for it. Without a monthly contribution the debate is told not to state an amount and not to work out a position weight after a contribution. With no saved memories it is told not to attribute any preference or past decision to you. A line left out reads to a model as room to guess: one run with no contribution on record wrote that "a normal monthly contribution" would take the position to 1.5%–2%. Set **invest / month** in the portfolio plan to give the debate the real amount.
+
+The Research Manager, the Trader and the Portfolio Manager also get the **owner mandate** after the owner context. It is the `Owner mandate` prompt under Settings → Prompts, so how the debate must rule for you is your text, not code. The default says you accumulate for the long term and add money monthly, that your US technology concentration is deliberate, and that you do not use stop-losses, tranche ladders, price-trigger exits or options. It asks for one of four answers with reasons, and says Hold is a complete answer, which upstream prompts discourage. It asks for the position weight after adding only when the owner context states the monthly contribution. Both sections are appended after whatever text is saved for a node, so an edited node prompt receives them too.
 
 The mandate asks for the verdict on a line of its own, and the `decision` event carries it as `owner_verdict` when the Portfolio Manager wrote one. The existing `rating` then follows it:
 

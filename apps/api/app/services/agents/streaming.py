@@ -9,13 +9,13 @@ Input contract: an async iterator of **normalized** chunks shaped like::
             "tool_results": list[{"name", "ok", "preview"}],
             "debate":       {"round", "side", "text"},
             "decision":     {"rating", "confidence", "rationale", "owner_verdict"?},
-            "messages":     list[{"role", "content"}],
+            "summary":      str,            # one plain line, on a finished node
         }
     }
 
 This is **not** the raw shape ``TradingAgentsGraph.graph.astream`` emits — that
-stream yields full ``AgentState`` snapshots in ``stream_mode="values"`` mode
-without any ``langgraph_node``/``node_finished`` metadata. The adapter that
+stream yields full ``AgentState`` snapshots (its ``values`` mode) without any
+``langgraph_node``/``node_finished`` metadata. The adapter that
 diffs successive AgentState snapshots and produces the dict shape above lives
 in :mod:`app.services.agents.graph` (``run_graph``). Keeping that adapter out
 of this module lets the translator stay provider-agnostic and unit-testable
@@ -49,14 +49,15 @@ async def translate_chunks(
         "symbol": symbol,
         "config": config,
     }
-    seen_nodes: set[str] = set()
+    # A debater speaks once per round, so a node can start again after it ends.
+    running: set[str] = set()
     async for chunk in chunks:
         meta = chunk.get("metadata") or {}
         node = meta.get("langgraph_node")
         values = chunk.get("values") or {}
 
-        if node and node not in seen_nodes:
-            seen_nodes.add(node)
+        if node and node not in running:
+            running.add(node)
             yield {"type": "node-start", "node": node}
 
         for tc in values.get("tool_calls") or []:
@@ -144,10 +145,5 @@ async def translate_chunks(
             # ``agent_runs.final_state``.
             yield {"type": "final-state", "state": final_state}
         if meta.get("node_finished") and node:
-            messages = values.get("messages") or []
-            summary = ""
-            for m in reversed(messages):
-                if m.get("role") == "assistant":
-                    summary = (m.get("content") or "")[:500]
-                    break
-            yield {"type": "node-end", "node": node, "summary": summary}
+            running.discard(node)
+            yield {"type": "node-end", "node": node, "summary": values.get("summary") or ""}
