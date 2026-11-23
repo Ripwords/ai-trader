@@ -45,6 +45,11 @@ describe('chat.system default: debate before a buy', () => {
     expect(body).not.toMatch(/rating\/confidence\/rationale/)
   })
 
+  it('reports a run with multiples but no DCF fair value as that, not as unvalued', () => {
+    expect(rule()).toMatch(/valuation\.status is multiples_only or discarded/)
+    expect(rule()).toMatch(/never say the stock was not valued/)
+  })
+
   it('tells the owner a debate is starting and that it takes minutes', () => {
     expect(rule()).toMatch(/in the same message as the agents_debate call/)
     expect(rule()).toMatch(/takes several minutes/)

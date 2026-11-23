@@ -1,5 +1,9 @@
+import { isOwnerVerdict } from '../../types/agents'
+import type { OwnerVerdict } from '../../types/agents'
+
 export interface DebateCardVerdict {
   rating: string
+  ownerVerdict: OwnerVerdict | null
   cappedFrom: string | null
   capReason: string | null
   confidence: number | null
@@ -35,6 +39,7 @@ export function debateCardView(output: unknown): DebateCardView {
     verdict: rating
       ? {
           rating,
+          ownerVerdict: isOwnerVerdict(output.owner_verdict) ? output.owner_verdict : null,
           cappedFrom: text(cap.original_rating),
           capReason: text(cap.reason),
           confidence: typeof output.confidence === 'number' ? output.confidence : null,

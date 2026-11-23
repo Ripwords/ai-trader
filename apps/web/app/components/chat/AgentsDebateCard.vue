@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { Comark } from '@comark/vue'
 import { debateCardView } from '~/utils/debate-card'
+import { OWNER_VERDICT_LABEL, confidenceLabel } from '../../../types/agents'
 
 // Bound to the latest output of the `agents_debate` chat tool (see
 // server/llm/tools.ts): a progress snapshot per pipeline event, then the
@@ -19,6 +20,8 @@ watch(() => view.value.steps, (next) => { if (next.length) steps.value = next },
 
 const active = computed(() => props.running && !verdict.value)
 const latestStep = computed(() => steps.value.at(-1) ?? null)
+// A debater starts once per round; it is one step.
+const distinctSteps = computed(() => [...new Set(steps.value)])
 
 const ratingClass: Record<string, string> = {
   'strong-buy': 'bg-emerald-600 text-white',
@@ -36,7 +39,7 @@ const ratingClass: Record<string, string> = {
       <div v-if="verdict" class="font-mono text-sm text-[var(--paper-3)]">verdict ready</div>
       <div v-else-if="error" class="font-mono text-sm text-[var(--tape-down)]">failed</div>
       <div v-else-if="active" class="font-mono text-sm text-[var(--accent)]">running</div>
-      <div v-else class="font-mono text-sm text-[var(--paper-3)]">{{ steps.length }} step(s)</div>
+      <div v-else class="font-mono text-sm text-[var(--paper-3)]">{{ distinctSteps.length }} step(s)</div>
     </header>
 
     <div v-if="active && !steps.length" class="px-5 py-4 border-b hairline">
@@ -53,8 +56,8 @@ const ratingClass: Record<string, string> = {
 
     <ol v-if="steps.length" class="flex flex-wrap gap-2 px-5 py-3 border-b hairline">
       <li
-        v-for="(step, i) in steps"
-        :key="`${step}-${i}`"
+        v-for="step in distinctSteps"
+        :key="step"
         class="font-mono text-sm uppercase tracking-[0.15em] text-[var(--paper-2)] px-2 py-1 bg-[var(--ink-2)] rounded"
       >
         {{ step }}
@@ -75,9 +78,12 @@ const ratingClass: Record<string, string> = {
         </span>
         <span v-if="verdict.cappedFrom" class="font-mono text-sm text-[var(--paper-2)]">capped from {{ verdict.cappedFrom }}</span>
         <span class="font-mono text-sm text-[var(--paper-3)]">
-          {{ verdict.confidence === null ? 'no confidence score' : `${verdict.confidence}% chance the call holds over 7 trading days` }}
+          {{ verdict.confidence === null ? 'no confidence score' : confidenceLabel(verdict.rating, verdict.confidence) }}
         </span>
       </div>
+      <p v-if="verdict.ownerVerdict" class="text-sm text-[var(--paper-2)]" data-testid="debate-owner-verdict">
+        For your position: <strong class="font-semibold text-[var(--paper-0)]">{{ OWNER_VERDICT_LABEL[verdict.ownerVerdict] }}</strong>
+      </p>
       <p v-if="verdict.capReason" class="text-sm text-[var(--paper-2)]">
         Valuation cap: {{ verdict.capReason }}
       </p>

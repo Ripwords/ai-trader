@@ -1,5 +1,5 @@
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue'
-import type { AgentEvent, Rating, RunStatus } from '../types/agents'
+import type { AgentEvent, OwnerVerdict, Rating, RunStatus } from '../types/agents'
 import type { SymbolResolution } from '../types/symbol'
 import type { RunFrame } from '../server/lib/agents/run-events'
 
@@ -30,6 +30,7 @@ export function parseSse(buffer: string, chunk: string): { messages: SseMessage[
 
 interface VerdictState {
   rating: Rating
+  ownerVerdict: OwnerVerdict | null
   confidence: number | null
   rationale: string
 }
@@ -41,23 +42,30 @@ export interface RunView {
   currentNode: string | null
   verdict: VerdictState | null
   error: string | null
+  /** ISO time the run ended; null while it runs or when none was recorded. */
+  finishedAt: string | null
 }
 
 export const EMPTY_VIEW: RunView = {
-  status: 'idle', events: [], lastSeq: -1, currentNode: null, verdict: null, error: null,
+  status: 'idle', events: [], lastSeq: -1, currentNode: null, verdict: null, error: null, finishedAt: null,
 }
 
 /** The run's view is a fold over its frames. Replays after a reconnect
  *  overlap what was already seen, so frames at or below lastSeq are dropped. */
 export function applyFrame(view: RunView, frame: RunFrame): RunView {
   if (frame.kind === 'end') {
-    return { ...view, status: frame.status, error: frame.status === 'complete' ? null : (frame.error ?? view.error) }
+    return {
+      ...view,
+      status: frame.status,
+      error: frame.status === 'complete' ? null : (frame.error ?? view.error),
+      finishedAt: frame.finishedAt ?? null,
+    }
   }
   if (frame.seq <= view.lastSeq) return view
   const ev = frame.event
   const next: RunView = { ...view, events: [...view.events, ev], lastSeq: frame.seq }
   if (ev.type === 'node-start') next.currentNode = ev.node
-  else if (ev.type === 'decision') next.verdict = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
+  else if (ev.type === 'decision') next.verdict = { rating: ev.rating, ownerVerdict: ev.owner_verdict ?? null, confidence: ev.confidence, rationale: ev.rationale }
   else if (ev.type === 'error') next.error = ev.message
   return next
 }
@@ -91,11 +99,19 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   })
 }
 
-export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; idleMs?: number } = {}) {
+interface Options {
+  backoffMs?: (attempt: number) => number
+  idleMs?: number
+  /** A run the page follows once mounted. The view starts as that run
+   *  loading, so the server render and the client's first render agree. */
+  initialRunId?: string | null
+}
+
+export function useAgentsRun(opts: Options = {}) {
   const backoffMs = opts.backoffMs ?? defaultBackoff
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
-  const view = shallowRef<RunView>(EMPTY_VIEW)
-  const runId = ref<string | null>(null)
+  const runId = ref<string | null>(opts.initialRunId ?? null)
+  const view = shallowRef<RunView>(runId.value ? { ...EMPTY_VIEW, status: 'running' } : EMPTY_VIEW)
   const connection = ref<Connection>('idle')
   // Set when the symbol could not be uniquely resolved (422), so the page can
   // offer a picker instead of a bare failure.
@@ -160,7 +176,7 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; id
             v = applyFrame(v, { kind: 'event', seq: Number(m.id), event: JSON.parse(m.data) as AgentEvent })
           }
           else if (m.event === 'end') {
-            const end = JSON.parse(m.data) as { status: Exclude<RunStatus, 'running'>; error: string | null }
+            const end = JSON.parse(m.data) as { status: Exclude<RunStatus, 'running'>; error: string | null; finishedAt?: string }
             view.value = applyFrame(v, { kind: 'end', ...end })
             return settle('ended')
           }
@@ -266,7 +282,7 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; id
       view.value = { ...view.value, status: 'failed', error: `resume failed (${res?.status ?? 'network'})` }
       return
     }
-    view.value = { ...view.value, status: 'running', error: null }
+    view.value = { ...view.value, status: 'running', error: null, finishedAt: null }
     await follow(id, { keep: true })
   }
 
@@ -307,6 +323,7 @@ export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; id
     currentNode: computed(() => view.value.currentNode),
     verdict: computed(() => view.value.verdict),
     error: computed(() => view.value.error),
+    finishedAt: computed(() => (view.value.finishedAt ? new Date(view.value.finishedAt) : null)),
     runId, resolution, startedAt, connection, resuming, cancelling, cancelError,
     start, resume, cancel, follow, reconnect, reset,
   }

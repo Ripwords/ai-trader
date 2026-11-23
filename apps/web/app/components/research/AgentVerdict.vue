@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { Rating } from '../../../types/agents'
+import { OWNER_VERDICT_LABEL, confidenceLabel } from '../../../types/agents'
+import type { OwnerVerdict, Rating } from '../../../types/agents'
 import { parseVerdictReport } from '../../lib/verdictReport'
 import MarkdownText from './MarkdownText.vue'
 import TechnicalDetails from '../shared/TechnicalDetails.vue'
 
 interface Props {
   rating: Rating
+  ownerVerdict?: OwnerVerdict | null
   // null when the model gave no confidence number — we show a qualitative
   // state rather than fabricating a percentage.
   confidence: number | null
@@ -34,17 +36,6 @@ const clampedConfidence = computed(() =>
   Math.max(0, Math.min(100, Math.round(props.confidence ?? 0))),
 )
 
-// Conviction word: a single descriptor for the confidence band, kept short
-// so it pairs typographically with the percentage. We don't need a 5-step
-// adjective ladder — three is plenty and reads as a deliberate axis label.
-const convictionWord = computed(() => {
-  const c = clampedConfidence.value
-  if (c >= 75) return 'high'
-  if (c >= 50) return 'moderate'
-  if (c >= 25) return 'tentative'
-  return 'low'
-})
-
 // Structured report: split the rationale into titled sections so the verdict
 // reads like a research note rather than one undifferentiated block.
 const sections = computed(() => parseVerdictReport(props.rationale))
@@ -67,16 +58,15 @@ const ringDash = computed(() => {
     </header>
 
     <div class="verdict__hero">
-      <!-- Rating slab: rating in big mono, conviction band underneath. -->
       <div class="verdict__rating-block">
         <span class="verdict__rating" data-mono>{{ ratingDisplay }}</span>
-        <span v-if="hasConfidence" class="verdict__conviction" data-mono>
-          <span class="verdict__conviction-word">{{ convictionWord }}</span>
-          conviction
+        <span v-if="ownerVerdict" class="verdict__owner" data-testid="verdict-owner">
+          For your position: <strong>{{ OWNER_VERDICT_LABEL[ownerVerdict] }}</strong>
         </span>
-        <span v-else class="verdict__conviction verdict__conviction--unstated" data-mono>
-          conviction unstated
+        <span v-if="hasConfidence" class="verdict__confidence" data-testid="verdict-confidence">
+          {{ confidenceLabel(rating, clampedConfidence) }}
         </span>
+        <span v-else class="verdict__confidence">no confidence score</span>
       </div>
 
       <!-- Confidence ring: quarter-arc that fills to the score. Only shown
@@ -216,25 +206,18 @@ const ringDash = computed(() => {
 .verdict[data-tone="down"]    .verdict__rating { color: var(--tape-down); }
 .verdict[data-tone="neutral"] .verdict__rating { color: var(--accent); }
 
-.verdict__conviction {
-  font-size: 0.74rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--paper-3);
-}
-.verdict__conviction-word {
+.verdict__owner {
+  font-size: 0.95rem;
   color: var(--paper-1);
-  margin-right: 0.5rem;
-  letter-spacing: 0.04em;
-  text-transform: lowercase;
-  font-style: italic;
 }
-.verdict__conviction--unstated {
-  color: var(--paper-3);
-  font-style: italic;
-  text-transform: lowercase;
-  letter-spacing: 0.04em;
-  opacity: 0.85;
+.verdict__owner strong {
+  font-weight: 600;
+  color: var(--paper-0);
+}
+.verdict__confidence {
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--paper-2);
 }
 
 .verdict__ring {

@@ -11,9 +11,30 @@ describe('AgentVerdict', () => {
     expect(wrapper.find('[data-testid="verdict-rating"]').exists()).toBe(true)
   })
 
-  it('shows "conviction unstated" and hides the ring when confidence is null', () => {
+  it('labels the confidence as the 7-trading-day probability it is, never as conviction', () => {
+    const buy = mount(AgentVerdict, { props: { rating: 'buy', confidence: 43, rationale: 'because', runId: 'r' } })
+    expect(buy.find('[data-testid="verdict-confidence"]').text())
+      .toBe('43% chance the stock beats SPY by more than 0.5 percentage points over 7 trading days')
+    expect(buy.text()).not.toContain('conviction')
+
+    const hold = mount(AgentVerdict, { props: { rating: 'hold', confidence: 60, rationale: 'because', runId: 'r' } })
+    expect(hold.find('[data-testid="verdict-confidence"]').text())
+      .toBe('60% chance the stock finishes within 1 percentage point of SPY over 7 trading days')
+  })
+
+  it('shows the owner verdict when the run answered one', () => {
+    const wrapper = mount(AgentVerdict, { props: { rating: 'hold', ownerVerdict: 'do-not-add', confidence: 43, rationale: 'because', runId: 'r' } })
+    expect(wrapper.find('[data-testid="verdict-owner"]').text().replace(/\s+/g, ' ')).toBe('For your position: Do not add')
+  })
+
+  it('shows no owner verdict for a run without one', () => {
+    const wrapper = mount(AgentVerdict, { props: { rating: 'hold', confidence: 43, rationale: 'because', runId: 'r' } })
+    expect(wrapper.find('[data-testid="verdict-owner"]').exists()).toBe(false)
+  })
+
+  it('says there is no confidence score and hides the ring when confidence is null', () => {
     const wrapper = mount(AgentVerdict, { props: { rating: 'hold', confidence: null, rationale: 'because', runId: 'r' } })
-    expect(wrapper.text()).toContain('conviction unstated')
+    expect(wrapper.text()).toContain('no confidence score')
     expect(wrapper.text()).not.toContain('%')
     expect(wrapper.find('[data-testid="verdict-rating"]').exists()).toBe(false)
   })

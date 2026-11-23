@@ -22,11 +22,17 @@ describe('debateCardView', () => {
       steps: [],
       error: null,
       verdict: {
-        rating: 'hold', cappedFrom: 'buy', capReason: 'price > 2x fair value',
+        rating: 'hold', ownerVerdict: null, cappedFrom: 'buy', capReason: 'price > 2x fair value',
         confidence: 33, rationale: 'Hold above $226.13.', rationaleTruncated: true,
         bullCase: 'AWS grew 39.3%.', bearCase: 'Debt rose to $173.1B.', runUrl: '/research/US.AMZN?run=run-1',
       },
     })
+  })
+
+  it('reads the owner verdict, and ignores a value it does not know', () => {
+    expect(debateCardView({ ...verdict, owner_verdict: 'do-not-add' }).verdict?.ownerVerdict).toBe('do-not-add')
+    expect(debateCardView({ ...verdict, owner_verdict: null }).verdict?.ownerVerdict).toBeNull()
+    expect(debateCardView({ ...verdict, owner_verdict: 'liquidate' }).verdict?.ownerVerdict).toBeNull()
   })
 
   it('keeps the failure beside a verdict the run still reached', () => {
@@ -45,7 +51,7 @@ describe('debateCardView', () => {
       steps: ['market'],
       error: null,
       verdict: {
-        rating: 'sell', cappedFrom: null, capReason: null, confidence: null, rationale: 'Sell.', rationaleTruncated: false,
+        rating: 'sell', ownerVerdict: null, cappedFrom: null, capReason: null, confidence: null, rationale: 'Sell.', rationaleTruncated: false,
         bullCase: null, bearCase: null, runUrl: null,
       },
     })

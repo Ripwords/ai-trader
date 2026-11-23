@@ -33,14 +33,14 @@ function run(over: Partial<PersistedRun> = {}): PersistedRun {
     cap: null,
     valuation: {
       fairValue: 301.5, currentPrice: 240.35, marginOfSafetyPct: 0.2028, dataQuality: 'full',
-      currency: 'USD', discardedReason: null,
+      currency: 'USD', discardedReason: null, warning: null, multiples: null, historicalMultiples: null,
     },
-    valuationUnavailableReason: null,
+    valuationEvent: null,
     debate: {
-      bull: `Bull Analyst: ${filler('The bull', 12)} AWS grew 39.3% on a $184B run rate. ${filler('The bull', 12)}`,
-      bear: `Bear Analyst: ${filler('The bear', 12)} Long-term debt rose from $65.6B to $173.1B. ${filler('The bear', 12)}`,
-      aggressive: `Aggressive Analyst: ${filler('The aggressive analyst', 10)} Pounce above 250.72.`,
-      conservative: `Conservative Analyst: ${filler('The conservative analyst', 10)} Interest expense tripled to $1.69B.`,
+      bull: `Bull Analyst: ${filler('The franchise', 12)} AWS grew 39.3% on a $184B run rate. ${filler('The franchise', 12)}`,
+      bear: `Bear Analyst: ${filler('The debt load', 12)} Long-term debt rose from $65.6B to $173.1B. ${filler('The debt load', 12)}`,
+      aggressive: `Aggressive Analyst: ${filler('The upside case', 10)} Pounce above 250.72.`,
+      conservative: `Conservative Analyst: ${filler('The balance sheet', 10)} Interest expense tripled to $1.69B.`,
       neutral: `Neutral Analyst: ${filler('The neutral analyst', 10)} Scale in at 45% odds.`,
       researchManager: `I side with the bear. ${filler('The manager', 20)} Free cash flow is -$46.9B.`,
     },
@@ -119,27 +119,54 @@ describe('buildRunVerdict', () => {
         valuation: {
           fairValue: null, currentPrice: 240.35, marginOfSafetyPct: null, dataQuality: 'multiples_only',
           currency: 'USD', discardedReason: 'the base FCF (3.22B) conflicts with operating cash flow minus capex of -46.89B',
+          warning: 'DCF out of regime and discarded', multiples: { pe: 19.430073, pb: 6.274474, ps: 3.3498654, p_fcf: 807.1832449 },
+          historicalMultiples: null,
         },
       })
       expect(v.valuation).toEqual({
         status: 'discarded',
         reason: 'the base FCF (3.22B) conflicts with operating cash flow minus capex of -46.89B',
         current_price: 240.35, data_quality: 'multiples_only', currency: 'USD',
+        multiples: { pe: 19.43, pb: 6.27, ps: 3.35, p_fcf: 807.18 },
       })
     })
 
-    it('reports a snapshot with no fair value and no stated reason as unavailable', () => {
-      const v = verdictOf({
-        valuation: {
-          fairValue: null, currentPrice: 240.35, marginOfSafetyPct: null, dataQuality: 'multiples_only',
-          currency: 'USD', discardedReason: null,
-        },
+    // Run f266c5eb (US.AMZN, 2026-11-22): the DCF was skipped on negative free
+    // cash flow, and the chat was told no valuation existed.
+    const SKIPPED = 'DCF skipped: non-positive FCF or missing shares; multiples-only (no fabricated fair value)'
+    const multiplesOnly = {
+      fairValue: null, currentPrice: 246.820007, marginOfSafetyPct: null, dataQuality: 'multiples_only',
+      currency: 'USD', discardedReason: null, warning: SKIPPED,
+      multiples: { pe: 19.953114, pb: 4.348715, ps: 3.3467703, p_fcf: null },
+      historicalMultiples: { pe: 31.82103412815517, pb: null, ps: 3.447422210351184, p_fcf: null },
+    }
+
+    it('reports a skipped DCF as multiples only, with the run\'s reason and the multiples', () => {
+      const v = verdictOf({ valuation: multiplesOnly, valuationEvent: { status: 'multiples_only', reason: SKIPPED } })
+      expect(v.valuation).toEqual({
+        status: 'multiples_only',
+        reason: SKIPPED,
+        current_price: 246.82,
+        currency: 'USD',
+        multiples: { pe: 19.95, pb: 4.35, ps: 3.35 },
+        historical_multiples: { pe: 31.82, ps: 3.45 },
       })
-      expect(v.valuation).toEqual({ status: 'unavailable', reason: 'no fair value was computed (data quality: multiples_only)' })
+    })
+
+    it('falls back to the snapshot\'s own warning when the run recorded no valuation event', () => {
+      expect(verdictOf({ valuation: multiplesOnly }).valuation).toMatchObject({ status: 'multiples_only', reason: SKIPPED })
+      expect(verdictOf({ valuation: { ...multiplesOnly, warning: null } }).valuation)
+        .toMatchObject({ status: 'multiples_only', reason: 'no DCF fair value was computed; only the multiples are available' })
+    })
+
+    it('leaves out multiples the snapshot does not hold', () => {
+      const v = verdictOf({ valuation: { ...multiplesOnly, multiples: null, historicalMultiples: { pe: null, pb: null, ps: null, p_fcf: null } } })
+      expect(v.valuation).not.toHaveProperty('multiples')
+      expect(v.valuation).not.toHaveProperty('historical_multiples')
     })
 
     it('uses the recorded reason when no valuation was stored', () => {
-      expect(verdictOf({ valuation: null, valuationUnavailableReason: 'fundamentals fetch timed out' }).valuation)
+      expect(verdictOf({ valuation: null, valuationEvent: { status: 'unavailable', reason: 'fundamentals fetch timed out' } }).valuation)
         .toEqual({ status: 'unavailable', reason: 'fundamentals fetch timed out' })
       expect(verdictOf({ valuation: null }).valuation)
         .toEqual({ status: 'unavailable', reason: 'no valuation was recorded for this run' })

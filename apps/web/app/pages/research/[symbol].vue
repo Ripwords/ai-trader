@@ -34,10 +34,10 @@ const queryRunId = computed(() => {
 useHead({ title: () => `research · ${symbol.value}` })
 
 const {
-  events, status, verdict, runId, error, resolution, startedAt, connection,
+  events, status, verdict, runId, error, resolution, startedAt, finishedAt, connection,
   start, resume, cancel, follow, reconnect, reset, resuming,
   cancelling: runCancelling, cancelError: runCancelError,
-} = useAgentsRun()
+} = useAgentsRun({ initialRunId: queryRunId.value })
 
 // Candidates to offer when the symbol couldn't be uniquely resolved (422).
 // Prefer a moomoo code when one exists; otherwise use the Yahoo ticker.
@@ -96,15 +96,17 @@ const costSamples = computed(() =>
 // composable on history-replay) rather than ``Date.now()`` at status flip,
 // so a refreshed page shows the cumulative elapsed time, not a re-zeroed
 // counter.
-const elapsedSec = ref(0)
+const elapsedSec = ref<number | null>(0)
 let elapsedTimer: ReturnType<typeof setInterval> | null = null
 
 function recomputeElapsed() {
   if (startedAt.value === null) {
-    elapsedSec.value = 0
+    elapsedSec.value = status.value === 'running' ? 0 : null
     return
   }
-  elapsedSec.value = Math.max(0, Math.floor((Date.now() - startedAt.value.getTime()) / 1000))
+  // A finished run took from its start to its end, however long ago that was.
+  const until = status.value === 'running' ? Date.now() : finishedAt.value?.getTime()
+  elapsedSec.value = until === undefined ? null : Math.max(0, Math.floor((until - startedAt.value.getTime()) / 1000))
 }
 
 onUnmounted(() => {
@@ -112,7 +114,8 @@ onUnmounted(() => {
   elapsedTimer = null
 })
 
-watch([status, startedAt], ([s]) => {
+watch([status, startedAt, finishedAt], ([s]) => {
+  if (import.meta.server) return
   if (s === 'running') {
     recomputeElapsed()
     if (elapsedTimer) clearInterval(elapsedTimer)
@@ -200,33 +203,39 @@ watch(liveRunId, (id, prev) => {
   if (id !== prev) followLive(id)
 })
 
-watch(
-  queryRunId,
-  async (id, prev) => {
-    if (import.meta.server || id === prev) return
+async function showRun(id: string) {
+  await follow(id)
 
-    if (!id) {
-      reset()
-      void refreshHistory()
-      return
-    }
+  // The run no longer exists (a stale URL): drop the dead ``?run=``.
+  if (status.value === 'idle' && runId.value === null) {
+    const { run: _drop, ...rest } = route.query
+    void router.replace({ query: rest })
+  }
+  else {
+    void refreshHistory()
+  }
+}
 
-    // Started on this page; already following it.
-    if (id === runId.value) return
+// The stream opens after hydration. Opening it during setup changed the view
+// before the client's first render, which then disagreed with the server's.
+onMounted(() => {
+  if (queryRunId.value) void showRun(queryRunId.value)
+})
 
-    await follow(id)
+watch(queryRunId, (id, prev) => {
+  if (id === prev) return
 
-    // The run no longer exists (a stale URL): drop the dead ``?run=``.
-    if (status.value === 'idle' && runId.value === null) {
-      const { run: _drop, ...rest } = route.query
-      void router.replace({ query: rest })
-    }
-    else {
-      void refreshHistory()
-    }
-  },
-  { immediate: true },
-)
+  if (!id) {
+    reset()
+    void refreshHistory()
+    return
+  }
+
+  // Started on this page; already following it.
+  if (id === runId.value) return
+
+  void showRun(id)
+})
 </script>
 
 <template>
@@ -285,7 +294,7 @@ watch(
       <RunHeader
         :status="status"
         :events="events"
-        :elapsed-sec="elapsedSec"
+        :duration-sec="elapsedSec"
         :symbol="symbol"
         :run-id="runId"
         :cancelling="runCancelling"
@@ -370,6 +379,7 @@ watch(
           <AgentVerdict
             v-if="verdict"
             :rating="verdict.rating"
+            :owner-verdict="verdict.ownerVerdict"
             :confidence="verdict.confidence"
             :rationale="verdict.rationale"
             :run-id="runId"

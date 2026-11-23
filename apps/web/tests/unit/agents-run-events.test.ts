@@ -8,7 +8,7 @@ const { tailRun } = await import('../../server/lib/agents/run-events')
 const { notifyRun } = await import('../../server/lib/agents/run-signal')
 
 interface Script {
-  statuses: Array<{ status: string; error?: string | null }>
+  statuses: Array<{ status: string; error?: string | null; finishedAt?: Date }>
   batches: Array<Array<{ seq: number; payload: unknown }>>
 }
 
@@ -18,7 +18,7 @@ function scripted(script: Script) {
     reads.push(table)
     if (table === 'agent_runs') {
       const s = script.statuses.length > 1 ? script.statuses.shift()! : script.statuses[0]!
-      return [{ status: s.status, error: s.error ?? null }]
+      return [{ status: s.status, error: s.error ?? null, finishedAt: s.finishedAt ?? null }]
     }
     return script.batches.shift() ?? []
   })
@@ -63,6 +63,14 @@ describe('tailRun', () => {
     const frames = await collect(tailRun('run-1', { pollMs: 1 }))
 
     expect(frames).toEqual([{ kind: 'end', status: 'failed', error: 'interrupted by a web restart' }])
+  })
+
+  it('ends with the time the run finished', async () => {
+    scripted({ statuses: [{ status: 'complete', finishedAt: new Date('2026-05-10T12:09:46.000Z') }], batches: [] })
+
+    const frames = await collect(tailRun('run-1', { pollMs: 1 }))
+
+    expect(frames).toEqual([{ kind: 'end', status: 'complete', error: null, finishedAt: '2026-05-10T12:09:46.000Z' }])
   })
 
   it('ends as failed when the run does not exist', async () => {
