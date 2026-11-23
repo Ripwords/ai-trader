@@ -97,14 +97,70 @@ def test_a_symbol_the_owner_does_not_hold_says_so() -> None:
 
     assert "does not hold US.NVDA" in text
     assert "new money every month" not in text
-    assert "Investable assets" not in text
+    assert "- Investable assets: unknown." in text
 
 
 def test_an_unread_position_is_not_guessed() -> None:
     text = format_owner_context(_owner({"position": {"status": "unknown"}}), "US.NVDA")
 
     assert "could not be read" in text
-    assert "Do not assume" in text
+    assert "Do not assume they hold it" in text
+    assert "Do not assume a quantity, a value or a weight" in text
+
+
+# The owner context of run f266c5eb, whose judges invented a contribution.
+AMZN_RUN = {
+    "base_currency": "MYR",
+    "position": {
+        "status": "held",
+        "quantity": 2,
+        "market_value": 493.64,
+        "currency": "USD",
+        "weight_pct": 1.354,
+        "unrealized_pnl_pct": 0.95,
+    },
+    "investable_total": 149838.11,
+    "monthly_contribution": None,
+    "notes": [],
+}
+
+
+def test_every_missing_value_is_stated_as_unknown_with_an_instruction_not_to_guess() -> None:
+    text = format_owner_context(_owner(AMZN_RUN), "US.AMZN")
+
+    assert text.splitlines() == [
+        "## Owner Context",
+        "Facts about the investor this run is for, read from their accounts when the run started. "
+        "A value marked unknown was not available to this run. Do not assume, estimate or invent "
+        "a figure for it. If your reasoning needs it, say that it is unknown.",
+        "- The owner holds 2 shares of US.AMZN worth 494 USD, 1.4% of investable assets. "
+        "Unrealised gain or loss: +0.9%.",
+        "- Investable assets: 149,838 MYR.",
+        "- Base currency: MYR.",
+        "- Monthly contribution: unknown. How much new money the owner adds each month is not on "
+        "record. Do not state or imply an amount, and do not work out a position weight after a "
+        "contribution.",
+        "- Owner notes: none on record. Do not attribute any preference, plan or past decision "
+        "to the owner beyond what this section states.",
+    ]
+
+
+def test_a_bare_owner_context_names_every_value_it_lacks() -> None:
+    text = format_owner_context(_owner({"position": {"status": "held"}}), "US.NVDA")
+
+    assert "- The owner holds US.NVDA. Quantity: unknown. Market value: unknown. " \
+        "Share of investable assets: unknown. Unrealised gain or loss: unknown." in text
+    assert "- Investable assets: unknown." in text
+    assert "- Base currency: unknown." in text
+    assert "- Monthly contribution: unknown." in text
+    assert "- Owner notes: none on record." in text
+
+
+def test_a_contribution_of_zero_is_a_known_value() -> None:
+    text = format_owner_context(_owner({**NOT_HELD, "monthly_contribution": 0}), "US.NVDA")
+
+    assert "- Monthly contribution: 0 MYR. The owner adds no new money each month." in text
+    assert "Monthly contribution: unknown" not in text
 
 
 def test_the_mandate_is_an_editable_prompt_with_its_verdict_contract() -> None:
@@ -113,6 +169,7 @@ def test_the_mandate_is_an_editable_prompt_with_its_verdict_contract() -> None:
     assert default["placeholders"] == []
     assert "OWNER VERDICT: DO NOT ADD AT THIS SIZE" in default["text"]
     assert "FINAL TRANSACTION PROPOSAL" in default["text"]
+    assert "do not estimate the weight after adding" in default["text"]
     assert owner_mandate() == default["text"]
 
     token = prompts_mod.set_run_overrides({OWNER_MANDATE_PROMPT: "my own mandate"})

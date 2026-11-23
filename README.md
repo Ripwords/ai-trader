@@ -468,15 +468,17 @@ When a run starts, the web app reads the accounts and sends an `owner_context` o
 |---|---|
 | `position.status` | `held`, `not_held`, or `unknown` when the accounts could not be read. The debate is told not to assume either way on `unknown`. |
 | `position.quantity`, `market_value`, `currency`, `weight_pct`, `unrealized_pnl_pct` | Present on a held position. The weight is the share of investable assets from the tracker. |
-| `base_currency`, `investable_total` | From the tracker. Left out when it cannot be read. |
-| `monthly_contribution` | From the planning settings. Left out when it was never set. |
+| `base_currency`, `investable_total` | From the tracker. `null` when it cannot be read. |
+| `monthly_contribution` | From the planning settings. `null` when it was never set. |
 | `notes` | Your saved chat memories (see [Chat memory](#chat-memory)), at most 30 of 240 characters each. |
 
-A failed read never blocks a run: the part that failed is left out. The object is stored in the run's `config`, so a resumed run decides for the same owner it started with.
+A failed read never blocks a run: the part that failed is sent as `null`. The object is stored in the run's `config`, so a resumed run decides for the same owner it started with.
 
 The api turns the object into an `## Owner Context` section and appends it, after the valuation, to the prompt of every node from the Bull Researcher to the Portfolio Manager. The analysts do not see it.
 
-The Research Manager, the Trader and the Portfolio Manager also get the **owner mandate** after the owner context. It is the `Owner mandate` prompt under Settings → Prompts, so how the debate must rule for you is your text, not code. The default says you accumulate for the long term and add money monthly, that your US technology concentration is deliberate, and that you do not use stop-losses, tranche ladders, price-trigger exits or options. It asks for one of four answers with reasons, and says Hold is a complete answer, which upstream prompts discourage. Both sections are appended after whatever text is saved for a node, so an edited node prompt receives them too.
+The section has one line for every value, whether or not the run has it. A missing value is written as `unknown` and the debate is told not to assume, estimate or invent a figure for it. Without a monthly contribution the debate is told not to state an amount and not to work out a position weight after a contribution. With no saved memories it is told not to attribute any preference or past decision to you. A line left out reads to a model as room to guess: one run with no contribution on record wrote that "a normal monthly contribution" would take the position to 1.5%–2%. Set **invest / month** in the portfolio plan to give the debate the real amount.
+
+The Research Manager, the Trader and the Portfolio Manager also get the **owner mandate** after the owner context. It is the `Owner mandate` prompt under Settings → Prompts, so how the debate must rule for you is your text, not code. The default says you accumulate for the long term and add money monthly, that your US technology concentration is deliberate, and that you do not use stop-losses, tranche ladders, price-trigger exits or options. It asks for one of four answers with reasons, and says Hold is a complete answer, which upstream prompts discourage. It asks for the position weight after adding only when the owner context states the monthly contribution. Both sections are appended after whatever text is saved for a node, so an edited node prompt receives them too.
 
 The mandate asks for the verdict on a line of its own, and the `decision` event carries it as `owner_verdict` when the Portfolio Manager wrote one. The existing `rating` then follows it:
 
