@@ -103,8 +103,8 @@ NO_MEMORY = (
 # What ``{past_memory_str}`` holds in a saved override that still uses it.
 NO_MEMORY_VALUE = "None. No earlier decision or its outcome is on record for this run. Do not refer to any."
 
-# (upstream text, replacement) pairs applied to the upstream ``.md``. Upstream
-# tells five roles to learn from reflections on past trades and hands them a
+# ``DEFAULT_PROMPT_EDITS`` holds (upstream text, replacement) pairs applied to
+# the upstream ``.md``. Upstream tells five roles to learn from reflections on past trades and hands them a
 # memory nothing in this app ever fills. Asked to address lessons it was not
 # given, the Bull wrote "I've been burned before" in one run and the judges
 # reasoned about missing lessons. Each target must occur exactly once, so an
@@ -116,9 +116,47 @@ _RESEARCHER_MEMORY_EDITS = (
         f" {NO_MEMORY}",
     ),
 )
+
+
+# Upstream follows ``{history}`` with the latest arguments, which are the end
+# of that history, so each debater read them twice.
+def _researcher_history_edit(opponent: str) -> tuple[str, str]:
+    return (
+        f"Conversation history of the debate: {{history}}\nLast {opponent} argument: {{current_response}}\n",
+        f"Conversation history of the debate, ending with the {opponent} argument you must answer "
+        "(empty when you speak first): {history}\n",
+    )
+
+
+def _risk_history_edit(others: str) -> tuple[str, str]:
+    return (
+        f"Here is the current conversation history: {{history}} {others}. If there are",
+        "Here is the current conversation history, which holds the latest response of each "
+        "other analyst: {history}\nIf there are",
+    )
+
+
 DEFAULT_PROMPT_EDITS: dict[str, tuple[tuple[str, str], ...]] = {
-    "bull_researcher": _RESEARCHER_MEMORY_EDITS,
-    "bear_researcher": _RESEARCHER_MEMORY_EDITS,
+    "bull_researcher": (*_RESEARCHER_MEMORY_EDITS, _researcher_history_edit("bear")),
+    "bear_researcher": (*_RESEARCHER_MEMORY_EDITS, _researcher_history_edit("bull")),
+    "aggressive_debator": (
+        _risk_history_edit(
+            "Here are the last arguments from the conservative analyst: {current_conservative_response} "
+            "Here are the last arguments from the neutral analyst: {current_neutral_response}"
+        ),
+    ),
+    "conservative_debator": (
+        _risk_history_edit(
+            "Here is the last response from the aggressive analyst: {current_aggressive_response} "
+            "Here is the last response from the neutral analyst: {current_neutral_response}"
+        ),
+    ),
+    "neutral_debator": (
+        _risk_history_edit(
+            "Here is the last response from the aggressive analyst: {current_aggressive_response} "
+            "Here is the last response from the conservative analyst: {current_conservative_response}"
+        ),
+    ),
     "research_manager": (
         (
             "Take into account your past mistakes on similar situations. Use these insights to "

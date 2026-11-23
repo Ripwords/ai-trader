@@ -81,7 +81,7 @@ def test_defaults_route_requires_the_bearer(client: Any, client_with_bearer: Any
     res = client_with_bearer.get("/agents/prompts/defaults")
     assert res.status_code == 200
     assert res.json()["risk_manager"]["text"] == prompts_mod.raw_node_prompt("risk_manager")
-    assert res.json()["neutral_debator"]["text"] == _raw("neutral_debator")
+    assert res.json()["market_analyst"]["text"] == _raw("market_analyst")
 
 
 # --- judge template -------------------------------------------------------------

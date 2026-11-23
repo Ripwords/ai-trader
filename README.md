@@ -462,6 +462,10 @@ Every node in the table from the Market Analyst to the Portfolio Manager sends a
 
 Upstream TradingAgents gives the Trader and the Portfolio Manager only the plan and the debate, so a fact no debater repeated never reached the final call. This app appends the four analyst reports to their input, with an instruction to check the debate against them. The reports are prompt input only and are not saved into the trader plan or the decision.
 
+Each debater reads the debate so far once. Upstream's prompts for the Bull, the Bear and the three risk debaters send the debate history and then the latest arguments again, which the history already ends with. The default prompts for those five roles send the history only. `{current_response}` and the three `{current_..._response}` placeholders are still allowed in a prompt saved under Settings → Prompts.
+
+Most of a run's input tokens are the four analyst reports, which are sent whole to all eight nodes from the Bull Researcher to the Portfolio Manager. A longer report therefore costs eight times its length in the debate.
+
 #### Deciding for the owner
 
 Upstream TradingAgents rules for a short-term trading desk. Every run started from this app (the chat's debate and the research page) also tells the debate who it is deciding for. A direct call to the api without `owner_context`, and a backtest, run as before.
