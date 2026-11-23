@@ -18,9 +18,7 @@
   {
     "metadata": { "langgraph_node": "Market Analyst", "node_finished": true },
     "values": {
-      "messages": [
-        { "role": "assistant", "content": "Market report: bullish trend with RSI 62 and MACD positive crossover." }
-      ]
+      "summary": "Market report: bullish trend with RSI 62 and MACD positive crossover."
     }
   },
   {

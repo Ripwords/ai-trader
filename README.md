@@ -458,6 +458,8 @@ The run says how the valuation went in a `valuation` event before the first deba
 
 A resumed run computes the valuation again and sends the event again.
 
+Every node in the table from the Market Analyst to the Portfolio Manager sends a `node-start` event when it starts work and a `node-end` event when it has written its output. The stream names the Portfolio Manager `Risk Manager`. The analysts all start together, so their four `node-start` events open the run. Each debate node sends its `node-start` when it is called, before its model has answered, so the page can show which node is working. A debater that speaks in more than one round sends one `node-start` and one `node-end` for each turn. `node-end` carries a `summary`: the first line of prose the node wrote, as plain text, at most 200 characters. A resumed run sends these events only for the nodes it runs again.
+
 Upstream TradingAgents gives the Trader and the Portfolio Manager only the plan and the debate, so a fact no debater repeated never reached the final call. This app appends the four analyst reports to their input, with an instruction to check the debate against them. The reports are prompt input only and are not saved into the trader plan or the decision.
 
 #### Deciding for the owner

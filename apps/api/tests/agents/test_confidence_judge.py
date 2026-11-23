@@ -109,7 +109,7 @@ async def test_judge_unparseable_reply_yields_none() -> None:
 
 async def _states(*snapshots: dict):
     for s in snapshots:
-        yield s
+        yield "values", s
 
 
 @pytest.mark.asyncio
