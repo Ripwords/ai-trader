@@ -27,14 +27,31 @@ export interface PersistedRun {
     dataQuality: string
     currency: string | null
     discardedReason: string | null
+    /** The snapshot's first warning, which says why a DCF was skipped. */
+    warning: string | null
+    multiples: Multiples | null
+    /** The stock's own multiples over its history. */
+    historicalMultiples: Multiples | null
   } | null
-  valuationUnavailableReason: string | null
+  /** The run's `valuation` event. Runs before 2026-11-22 recorded none. */
+  valuationEvent: { status: 'ok' | 'multiples_only' | 'unavailable'; reason: string | null } | null
   debate: Record<'bull' | 'bear' | RiskSpeaker | 'researchManager', string | null>
+}
+
+export type Multiples = Partial<Record<'pe' | 'pb' | 'ps' | 'p_fcf', number | null>>
+type KnownMultiples = Partial<Record<keyof Multiples, number>>
+
+interface MultiplesSummary {
+  multiples?: KnownMultiples
+  historical_multiples?: KnownMultiples
 }
 
 export type ValuationSummary =
   | { status: 'valued'; fair_value: number; current_price: number | null; margin_of_safety_pct: number | null; data_quality: string; currency: string | null }
-  | { status: 'discarded'; reason: string; current_price: number | null; data_quality: string; currency: string | null }
+  /** A DCF ran and its result was thrown away. */
+  | ({ status: 'discarded'; reason: string; current_price: number | null; data_quality: string; currency: string | null } & MultiplesSummary)
+  /** No DCF ran, so there is no fair value. The price multiples stand. */
+  | ({ status: 'multiples_only'; reason: string; current_price: number | null; currency: string | null } & MultiplesSummary)
   | { status: 'unavailable'; reason: string }
 
 interface RunIdentity {
@@ -130,9 +147,26 @@ function noVerdictReason(run: PersistedRun): string {
   return `run ${run.status}: ${run.error ?? 'no reason recorded'}`
 }
 
+const round2 = (n: number) => Math.round(n * 100) / 100
+
+function known(multiples: Multiples | null): KnownMultiples | null {
+  const out: KnownMultiples = {}
+  for (const key of ['pe', 'pb', 'ps', 'p_fcf'] as const) {
+    const value = multiples?.[key]
+    if (typeof value === 'number' && Number.isFinite(value)) out[key] = round2(value)
+  }
+  return Object.keys(out).length ? out : null
+}
+
+function summariseMultiples(v: NonNullable<PersistedRun['valuation']>): MultiplesSummary {
+  const now = known(v.multiples)
+  const past = known(v.historicalMultiples)
+  return { ...(now ? { multiples: now } : {}), ...(past ? { historical_multiples: past } : {}) }
+}
+
 function summariseValuation(run: PersistedRun): ValuationSummary {
   const v = run.valuation
-  if (!v) return { status: 'unavailable', reason: run.valuationUnavailableReason ?? 'no valuation was recorded for this run' }
+  if (!v) return { status: 'unavailable', reason: run.valuationEvent?.reason ?? 'no valuation was recorded for this run' }
   if (v.fairValue !== null) {
     return {
       status: 'valued',
@@ -144,9 +178,21 @@ function summariseValuation(run: PersistedRun): ValuationSummary {
     }
   }
   if (v.discardedReason) {
-    return { status: 'discarded', reason: v.discardedReason, current_price: v.currentPrice, data_quality: v.dataQuality, currency: v.currency }
+    return {
+      status: 'discarded', reason: v.discardedReason, current_price: v.currentPrice, data_quality: v.dataQuality, currency: v.currency,
+      ...summariseMultiples(v),
+    }
   }
-  return { status: 'unavailable', reason: `no fair value was computed (data quality: ${v.dataQuality})` }
+  if (v.dataQuality === 'multiples_only' || run.valuationEvent?.status === 'multiples_only') {
+    return {
+      status: 'multiples_only',
+      reason: run.valuationEvent?.reason ?? v.warning ?? 'no DCF fair value was computed; only the multiples are available',
+      current_price: v.currentPrice === null ? null : round2(v.currentPrice),
+      currency: v.currency,
+      ...summariseMultiples(v),
+    }
+  }
+  return { status: 'unavailable', reason: run.valuationEvent?.reason ?? `no fair value was computed (data quality: ${v.dataQuality})` }
 }
 
 function summariseDebate(run: PersistedRun, ratingDebated: string) {

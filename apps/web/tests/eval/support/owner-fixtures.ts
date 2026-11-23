@@ -381,7 +381,7 @@ function persisted(symbol: string, runId: string, finishedAt: string, v: Verdict
     decision: { rating: v.rating, confidence: v.confidence, rationale: v.rationale, ownerVerdict: null },
     cap: v.cap ?? null,
     valuation: null,
-    valuationUnavailableReason: null,
+    valuationEvent: null,
     debate: { bull: v.bull, bear: v.bear, aggressive: v.aggressive, conservative: v.conservative, neutral: null, researchManager: null },
   }
 }

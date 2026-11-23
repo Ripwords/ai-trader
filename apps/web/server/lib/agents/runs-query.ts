@@ -177,7 +177,10 @@ export async function getRunAssessment(userId: string, runId: string): Promise<R
 }
 
 const VetoEvent = z.object({ original_rating: z.string(), reason: z.string() })
-const ValuationEvent = z.object({ status: z.literal('unavailable'), reason: z.string() })
+const ValuationEvent = z.object({ status: z.enum(['ok', 'multiples_only', 'unavailable']), reason: z.string().nullable() })
+// The api serialises Decimals as strings.
+const Ratio = z.union([z.number(), z.string()]).nullable().transform(v => (v === null ? null : Number(v)))
+const SnapshotMultiples = z.object({ pe: Ratio, pb: Ratio, ps: Ratio, p_fcf: Ratio }).partial()
 const DecisionEvent = z.object({ owner_verdict: z.enum(['add', 'hold', 'trim', 'do-not-add']) })
 
 const stateText = (...path: string[]) =>
@@ -218,6 +221,9 @@ export async function getRunVerdict(userId: string, runId: string, nowMs = Date.
         marginOfSafetyPct: valuationSnapshots.marginOfSafetyPct, dataQuality: valuationSnapshots.dataQuality,
         currency: sql<string | null>`${valuationSnapshots.result}->>'currency'`,
         discardedReason: sql<string | null>`${valuationSnapshots.result}->>'dcf_invalid_reason'`,
+        warning: sql<string | null>`${valuationSnapshots.result}->'warnings'->>0`,
+        multiples: sql<unknown>`${valuationSnapshots.result}->'multiples'`,
+        historicalMultiples: sql<unknown>`${valuationSnapshots.result}->'historical_multiples'`,
       })
       .from(valuationSnapshots)
       .where(eq(valuationSnapshots.runId, runId))
@@ -228,7 +234,7 @@ export async function getRunVerdict(userId: string, runId: string, nowMs = Date.
   if (!run) return null
 
   const veto = VetoEvent.safeParse(events.find(e => e.kind === 'valuation-veto')?.payload)
-  const unavailable = ValuationEvent.safeParse(events.find(e => e.kind === 'valuation')?.payload)
+  const valuationEvent = ValuationEvent.safeParse(events.find(e => e.kind === 'valuation')?.payload)
   const owner = DecisionEvent.safeParse(events.find(e => e.kind === 'decision')?.payload)
   const valuation = valuations[0]
   return buildRunVerdict({
@@ -250,9 +256,11 @@ export async function getRunVerdict(userId: string, runId: string, nowMs = Date.
           fairValue: numberOrNull(valuation.fairValue),
           currentPrice: numberOrNull(valuation.currentPrice),
           marginOfSafetyPct: numberOrNull(valuation.marginOfSafetyPct),
+          multiples: SnapshotMultiples.safeParse(valuation.multiples).data ?? null,
+          historicalMultiples: SnapshotMultiples.safeParse(valuation.historicalMultiples).data ?? null,
         }
       : null,
-    valuationUnavailableReason: unavailable.success ? unavailable.data.reason : null,
+    valuationEvent: valuationEvent.success ? valuationEvent.data : null,
     debate: {
       bull: run.bull, bear: run.bear,
       aggressive: run.aggressive, conservative: run.conservative, neutral: run.neutral,

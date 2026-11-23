@@ -190,6 +190,47 @@ describe.skipIf(!url)('run verdict queries (TEST_DATABASE_URL)', () => {
       })
     })
 
+    it('reports a run whose DCF was skipped as multiples only, not as unvalued', async () => {
+      const reason = 'DCF skipped: non-positive FCF or missing shares; multiples-only (no fabricated fair value)'
+      const runId = await seedRun({
+        startedAt: '2026-11-22T15:15:44Z', finishedAt: '2026-11-22T15:25:30Z', decision: HOLD,
+        messages: [{ type: 'valuation', status: 'multiples_only', reason }],
+      })
+      await db.insert(schema.valuationSnapshots).values({
+        symbol: 'US.AMZN', source: 'agent_run', runId, fairValue: null, currentPrice: '246.820007',
+        dataQuality: 'multiples_only',
+        result: {
+          currency: 'USD',
+          warnings: [reason],
+          multiples: { pb: '4.348715', pe: '19.953114', ps: '3.3467703', p_fcf: null },
+          fair_value: null,
+          dcf_invalid_reason: null,
+          historical_multiples: { pb: null, pe: '31.82103412815517642831249265', ps: '3.447422210351184439615679352', p_fcf: null },
+        },
+      })
+
+      const v = await q.getRunVerdict(userId, runId, NOW)
+      expect(v).toHaveProperty('valuation', {
+        status: 'multiples_only', reason, current_price: 246.82, currency: 'USD',
+        multiples: { pe: 19.95, pb: 4.35, ps: 3.35 },
+        historical_multiples: { pe: 31.82, ps: 3.45 },
+      })
+    })
+
+    it('reads an ok valuation event without mistaking it for a missing valuation', async () => {
+      const runId = await seedRun({
+        startedAt: '2026-11-19T10:00:00Z', decision: HOLD,
+        messages: [{ type: 'valuation', status: 'ok', reason: null }],
+      })
+      await db.insert(schema.valuationSnapshots).values({
+        symbol: 'US.AMZN', source: 'agent_run', runId, fairValue: '301.500000', currentPrice: '240.350000',
+        marginOfSafetyPct: '0.2028', dataQuality: 'full', result: { currency: 'USD' },
+      })
+      expect(await q.getRunVerdict(userId, runId, NOW)).toMatchObject({
+        valuation: { status: 'valued', fair_value: 301.5, current_price: 240.35 },
+      })
+    })
+
     it('carries the owner verdict the run reached for this owner', async () => {
       const runId = await seedRun({
         startedAt: '2026-11-19T10:00:00Z', decision: HOLD,
