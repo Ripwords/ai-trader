@@ -71,12 +71,12 @@ const activityLine = computed(() => {
 })
 
 // ─── Stuck hint thresholds ─────────────────────────────────────────
-// 30s of silence: hint appears, low-key.
-// 60s of silence: hint elevates to "likely stuck" with cancel CTA.
+// A healthy judge step writes for over three minutes without an event, so
+// the hint stays low-key until well past that.
 const stuckLevel = computed<'ok' | 'soft' | 'hard'>(() => {
   if (props.status !== 'running') return 'ok'
-  if (sinceLastEventSec.value >= 60) return 'hard'
-  if (sinceLastEventSec.value >= 30) return 'soft'
+  if (sinceLastEventSec.value >= 360) return 'hard'
+  if (sinceLastEventSec.value >= 60) return 'soft'
   return 'ok'
 })
 
@@ -174,12 +174,12 @@ const statusLabel = computed(() => {
       role="status"
     >
       <span v-if="stuckLevel === 'soft'">
-        no events for {{ sinceLastEventSec }}s — LLM call probably mid-flight.
-        DeepSeek and similar can take 30–90s on a single tool round.
+        no events for {{ sinceLastEventSec }}s. A step is still writing.
+        The judge steps can take three to four minutes.
       </span>
       <span v-else>
-        no events for {{ sinceLastEventSec }}s — likely hung. cancel and re-run if it
-        doesn't recover.
+        no events for {{ sinceLastEventSec }}s. This is longer than any step
+        normally takes. Cancel and re-run if it does not recover.
       </span>
     </div>
   </header>
