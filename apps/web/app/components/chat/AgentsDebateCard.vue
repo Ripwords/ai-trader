@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { Comark } from '@comark/vue'
 import { debateCardView } from '~/utils/debate-card'
+import { OWNER_VERDICT_LABEL, confidenceLabel } from '../../../types/agents'
 
 // Bound to the latest output of the `agents_debate` chat tool (see
 // server/llm/tools.ts): a progress snapshot per pipeline event, then the
@@ -75,9 +76,12 @@ const ratingClass: Record<string, string> = {
         </span>
         <span v-if="verdict.cappedFrom" class="font-mono text-sm text-[var(--paper-2)]">capped from {{ verdict.cappedFrom }}</span>
         <span class="font-mono text-sm text-[var(--paper-3)]">
-          {{ verdict.confidence === null ? 'no confidence score' : `${verdict.confidence}% chance the call holds over 7 trading days` }}
+          {{ verdict.confidence === null ? 'no confidence score' : confidenceLabel(verdict.rating, verdict.confidence) }}
         </span>
       </div>
+      <p v-if="verdict.ownerVerdict" class="text-sm text-[var(--paper-2)]" data-testid="debate-owner-verdict">
+        For your position: <strong class="font-semibold text-[var(--paper-0)]">{{ OWNER_VERDICT_LABEL[verdict.ownerVerdict] }}</strong>
+      </p>
       <p v-if="verdict.capReason" class="text-sm text-[var(--paper-2)]">
         Valuation cap: {{ verdict.capReason }}
       </p>

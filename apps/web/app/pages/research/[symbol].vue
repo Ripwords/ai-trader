@@ -379,6 +379,7 @@ watch(queryRunId, (id, prev) => {
           <AgentVerdict
             v-if="verdict"
             :rating="verdict.rating"
+            :owner-verdict="verdict.ownerVerdict"
             :confidence="verdict.confidence"
             :rationale="verdict.rationale"
             :run-id="runId"

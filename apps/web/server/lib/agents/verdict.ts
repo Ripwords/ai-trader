@@ -3,6 +3,7 @@
  * persisted. `agents_debate` and `research_get` both return it, so a run read
  * inline and the same run read later cannot disagree.
  */
+import { CONFIDENCE_HORIZON_DAYS, confidenceCorrectIf } from '../../../types/agents'
 import type { OwnerVerdict } from '~~/types/agents'
 import { excerptKeyPoints } from './excerpt'
 
@@ -98,17 +99,6 @@ const DISSENT_CHARS = 500
 const MANAGER_CHARS = 600
 const RATIONALE_CHARS = 1500
 const RATIONALE_LEAD_CHARS = 450
-
-// Mirrors HORIZON_DAYS and _CORRECT_IF in apps/api/app/services/agents/confidence.py.
-// The run does not persist what its score was judged against.
-const CONFIDENCE_HORIZON_DAYS = 7
-const CORRECT_IF: Record<string, string> = {
-  'strong-buy': 'the stock beats SPY by more than 0.5 percentage points',
-  'buy': 'the stock beats SPY by more than 0.5 percentage points',
-  'hold': 'the stock finishes within 1 percentage point of SPY',
-  'reduce': 'the stock trails SPY by more than 0.5 percentage points',
-  'sell': 'the stock trails SPY by more than 0.5 percentage points',
-}
 
 // The risk personas lean one way each, so the dissent is whoever leaned
 // against the call: the conservative voice on a buy, the aggressive on a sell.
@@ -246,7 +236,7 @@ export function buildRunVerdict(run: PersistedRun, nowMs: number): RunVerdictRes
 
   const { rating, confidence } = run.decision
   const rationale = excerptKeyPoints(run.decision.rationale, { maxChars: RATIONALE_CHARS, leadChars: RATIONALE_LEAD_CHARS })
-  const correctIf = CORRECT_IF[rating] ?? 'the rating proves correct against SPY'
+  const correctIf = confidenceCorrectIf(rating)
   return {
     ...identity,
     rating,

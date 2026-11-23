@@ -1,5 +1,5 @@
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue'
-import type { AgentEvent, Rating, RunStatus } from '../types/agents'
+import type { AgentEvent, OwnerVerdict, Rating, RunStatus } from '../types/agents'
 import type { SymbolResolution } from '../types/symbol'
 import type { RunFrame } from '../server/lib/agents/run-events'
 
@@ -30,6 +30,7 @@ export function parseSse(buffer: string, chunk: string): { messages: SseMessage[
 
 interface VerdictState {
   rating: Rating
+  ownerVerdict: OwnerVerdict | null
   confidence: number | null
   rationale: string
 }
@@ -64,7 +65,7 @@ export function applyFrame(view: RunView, frame: RunFrame): RunView {
   const ev = frame.event
   const next: RunView = { ...view, events: [...view.events, ev], lastSeq: frame.seq }
   if (ev.type === 'node-start') next.currentNode = ev.node
-  else if (ev.type === 'decision') next.verdict = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
+  else if (ev.type === 'decision') next.verdict = { rating: ev.rating, ownerVerdict: ev.owner_verdict ?? null, confidence: ev.confidence, rationale: ev.rationale }
   else if (ev.type === 'error') next.error = ev.message
   return next
 }

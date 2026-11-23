@@ -38,7 +38,15 @@ describe('AgentsDebateCard', () => {
   it('labels the confidence as the 7-day probability it is', async () => {
     const { wrapper } = await mountCard(stored)
     expect(wrapper.text()).toContain('hold')
-    expect(wrapper.text()).toContain('33% chance the call holds over 7 trading days')
+    expect(wrapper.text()).toContain('33% chance the stock finishes within 1 percentage point of SPY over 7 trading days')
+  })
+
+  it('shows the owner verdict when the run answered one, and nothing for an older result', async () => {
+    const { wrapper } = await mountCard({ ...stored, owner_verdict: 'trim' })
+    expect(wrapper.find('[data-testid="debate-owner-verdict"]').text().replace(/\s+/g, ' ')).toBe('For your position: Trim')
+
+    const older = await mountCard(stored)
+    expect(older.wrapper.find('[data-testid="debate-owner-verdict"]').exists()).toBe(false)
   })
 
   it('says when there is no confidence score', async () => {
