@@ -123,6 +123,9 @@ const DISSENTERS: Record<string, RiskSpeaker[]> = {
 
 const SPEAKER_PREFIX = /^(?:Bull|Bear|Aggressive|Conservative|Neutral|Risky|Safe) Analyst:\s*/gm
 
+// A debater opening a sentence on another speaker is restating them, not arguing.
+const RESTATES_ANOTHER_SPEAKER = /^(?:the|my)\s+(?:bull|bear|aggressive|conservative|neutral|risky|safe|trader)\b|^(?:he|she)\s+(?:says|cites|claims|argues)\b/i
+
 function spoken(text: string | null): string | null {
   const stripped = text?.replaceAll(SPEAKER_PREFIX, '').trim()
   return stripped || null
@@ -200,7 +203,7 @@ function summariseDebate(run: PersistedRun, ratingDebated: string) {
   const openings: string[] = []
   const bounded = (field: string, text: string | null, maxChars: number): string | null => {
     if (text === null) return null
-    const excerpt = excerptKeyPoints(text, { maxChars })
+    const excerpt = excerptKeyPoints(text, { maxChars, restates: RESTATES_ANOTHER_SPEAKER })
     if (excerpt.mode === 'head') openings.push(field)
     return excerpt.text
   }
