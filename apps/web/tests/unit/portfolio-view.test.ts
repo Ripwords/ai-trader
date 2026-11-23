@@ -4,11 +4,13 @@ import type { PortfolioPerformance } from '../../server/lib/portfolio-history'
 import type { AllocationRow, PlanningSummary } from '../../server/lib/planning'
 import {
   attentionItems,
+  driftLevel,
   fmtCurrency,
   fmtPct,
   holdingRows,
   holdingSources,
   keyFigures,
+  lockableHoldings,
   parseTab,
   partitionAccounts,
   partitionClosed,
@@ -196,13 +198,12 @@ describe('attentionItems', () => {
       base_currency: 'MYR',
       net_worth_total: 1000,
       net_worth_adjusted: 1000,
+      investable_total: 1000,
+      locked: { total: 0, holdings: [] },
       cash_total: 100,
       positions_value: 900,
       data_quality: 'ok',
-      assumptions: { monthly_expenses: 0, emergency_fund_months: 6, monthly_contribution: 0 },
-      target_model: [],
       allocation_rows: [],
-      rebalance_actions: [],
       goals: [],
       concentration: { top_position: null, positions_over_10_pct: 0, positions_over_20_pct: 0 },
       liabilities: { total_balance: 0, monthly_minimum_payment: 0, weighted_interest_rate_pct: null, rows: [] },
@@ -212,32 +213,53 @@ describe('attentionItems', () => {
   }
   const row: AllocationRow = {
     key: 'equity', label: 'Equity', target_pct: 60, actual_pct: 80, current_value: 800, target_value: 600,
-    drift_pct: 20, action_value: -200, action: 'sell', severity: 'critical',
+    drift_pct: 20, action_value: -200, action: 'sell',
   }
 
   it('is empty when the plan is on track', () => {
     expect(attentionItems(plan())).toEqual([])
   })
 
-  it('lists rebalance actions, concentration and goals behind, worst first', () => {
+  it('lists buckets off target and goals not reached, biggest trade first, and never a large position', () => {
+    const cash: AllocationRow = { key: 'cash', label: 'Cash', target_pct: 30, actual_pct: 20, current_value: 200, target_value: 300, drift_pct: -10, action_value: 100, action: 'buy' }
+    const near: AllocationRow = { key: 'bond', label: 'Bonds', target_pct: 10, actual_pct: 8, current_value: 80, target_value: 100, drift_pct: -2, action_value: 20, action: 'buy' }
     const items = attentionItems(plan({
-      rebalance_actions: [row],
-      concentration: { top_position: { symbol: 'NVDA', allocation_pct: 31.4, severity: 'alert' }, positions_over_10_pct: 2, positions_over_20_pct: 1 },
+      allocation_rows: [near, cash, row],
+      concentration: { top_position: { symbol: 'NVDA', allocation_pct: 31.4 }, positions_over_10_pct: 2, positions_over_20_pct: 1 },
       goals: [
-        { key: 'cash', label: 'Cash reserve', current_value: 1, target_value: 2, progress_pct: 50, status: 'behind', note: 'MYR 1 short' },
-        { key: 'x', label: 'Done', current_value: 2, target_value: 2, progress_pct: 100, status: 'complete', note: '' },
+        { key: 'cash', label: 'Cash reserve', current_value: 1, target_value: 2, progress_pct: 50, reached: false, note: 'MYR 1 short' },
+        { key: 'x', label: 'Done', current_value: 2, target_value: 2, progress_pct: 100, reached: true, note: '' },
       ],
     }))
-    expect(items.map(i => i.label)).toEqual(['Equity', 'NVDA', 'Cash reserve'])
-    expect(items[0]).toMatchObject({ tone: 'down', detail: 'sell MYR 200.00 · 80.0% vs 60.0% target' })
-    expect(items[1]).toMatchObject({ tone: 'accent', detail: '31.4% of net worth in one position' })
+    expect(items.map(i => i.label)).toEqual(['Equity', 'Cash', 'Cash reserve'])
+    expect(items[0]).toMatchObject({ tone: 'accent', detail: 'sell MYR 200.00 · 80.0% vs 60.0% target' })
     expect(items[2]).toMatchObject({ tone: 'accent', detail: 'MYR 1 short' })
   })
 
-  it('ignores a concentration that is ok', () => {
+  it('asks for no attention for a position of any size', () => {
     const items = attentionItems(plan({
-      concentration: { top_position: { symbol: 'VT', allocation_pct: 9, severity: 'ok' }, positions_over_10_pct: 0, positions_over_20_pct: 0 },
+      concentration: { top_position: { symbol: 'NVDA', allocation_pct: 62 }, positions_over_10_pct: 1, positions_over_20_pct: 1 },
     }))
     expect(items).toEqual([])
+  })
+})
+
+describe('lockableHoldings', () => {
+  it('offers every holding except cash and closed positions, by name', () => {
+    const p = portfolio({
+      positions: [
+        position('GF_KWSP', { name: 'KWSP', asset_class: 'FIXED_INCOME', market_value: 40_000 }),
+        position('MYR', { name: 'Ringgit', asset_class: 'LIQUIDITY', market_value: 5_000 }),
+        position('OLD', { market_value: 0 }),
+        position('NONAME', { name: '', market_value: 10 }),
+      ],
+    })
+    expect(lockableHoldings(p)).toEqual([{ symbol: 'GF_KWSP', name: 'KWSP' }, { symbol: 'NONAME', name: 'NONAME' }])
+  })
+})
+
+describe('tones the pages derive from the plan numbers', () => {
+  it('grades drift by its size in either direction', () => {
+    expect([0, 2.99, -3, 9.99, -10, 40].map(driftLevel)).toEqual(['on', 'on', 'off', 'off', 'far', 'far'])
   })
 })

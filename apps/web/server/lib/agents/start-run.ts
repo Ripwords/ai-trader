@@ -5,6 +5,7 @@ import { agentRuns, RUNNING_PER_SYMBOL_UQ } from '../../../db/schema'
 import { getOwnerId } from '../../db/repo'
 import { resolveSymbol } from '../../lib/yahoo'
 import { AgentRunTee, type RunOrigin } from '../../utils/agents-tee'
+import { buildOwnerContext } from './owner-context'
 import { splitNdjson } from '../../utils/ndjson'
 
 export interface AgentsRunBody {
@@ -54,6 +55,7 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
 
   const inflight = await runningRunId(userId, symbol)
   if (inflight) throw alreadyRunning(inflight)
+  const ownerContext = await buildOwnerContext(symbol, userId)
   const inserted = await db
     .insert(agentRuns)
     .values({
@@ -69,6 +71,8 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
         reasoning_effort: body.reasoning_effort ?? 'medium',
         response_language: body.response_language ?? 'en-US',
         selected_analysts: body.selected_analysts ?? ['market', 'social', 'news', 'fundamentals'],
+        // Kept so a resumed run decides for the same owner it started with.
+        owner_context: ownerContext,
       },
     })
     .returning()
@@ -99,6 +103,7 @@ export async function startAgentRun(body: AgentsRunBody): Promise<StartedRun> {
       response_language: body.response_language ?? 'en-US',
       selected_analysts: body.selected_analysts ?? ['market', 'social', 'news', 'fundamentals'],
       run_id: run.id,
+      owner_context: ownerContext,
     }),
   }).catch(() => null)
 

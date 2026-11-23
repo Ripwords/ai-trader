@@ -16,6 +16,15 @@ async function failureReason(res: Response): Promise<string> {
   return body.statusMessage ? `${res.status} ${body.statusMessage}` : String(res.status)
 }
 
+/** For a spelling the stored symbol does not match on its own, which only symbol resolution maps to it. */
+async function latestRunUnderResolvedSymbol(userId: string, symbol: string) {
+  const { resolveSymbol } = await import('../lib/yahoo')
+  const { getLatestRunForSymbol } = await import('../lib/agents/runs-query')
+  const resolution = await resolveSymbol(symbol)
+  if (resolution.status !== 'resolved' || resolution.symbol === symbol) return null
+  return getLatestRunForSymbol(userId, resolution.symbol)
+}
+
 interface MakeToolsOptions {
   event?: H3Event
   latestUserText?: string
@@ -686,7 +695,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'research_start': tool({
       description:
-        'Start a research run (the multi-agent analyst → debate → trader → risk pipeline) on a symbol ASYNCHRONOUSLY. Returns immediately with a runId; the run finishes in the background (~30-90s) and the user gets a browser notification. Use this when the user asks to "research X", "kick off analysis on X", or wants to keep chatting while it runs. Use agents_debate instead only when the user explicitly wants to watch the debate stream inline now.',
+        'Start a research run (the multi-agent analyst → debate → trader → risk pipeline) on a symbol ASYNCHRONOUSLY. Returns immediately with a runId; the run finishes in the background (it takes minutes) and the user gets a browser notification. Use this when the user asks to "research X", "kick off analysis on X", or wants to keep chatting while it runs. Use agents_debate instead when the user wants to watch the debate stream inline now, or when you need the verdict in this turn (before recommending a buy).',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
         max_debate_rounds: z.number().int().min(1).max(3).default(1),
@@ -721,26 +730,27 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'research_get': tool({
       description:
-        "Fetch the assessment from a research run so you can cite the agents' actual verdict. Pass runId if you have it (e.g. from an auto-injected recent-run hint or research_start), otherwise pass symbol to get that ticker's latest completed run. Returns status, rating, confidence, and rationale; a run that is still running comes back with its status and no verdict yet, so this is also how to answer \"is it done yet\" after research_start. Use this whenever the user references a ticker that has a recent run — do NOT re-run research_start if a recent assessment already exists.",
+        "Fetch the assessment from a research run so you can cite the agents' actual verdict. Pass runId if you have it (e.g. from an auto-injected recent-run hint or research_start), otherwise pass symbol to get that ticker's latest completed run. Returns the same verdict agents_debate does: rating, owner_verdict (add/hold/trim/do-not-add for the user's own position, or null), rating_cap ({original_rating, reason} when the valuation check lowered the rating), confidence (the probability confidence_measures describes, over 7 trading days, not conviction in the thesis), valuation, bull_case, bear_case, risk_dissent, a shortened rationale, run_url (the page with the full text) and age_days (whole days since the run finished). latest_attempt is a newer run for the symbol that failed or is still running. A run with no decision comes back with rating null and no_verdict_reason, so this is also how to answer \"is it done yet\" after research_start. Use this whenever the user references a ticker that has a recent run, and before agents_debate when you are about to recommend a buy: a complete run with age_days of 7 or less is reused, not re-run.",
       inputSchema: z.object({
         runId: z.string().optional(),
         symbol: z.string().optional(),
       }),
       execute: async ({ runId, symbol }) => {
         const { getOwnerId } = await import('../db/repo')
-        const { getRunAssessment, getLatestRunForSymbol } = await import('../lib/agents/runs-query')
+        const { getRunVerdict, getLatestRunForSymbol, getLatestAttemptForSymbol } = await import('../lib/agents/runs-query')
         const userId = await getOwnerId()
-        if (runId) {
-          const a = await getRunAssessment(userId, runId)
-          return a ?? { error: 'run not found', runId }
-        }
-        if (symbol) {
-          const latest = await getLatestRunForSymbol(userId, symbol)
-          if (!latest) return { error: 'no research run found for symbol', symbol }
-          const a = await getRunAssessment(userId, latest.runId)
-          return a ?? { error: 'run not found', runId: latest.runId }
-        }
-        return { error: 'pass runId or symbol' }
+        if (runId) return await getRunVerdict(userId, runId) ?? { error: 'run not found', runId }
+        if (!symbol) return { error: 'pass runId or symbol' }
+
+        const latest = await getLatestRunForSymbol(userId, symbol) ?? await latestRunUnderResolvedSymbol(userId, symbol)
+        const attempt = await getLatestAttemptForSymbol(userId, latest?.symbol ?? symbol)
+        const cited = latest?.runId ?? attempt?.runId
+        if (!cited) return { error: 'no research run found for symbol', symbol }
+        const verdict = await getRunVerdict(userId, cited)
+        if (!verdict) return { error: 'run not found', runId: cited }
+        // The verdict is the latest complete run's; a newer run that failed or
+        // is still going is reported beside it, not in its place.
+        return attempt && attempt.runId !== cited ? { ...verdict, latest_attempt: attempt } : verdict
       },
     }),
 
@@ -799,7 +809,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'agents_debate': tool({
       description:
-        'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns a final structured verdict with rating, confidence, and rationale. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker.',
+        'Run the TradingAgents multi-agent pipeline (analysts → bull/bear debate → trader → risk gate) on a symbol. Streams progress; returns one compact verdict: rating, owner_verdict (add/hold/trim/do-not-add for the user\'s own position, or null when the run had no owner context), rating_cap ({original_rating, reason} when the valuation check lowered the rating), confidence (the probability confidence_measures describes, over 7 trading days, not conviction in the thesis), valuation, bull_case, bear_case, risk_dissent, a shortened rationale and run_url, the page with the full text. rating null with no_verdict_reason means the run reached no decision. A run takes minutes, not seconds, and costs many times a normal reply, so tell the user in one line that it is starting before you call it. Use when the user asks for a comprehensive analysis or wants the agents to deliberate on a ticker. Also call it, without being asked, before recommending that the user buy or add to a specific stock, unless research_get shows a complete run for it with age_days of 7 or less. Never one call per row of a screen: 1 per turn, for your top pick.',
       inputSchema: z.object({
         symbol: z.string().describe('Ticker symbol, e.g. AAPL or US.NVDA'),
         max_debate_rounds: z.number().int().min(1).max(3).default(1),
@@ -809,7 +819,9 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       // `tool-output-available` frame, which keeps the chat stream moving
       // during the run and drives AgentsDebateCard's node timeline. The SDK
       // takes the LAST YIELD as the final output the LLM consumes and drops
-      // the return value, so every outcome, errors included, is yielded.
+      // the return value, so every outcome, errors included, is yielded. The
+      // node events are progress for the card, so only the yields before the
+      // last carry them; the last is the verdict research_get would return.
       execute: async function* (args, { abortSignal }) {
         const events: Array<{ type: 'node-start'; node: string }> = []
         yield { events: [...events] }
@@ -831,13 +843,13 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           // A run is already in flight for this symbol; report on that one.
           const body = await res.json().catch(() => ({})) as { data?: { run_id?: string | null } }
           if (!body.data?.run_id) {
-            yield { events, error: 'a run is already in progress for this symbol' }
+            yield { error: 'a run is already in progress for this symbol' }
             return
           }
           runId = body.data.run_id
         }
         else if (!res.ok) {
-          yield { events, error: `run could not start: ${await failureReason(res)}` }
+          yield { error: `run could not start: ${await failureReason(res)}` }
           return
         }
         else {
@@ -845,28 +857,23 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
         }
 
         const { tailRun } = await import('../lib/agents/run-events')
-        let verdict: { rating?: string; confidence?: number | null; rationale?: string } = {}
+        let failure: string | null = null
         for await (const frame of tailRun(runId, { signal: abortSignal })) {
           if (frame.kind === 'end') {
-            if (frame.status !== 'complete') {
-              yield { runId, events, ...verdict, error: `run ${frame.status}: ${frame.error ?? 'no reason recorded'}` }
-              return
-            }
+            if (frame.status !== 'complete') failure = `run ${frame.status}: ${frame.error ?? 'no reason recorded'}`
             break
           }
-          const ev = frame.event
-          if (ev.type === 'node-start') events.push({ type: 'node-start', node: ev.node })
-          if (ev.type === 'decision') {
-            verdict = { rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale }
-          }
-          yield { runId, events: [...events], ...verdict }
+          if (frame.event.type === 'node-start') events.push({ type: 'node-start', node: frame.event.node })
+          yield { runId, events: [...events] }
         }
 
-        if (!verdict.rating) {
-          yield { runId, events, error: 'no decision emitted' }
-          return
-        }
-        yield { runId, events, ...verdict }
+        // The tee stores the decision, the final state and every event before
+        // the terminal status, so the run is fully readable once the tail ends.
+        const { getOwnerId } = await import('../db/repo')
+        const { getRunVerdict } = await import('../lib/agents/runs-query')
+        const verdict = await getRunVerdict(await getOwnerId(), runId) ?? { runId, rating: null }
+        const error = failure ?? (verdict.rating === null ? 'no decision emitted' : null)
+        yield error ? { ...verdict, error } : verdict
       },
     }),
 
@@ -982,24 +989,25 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'planning_get': tool({
       description:
-        'The user\'s financial plan, the same as the /portfolio plan tab: target allocation (ideal wealth distribution by bucket: cash, equity, bond, crypto, real_estate, commodity, other) against actual, the buy/sell amount per bucket, emergency-fund and other goals, concentration, liabilities, monthly cashflow and savings rate. settings holds the editable inputs with the liability and cashflow ids planning_update needs. Call before suggesting or making any plan change.',
+        'The user\'s financial plan, the same as the /portfolio plan tab: target allocation (ideal wealth distribution by bucket: cash, equity, bond, crypto, real_estate, commodity, other) against actual, the buy/sell amount per bucket, emergency-fund and other goals, concentration, liabilities, monthly cashflow and savings rate. Percentages are of investable_total: net worth less the locked holdings, which are listed under locked. inputs holds the editable values the rest does not show, "not set" where the user has entered none; liabilities and cashflow items carry the ids planning_update needs. Call before suggesting or making any plan change.',
       inputSchema: z.object({
         force: z.boolean().default(false).describe('Re-read the portfolio instead of the cached copy.'),
       }),
       execute: async ({ force }) => {
-        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }] = await Promise.all([
+        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { planForChat }] = await Promise.all([
           import('../lib/portfolio-cache'),
           import('../lib/planning-settings'),
           import('../lib/planning'),
+          import('../lib/planning-assistant'),
         ])
         const [portfolio, settings] = await Promise.all([getFullPortfolioCached({ force }), getPlanningSettings()])
-        return { settings, summary: buildPlanningSummary(portfolio, settings) }
+        return planForChat(buildPlanningSummary(portfolio, settings), settings)
       },
     }),
 
     'planning_update': tool({
       description:
-        'Change the user\'s financial plan settings: target allocation, monthly expenses, emergency-fund months, monthly contribution, liabilities and cashflow items. Call only when the user asks for a change, or agrees to one you proposed; to suggest a target model, describe it and wait for a yes. Send only the fields that change: target_model merges into the current model and must then total 100% (set every bucket you move money between). Upserts with an id replace that row; without one they add a row. It saves at once and returns each change with its before and after value: tell the user what changed, and to undo, call it again with the before values. It never places orders; for trades, use portfolio_rebalance_plan and then trade_place_order.',
+        'Change the user\'s financial plan settings: target allocation, monthly expenses, emergency-fund months, monthly contribution, liabilities, cashflow items and the locked holdings (locked_symbols). Call only when the user asks for a change, or agrees to one you proposed; to suggest a target model, describe it and wait for a yes. Send only the fields that change: target_model merges into the current model and must then total 100% (set every bucket you move money between). Upserts with an id replace that row; without one they add a row. It saves at once and returns each change with its before and after value: tell the user what changed, and to undo, call it again with the before values. It never places orders; for trades, use portfolio_rebalance_plan and then trade_place_order.',
       inputSchema: z.object({
         target_model: z.array(z.object({
           key: z.enum(['cash', 'equity', 'bond', 'crypto', 'real_estate', 'commodity', 'other']),
@@ -1023,6 +1031,7 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
           amount: z.number().positive().describe('Monthly amount in the base currency'),
         })).optional(),
         remove_cashflow_ids: z.array(z.string()).optional(),
+        locked_symbols: z.array(z.string().min(1)).optional().describe('Holdings the owner cannot or will not trade, such as a pension. Replaces the whole list: send every symbol that stays locked, [] to unlock all. Locked holdings count toward net worth and are left out of allocation, concentration and rebalance trades.'),
       }),
       execute: async (patch) => {
         const [{ getFullPortfolioCached }, { getPlanningSettings, savePlanningSettings }, { buildPlanningSummary }, { applyPlanningPatch }] = await Promise.all([
@@ -1042,22 +1051,30 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
 
     'portfolio_rebalance_plan': tool({
       description:
-        'Concrete trades that move the portfolio to the saved target allocation, in the base currency. mode=full buys and sells every bucket to its target, spreading each bucket over its holdings by size; mode=contribute_only spends new money (the monthly contribution unless contribution is given) on underweight buckets and never sells, which avoids realising gains. symbol null means the bucket holds nothing yet: suggest candidates, never a ticker as if it were held. Read-only: it places nothing. Present the trades as a plan; place any only when the user asks, one at a time with trade_place_order (paper unless they say live).',
+        'Whole-lot trades in the live broker account that move the portfolio toward the saved target allocation. mode=full buys and sells every bucket to its target; mode=contribute_only spends new money (the monthly contribution unless contribution is given) on underweight buckets and never sells, which avoids realising gains. A bucket\'s amount is split over its largest broker holdings by size, or in equal parts over the candidates given for it, in whole lots; what is left then buys one more lot at a time of whichever of those is furthest behind its part, then of the bucket\'s next-largest holdings, until no lot fits. allocation_rule states this in one sentence. Each trade has shares (always a multiple of lot_size, the board lot: 1 for US shares, 100 on Bursa Malaysia), price, currency, fx_rate, value_native (in that currency) and value (base currency). skipped lists what could not trade and why (below_one_lot carries lot_size and one_lot, the base-currency cost of one lot; lot_size_unknown is a market such as Hong Kong, where the lot differs by stock and is not known here); buckets[].instruments is how many symbols the bucket could trade; unallocated is contribution no trade spends, because it is less than any remaining lot costs or every bucket is at its target; currencies[].buy against broker_cash shows what must be converted; fetched_at is when prices were read. Locked holdings are never traded. Read-only: it places nothing. Present the trades as a plan; place any only when the user asks, one at a time with trade_place_order (paper unless they say live).',
       inputSchema: z.object({
         mode: z.enum(['full', 'contribute_only']).default('contribute_only'),
         contribution: z.number().min(0).optional().describe('contribute_only: the amount to invest, in the base currency'),
-        maxPerBucket: z.number().int().min(1).max(20).default(3).describe('Spread each bucket over at most this many of its largest holdings. Keep it low for small amounts.'),
+        maxPerBucket: z.number().int().min(1).max(20).default(3).describe('Split each bucket over this many of its largest holdings. Leftover money can still buy one lot of a smaller holding.'),
+        candidates: z.array(z.object({
+          symbol: z.string().min(1),
+          bucket: z.enum(['equity', 'bond', 'crypto', 'real_estate', 'commodity', 'other']).optional().describe('Required for a symbol the broker account does not hold'),
+        })).max(20).optional().describe('Symbols to trade in place of the holdings of their bucket, in equal parts, e.g. [{symbol:"VOO",bucket:"equity"}]. Any the broker cannot trade come back in skipped with the reason.'),
       }),
-      execute: async ({ mode, contribution, maxPerBucket }) => {
-        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { buildRebalancePlan }] = await Promise.all([
+      execute: async ({ mode, contribution, maxPerBucket, candidates }) => {
+        const [{ getFullPortfolioCached }, { getPlanningSettings }, { buildPlanningSummary }, { buildRebalancePlan }, { loadRebalanceInputs }] = await Promise.all([
           import('../lib/portfolio-cache'),
           import('../lib/planning-settings'),
           import('../lib/planning'),
           import('../lib/planning-assistant'),
+          import('../lib/rebalance-inputs'),
         ])
         const [portfolio, settings] = await Promise.all([getFullPortfolioCached(), getPlanningSettings()])
         const summary = buildPlanningSummary(portfolio, settings)
-        return { ...buildRebalancePlan(summary, portfolio, { mode, contribution, maxPerBucket }), allocation_rows: summary.allocation_rows }
+        const inputs = await loadRebalanceInputs(portfolio, summary, candidates ?? [])
+        return buildRebalancePlan(summary, inputs, mode === 'full'
+          ? { mode, maxPerBucket }
+          : { mode, contribution: contribution ?? settings.monthly_contribution, maxPerBucket })
       },
     }),
 

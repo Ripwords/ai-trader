@@ -1,4 +1,4 @@
-import type { FullPortfolio, FullPortfolioPosition } from './holdings'
+import type { FullPortfolio } from './holdings'
 
 export type PlanningBucketKey =
   | 'cash'
@@ -8,8 +8,6 @@ export type PlanningBucketKey =
   | 'real_estate'
   | 'commodity'
   | 'other'
-
-export type PlanningSeverity = 'ok' | 'watch' | 'alert' | 'critical'
 
 export interface PlanningTarget {
   key: PlanningBucketKey
@@ -41,6 +39,12 @@ export interface PlanningSettings {
   monthly_contribution: number
   liabilities: PlanningLiability[]
   cashflow_items: PlanningCashflowItem[]
+  /**
+   * Holdings the owner cannot or will not trade, such as a pension. They count
+   * toward net worth and are left out of allocation, concentration and
+   * rebalancing.
+   */
+  locked_symbols: string[]
 }
 
 export interface AllocationRow extends PlanningTarget {
@@ -50,7 +54,6 @@ export interface AllocationRow extends PlanningTarget {
   drift_pct: number
   action_value: number
   action: 'buy' | 'sell' | 'hold'
-  severity: PlanningSeverity
 }
 
 export interface PlanningGoal {
@@ -59,7 +62,7 @@ export interface PlanningGoal {
   current_value: number
   target_value: number
   progress_pct: number
-  status: 'on_track' | 'behind' | 'complete' | 'not_available'
+  reached: boolean
   note: string
 }
 
@@ -67,7 +70,6 @@ export interface ConcentrationSummary {
   top_position: {
     symbol: string
     allocation_pct: number
-    severity: PlanningSeverity
   } | null
   positions_over_10_pct: number
   positions_over_20_pct: number
@@ -88,21 +90,26 @@ export interface CashflowSummary {
   savings_rate_pct: number | null
 }
 
+export interface LockedHolding {
+  symbol: string
+  name: string
+  value: number
+}
+
 export interface PlanningSummary {
   base_currency: string
   net_worth_total: number | null
   net_worth_adjusted: number | null
+  /**
+   * Net worth less the locked holdings. Allocation rows and concentration are
+   * percentages of this, not of net worth.
+   */
+  investable_total: number | null
+  locked: { total: number, holdings: LockedHolding[] }
   cash_total: number
   positions_value: number
   data_quality: 'ok' | 'partial'
-  assumptions: {
-    monthly_expenses: number
-    emergency_fund_months: number
-    monthly_contribution: number
-  }
-  target_model: PlanningTarget[]
   allocation_rows: AllocationRow[]
-  rebalance_actions: AllocationRow[]
   goals: PlanningGoal[]
   concentration: ConcentrationSummary
   liabilities: LiabilitiesSummary
@@ -128,6 +135,9 @@ export const DEFAULT_TARGET_MODEL: PlanningTarget[] = [
   { key: 'bond', label: 'Bonds', target_pct: 5 },
 ]
 
+/** Ghostfolio's manual symbol for the KWSP/EPF pension. */
+export const DEFAULT_LOCKED_SYMBOLS = ['GF_KWSP']
+
 export const DEFAULT_PLANNING_SETTINGS: PlanningSettings = {
   target_model: DEFAULT_TARGET_MODEL,
   monthly_expenses: 0,
@@ -135,6 +145,7 @@ export const DEFAULT_PLANNING_SETTINGS: PlanningSettings = {
   monthly_contribution: 0,
   liabilities: [],
   cashflow_items: [],
+  locked_symbols: DEFAULT_LOCKED_SYMBOLS,
 }
 
 const TARGET_KEYS: PlanningBucketKey[] = ['cash', 'equity', 'bond', 'crypto', 'real_estate', 'commodity', 'other']
@@ -226,6 +237,12 @@ function normalizeCashflowItems(input: unknown): PlanningCashflowItem[] {
   return rows
 }
 
+/** An explicit empty list means the owner unlocked everything; only a missing key takes the default. */
+function normalizeLockedSymbols(input: unknown): string[] {
+  if (!Array.isArray(input)) return [...DEFAULT_LOCKED_SYMBOLS]
+  return [...new Set(input.filter((v): v is string => typeof v === 'string').map(v => v.trim()).filter(Boolean))]
+}
+
 export function normalizePlanningSettings(input: unknown = {}): PlanningSettings {
   const rec = isRecord(input) ? input : {}
   const rawTargets = Array.isArray(rec.target_model) ? rec.target_model : []
@@ -267,6 +284,7 @@ export function normalizePlanningSettings(input: unknown = {}): PlanningSettings
     monthly_contribution: Math.max(0, roundMoney(finiteNumber(rec.monthly_contribution, DEFAULT_PLANNING_SETTINGS.monthly_contribution))),
     liabilities: normalizeLiabilities(rec.liabilities),
     cashflow_items: normalizeCashflowItems(rec.cashflow_items),
+    locked_symbols: normalizeLockedSymbols(rec.locked_symbols),
   }
 }
 
@@ -285,20 +303,7 @@ export function normalizeAssetClass(value: string | null | undefined): PlanningB
   return 'other'
 }
 
-function driftSeverity(absDriftPct: number): PlanningSeverity {
-  if (absDriftPct >= 10) return 'alert'
-  if (absDriftPct >= 3) return 'watch'
-  return 'ok'
-}
-
-function concentrationSeverity(allocationPct: number): PlanningSeverity {
-  if (allocationPct >= 20) return 'critical'
-  if (allocationPct >= 10) return 'alert'
-  if (allocationPct >= 5) return 'watch'
-  return 'ok'
-}
-
-function currentValuesByBucket(portfolio: FullPortfolio): Record<PlanningBucketKey, number> {
+function currentValuesByBucket(portfolio: FullPortfolio, locked: ReadonlySet<string>): Record<PlanningBucketKey, number> {
   // Ghostfolio lists cash as LIQUIDITY holdings, and those holdings already
   // add up to net worth. Adding cash_total on top made the rows sum past
   // 100%, so cash_total is used only when no holding is cash.
@@ -314,19 +319,12 @@ function currentValuesByBucket(portfolio: FullPortfolio): Record<PlanningBucketK
   }
 
   for (const p of portfolio.positions) {
+    if (locked.has(p.symbol)) continue
     const bucket = normalizeAssetClass(p.asset_class)
     values[bucket] += Math.max(0, p.market_value || 0)
   }
 
   return values
-}
-
-function positionAllocationPct(position: FullPortfolioPosition, netWorth: number): number {
-  if (Number.isFinite(position.allocation_pct) && position.allocation_pct > 0) {
-    return position.allocation_pct
-  }
-  if (netWorth <= 0) return 0
-  return (position.market_value / netWorth) * 100
 }
 
 function buildLiabilitiesSummary(settings: PlanningSettings): LiabilitiesSummary {
@@ -376,30 +374,32 @@ function buildCashflowSummary(settings: PlanningSettings): CashflowSummary {
 
 export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: unknown): PlanningSummary {
   const settings = normalizePlanningSettings(inputSettings)
-  const netWorth = portfolio.net_worth_total ?? null
+  const netWorth = portfolio.net_worth_total == null ? null : roundMoney(portfolio.net_worth_total)
   const baseCurrency = portfolio.net_worth_currency || 'MYR'
   const liabilities = buildLiabilitiesSummary(settings)
   const cashflow = buildCashflowSummary(settings)
   const cashTotal = roundMoney(Math.max(0, portfolio.cash_total ?? 0))
   const positionsValue = roundMoney(Math.max(0, portfolio.positions_value ?? 0))
   const netWorthAdjusted = netWorth == null ? null : roundMoney(netWorth - liabilities.total_balance)
+  const lockedSymbols = new Set(settings.locked_symbols)
+  const lockedHoldings = portfolio.positions
+    .filter(p => lockedSymbols.has(p.symbol) && p.market_value > 0)
+    .map((p): LockedHolding => ({ symbol: p.symbol, name: p.name, value: roundMoney(p.market_value) }))
+    .sort((a, b) => b.value - a.value)
+  const locked = { total: roundMoney(lockedHoldings.reduce((sum, h) => sum + h.value, 0)), holdings: lockedHoldings }
+  const investable = netWorth == null ? null : roundMoney(netWorth - locked.total)
 
-  if (netWorth == null || netWorth <= 0) {
+  if (investable == null || investable <= 0) {
     return {
       base_currency: baseCurrency,
       net_worth_total: netWorth,
       net_worth_adjusted: netWorthAdjusted,
+      investable_total: investable,
+      locked,
       cash_total: cashTotal,
       positions_value: positionsValue,
       data_quality: 'partial',
-      assumptions: {
-        monthly_expenses: settings.monthly_expenses,
-        emergency_fund_months: settings.emergency_fund_months,
-        monthly_contribution: settings.monthly_contribution,
-      },
-      target_model: settings.target_model,
       allocation_rows: [],
-      rebalance_actions: [],
       goals: [],
       concentration: {
         top_position: null,
@@ -411,9 +411,9 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
     }
   }
 
-  const currentValues = currentValuesByBucket(portfolio)
+  const currentValues = currentValuesByBucket(portfolio, lockedSymbols)
   // Every bucket the user targets, plus every bucket they actually hold.
-  // Net worth counts all seven buckets, so a held bucket with no target row
+  // Investable assets count all seven buckets, so a held bucket with no target row
   // (say crypto at 30%) would otherwise make the rows sum to 70% and tell
   // the user to buy equity into a fully invested portfolio.
   const targeted = new Set(settings.target_model.map(t => t.key))
@@ -422,8 +422,8 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
     .map((key): PlanningTarget => ({ key, label: BUCKET_LABELS[key], target_pct: 0 }))
   const allocationRows = [...settings.target_model, ...heldUntargeted].map((target): AllocationRow => {
     const currentValue = roundMoney(currentValues[target.key] ?? 0)
-    const targetValue = roundMoney(netWorth * target.target_pct / 100)
-    const actualPct = roundPct(currentValue / netWorth * 100)
+    const targetValue = roundMoney(investable * target.target_pct / 100)
+    const actualPct = roundPct(currentValue / investable * 100)
     const driftPct = roundPct(actualPct - target.target_pct)
     const actionValue = roundMoney(targetValue - currentValue)
     const action: AllocationRow['action'] = Math.abs(actionValue) < 1
@@ -439,13 +439,8 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
       drift_pct: driftPct,
       action_value: actionValue,
       action,
-      severity: driftSeverity(Math.abs(driftPct)),
     }
   })
-
-  const rebalanceActions = allocationRows
-    .filter(row => row.action !== 'hold' && row.severity !== 'ok')
-    .sort((a, b) => Math.abs(b.action_value) - Math.abs(a.action_value))
 
   const cashTarget = allocationRows.find(row => row.key === 'cash')
   const emergencyFundTarget = settings.monthly_expenses > 0
@@ -458,18 +453,14 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
   const cashProgressPct = cashReserveTargetValue > 0
     ? Math.min(100, roundPct((cashTarget?.current_value ?? 0) / cashReserveTargetValue * 100))
     : 0
-  const contributionProgressPct = cashReserveTargetValue > 0
-    ? Math.min(100, roundPct(settings.monthly_contribution / cashReserveTargetValue * 100))
-    : 0
 
   const sortedPositions = portfolio.positions
-    .filter(p => normalizeAssetClass(p.asset_class) !== 'cash')
-    .map(p => ({ symbol: p.symbol, allocation_pct: roundPct(positionAllocationPct(p, netWorth)) }))
+    .filter(p => normalizeAssetClass(p.asset_class) !== 'cash' && !lockedSymbols.has(p.symbol))
+    .map(p => ({ symbol: p.symbol, allocation_pct: roundPct(p.market_value / investable * 100) }))
     .sort((a, b) => b.allocation_pct - a.allocation_pct)
   const top = sortedPositions[0] ?? null
   const positionsOver10 = sortedPositions.filter(p => p.allocation_pct >= 10).length
   const positionsOver20 = sortedPositions.filter(p => p.allocation_pct >= 20).length
-  const concentrationOk = positionsOver20 === 0
   const debtLoadGoal: PlanningGoal | null = liabilities.total_balance > 0
     ? {
         key: 'debt_load',
@@ -477,7 +468,7 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
         current_value: liabilities.total_balance,
         target_value: 0,
         progress_pct: 0,
-        status: 'behind',
+        reached: false,
         note: liabilities.weighted_interest_rate_pct == null
           ? 'Track liabilities to see debt-adjusted net worth.'
           : `Debt balance is weighted at ${liabilities.weighted_interest_rate_pct.toFixed(2)}% interest.`,
@@ -488,17 +479,12 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
     base_currency: baseCurrency,
     net_worth_total: netWorth,
     net_worth_adjusted: netWorthAdjusted,
+    investable_total: investable,
+    locked,
     cash_total: cashTotal,
     positions_value: positionsValue,
     data_quality: portfolio.ghostfolio_status === 'ok' ? 'ok' : 'partial',
-    assumptions: {
-      monthly_expenses: settings.monthly_expenses,
-      emergency_fund_months: settings.emergency_fund_months,
-      monthly_contribution: settings.monthly_contribution,
-    },
-    target_model: settings.target_model,
     allocation_rows: allocationRows,
-    rebalance_actions: rebalanceActions,
     goals: [
       {
         key: 'cash_reserve',
@@ -506,42 +492,16 @@ export function buildPlanningSummary(portfolio: FullPortfolio, inputSettings?: u
         current_value: cashTarget?.current_value ?? 0,
         target_value: cashReserveTargetValue,
         progress_pct: cashProgressPct,
-        status: cashProgressPct >= 100 ? 'complete' : 'behind',
+        reached: cashProgressPct >= 100,
         note: cashProgressPct >= 100
           ? `Cash meets the ${cashReserveLabel} reserve target.`
           : `Cash is below the ${cashReserveLabel} reserve target.`,
-      },
-      {
-        key: 'monthly_contribution',
-        label: 'Monthly Contribution',
-        current_value: settings.monthly_contribution,
-        target_value: cashReserveTargetValue,
-        progress_pct: contributionProgressPct,
-        status: settings.monthly_contribution > 0 ? 'on_track' : 'behind',
-        note: settings.monthly_contribution > 0
-          ? 'Monthly contribution assumption is set for planning projections.'
-          : 'Set a monthly contribution to project progress against goals.',
-      },
-      {
-        key: 'concentration',
-        label: 'Concentration Control',
-        current_value: positionsOver20,
-        target_value: 0,
-        progress_pct: concentrationOk ? 100 : 0,
-        status: concentrationOk ? 'complete' : 'behind',
-        note: concentrationOk
-          ? 'No single position is above the 20% critical threshold.'
-          : `${positionsOver20} position${positionsOver20 === 1 ? '' : 's'} above the 20% critical threshold.`,
       },
       ...(debtLoadGoal ? [debtLoadGoal] : []),
     ],
     concentration: {
       top_position: top
-        ? {
-            symbol: top.symbol,
-            allocation_pct: top.allocation_pct,
-            severity: concentrationSeverity(top.allocation_pct),
-          }
+        ? { symbol: top.symbol, allocation_pct: top.allocation_pct }
         : null,
       positions_over_10_pct: positionsOver10,
       positions_over_20_pct: positionsOver20,

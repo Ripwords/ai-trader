@@ -9,7 +9,7 @@ import type { PlanningSettings, PlanningSnapshot, PlanningSummary } from '../../
 import type { CaptureResult, PortfolioPerformance } from '../../../server/lib/portfolio-history'
 import { captureDailySnapshot } from '../../../composables/useDailySnapshotCapture'
 import { apiErrorMessage } from '~/lib/api-error'
-import { PORTFOLIO_TABS, attentionItems, keyFigures, parseTab, type PortfolioTab } from '~/utils/portfolio-view'
+import { PORTFOLIO_TABS, attentionItems, keyFigures, lockableHoldings, parseTab, type PortfolioTab } from '~/utils/portfolio-view'
 
 useHead({ title: 'portfolio' })
 
@@ -189,7 +189,7 @@ async function savePlanningSettings(draft: PlanningSettings) {
               </div>
               <PageState v-if="planningError" kind="error" message="plan failed to load" @retry="refreshPlanning()" />
               <PageState v-else-if="!planning && planningPending" kind="loading" message="checking your plan…" />
-              <p v-else-if="attention.length === 0" class="font-mono text-xs text-[var(--paper-3)]">nothing. allocation, concentration and goals are on track.</p>
+              <p v-else-if="attention.length === 0" class="font-mono text-sm text-[var(--paper-3)]">nothing. allocation and goals are on track.</p>
               <ul v-else>
                 <li v-for="item in attention" :key="item.key" class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2.5 border-b hairline last:border-0">
                   <span class="text-sm text-[var(--paper-0)]">{{ item.label }}</span>
@@ -238,13 +238,12 @@ async function savePlanningSettings(draft: PlanningSettings) {
               <StatTile
                 label="its weight"
                 :value="`${planning.concentration.top_position.allocation_pct.toFixed(1)}%`"
-                :tone="planning.concentration.top_position.severity === 'ok' ? 'neutral' : planning.concentration.top_position.severity === 'critical' ? 'down' : 'accent'"
+                sub="of investable assets"
               />
               <StatTile
                 label="positions over 20%"
                 :value="String(planning.concentration.positions_over_20_pct)"
                 :sub="`${planning.concentration.positions_over_10_pct} over 10%`"
-                :tone="planning.concentration.positions_over_20_pct > 0 ? 'down' : 'neutral'"
               />
             </section>
             <PortfolioCorrelationMatrix
@@ -260,6 +259,7 @@ async function savePlanningSettings(draft: PlanningSettings) {
     <PortfolioPlanEditor
       v-model:open="editorOpen"
       :settings="planningSettings ?? null"
+      :holdings="data ? lockableHoldings(data) : []"
       :saving="settingsSaving"
       :error="settingsError"
       @save="savePlanningSettings"

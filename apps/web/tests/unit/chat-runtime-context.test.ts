@@ -48,7 +48,7 @@ describe('buildSystemPrompt — editable body plus runtime block', () => {
   })
 
   it('omits the recall heading when there is no recall', () => {
-    expect(buildSystemPrompt('ok')).not.toContain('RECENT RESEARCH RUNS (for tickers')
+    expect(buildSystemPrompt('ok')).not.toContain('RECENT RESEARCH RUNS (the latest')
   })
 })
 

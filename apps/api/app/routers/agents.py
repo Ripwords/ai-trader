@@ -28,7 +28,7 @@ from typing import Any, AsyncIterator
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.schemas.agents import BacktestRequest, RunRequest
+from app.schemas.agents import BacktestRequest, RunRequest, owner_context_from_config
 from app.services.agents import backtest as backtest_mod
 from app.services.agents import graph as graph_mod
 from app.services.agents import llm_config
@@ -227,6 +227,7 @@ async def run_agents(
                 response_language=body.response_language,
                 selected_analysts=body.selected_analysts,
                 company_name=company_name,
+                owner_context=body.owner_context,
                 checkpointer=checkpointer,
             )
             config = {
@@ -468,6 +469,7 @@ async def resume_run(
                 response_language=cfg.get("response_language", "en-US"),
                 selected_analysts=cfg.get("selected_analysts"),
                 company_name=cfg.get("company_name"),
+                owner_context=owner_context_from_config(cfg.get("owner_context")),
                 checkpointer=getattr(request.app.state, "checkpointer", None),
             )
             async for chunk in graph_mod.resume_graph(

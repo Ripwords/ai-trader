@@ -13,6 +13,7 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 - Ask `any news on NVDA?` → Tavily-powered news cards.
 - Ask `show me my portfolio` → real positions + cash from your paper or live moomoo account; Ghostfolio MCP can add tracker/reconciliation context when configured.
 - Ask for a full ticker analysis → TradingAgents runs analysts, bull/bear debate, risk review, and a portfolio-manager verdict.
+- Ask `should I buy NVDA?` or `which of these should I add to?` → before the assistant recommends buying or adding to a stock, it gets a debate verdict for that ticker without being asked (see [Debate before a buy](#debate-before-a-buy)).
 - Ask `notify me when NVDA hits 150` or `remind me to check NVDA earnings on Friday 9am` → an email and a push notification when it fires (see [Notifications & reminders](#notifications--reminders)).
 - Manage paper algo strategies from `/algo`; scheduler order placement is paper-only. **go live (paper)** stays disabled until the strategy is saved and its latest backtest clears the blocking checks, and the reason is printed under the button. Saving a change to anything but the name discards the backtest on screen, because it was run on the old code or settings; run a new one before going live. The gate is in the page only: the api does not check backtests. A failed go-live, stop, or kill-switch request shows its error next to the control. Passing checks fold into one "all N checks passed" line. Below 1024px the strategy assistant opens from the **chat** button as a side panel (Esc closes it); order ids sit under **technical details** in the signals table.
 
@@ -64,18 +65,31 @@ Settings (`/settings`, also reachable from the `model · …` badge in the heade
 
 Behind a reverse proxy, long chat and research streams can sit quiet between tokens. nginx drops a proxied response after 60 s of silence by default. Raising `proxy_read_timeout` (for example to `600s`) on the location that serves the web app is optional but avoids cut-off replies.
 
-Settings has three tabs: **models** (the providers and models above), **notifications**, and **prompts**. The open tab is kept in the URL (`/settings?tab=prompts`).
+Settings has four tabs: **models** (the providers and models above), **notifications**, **memory**, and **prompts**. The open tab is kept in the URL (`/settings?tab=prompts`).
+
+## Chat memory
+
+The assistant keeps a short list of facts about you that every chat thread shares, so a new conversation does not re-raise what you have already settled. Settings → **memory** shows the list.
+
+- **What it is for.** Standing preferences, intentional decisions, risks you already accept, constraints and goals. Example: "The owner's holdings are mostly USD against a MYR base currency; this is intentional and needs no warning."
+- **How the assistant uses it.** Every chat message gets the full list. A risk recorded as intentional or already known is not flagged again and gets no caveat, even where the chat prompt says to flag it. The assistant raises it again only if you ask, or if the live data shows it has materially changed since. The fact still counts in the numbers: position sizing, currency arithmetic and the trade-safety rules are unchanged.
+- **Learned from chat.** After each reply finishes, the quick model reads your message and decides whether it states something lasting. It saves only what you said. The assistant's own words and tool output are never a source. It can add a memory or rewrite one that your message corrects; it never deletes one. Questions, one-off requests, prices and position sizes are not saved. A reply you stop, and a slash command, save nothing.
+- **Added by you.** **add memory** saves a fact in your own words. The pencil edits one and the bin deletes it after a confirmation. Each row says whether it was **added by you** or **learned from chat**. Editing a learned memory makes it yours.
+- **When changes apply.** The next chat message uses the saved list. A memory learned from a message is available from the message after it.
+- **Limits.** At most 30 memories of at most 240 characters each. When the list is full, **add memory** is disabled and the assistant only rewrites existing memories. Text identical to a saved memory is rejected.
+- **Cost and failures.** Each chat message makes one extra quick-model call, listed on `/usage` under the source `chat-memory`. It runs after the reply and never delays it. If the call fails, nothing is saved from that message and the server logs a warning. If the list cannot be read within 2 s, the reply goes ahead without it.
+- **The prompt behind it.** Settings → prompts → **Chat memory** is the instruction that decides what is worth saving.
 
 ## Editable prompts
 
 Settings → **prompts** lists the instructions each model gets, grouped as Chat, Research, News, Algo and Agents debate. Click a row to open its text. A **modified** badge marks a prompt you have edited.
 
-- **What you can edit.** Chat: the chat system prompt, the moomoo rules and the chat titles prompt. Research: the risk report. News: the search angles. Algo: the strategy assistant. Agents debate: the 13 TradingAgents node prompts (the four analysts, bull and bear researchers, research manager, trader system and request, the three risk analysts, risk manager) and the confidence judge.
+- **What you can edit.** Chat: the chat system prompt, the moomoo rules, the chat titles prompt and the chat memory prompt. Research: the risk report. News: the search angles. Algo: the strategy assistant. Agents debate: the 13 TradingAgents node prompts (the four analysts, bull and bear researchers, research manager, trader system and request, the three risk analysts, risk manager), the confidence judge and the owner mandate (see [Deciding for the owner](#deciding-for-the-owner)).
 - **When edits apply.** The next chat message, report or debate run uses the saved text. A run already in progress keeps the text it started with.
-- **Defaults.** A prompt you have not edited follows the built-in default, so it picks up future changes to it. Saving text identical to the default clears the override. **reset to default** (shown only on a modified prompt) asks for confirmation, then deletes your text.
-- **What the chat prompt does not include.** The server appends a runtime block to the chat prompt on every turn, after your text: the current date and time in the timezone set under Settings → Notifications, the Ghostfolio status, recent research runs for the tickers you mention, and the slash-command directive. That block is not editable.
+- **Defaults.** A prompt you have not edited follows the built-in default, so it picks up future changes to it. A **modified** prompt keeps your text and does not pick them up: after an upgrade that changes a default (for example the chat prompt's reply style and debate-before-a-buy rules), reset the prompt or copy the new sections from the default shown in the editor. Saving text identical to the default clears the override. **reset to default** (shown only on a modified prompt) asks for confirmation, then deletes your text.
+- **What the chat prompt does not include.** The server appends a runtime block to the chat prompt on every turn, after your text: the current date and time in the timezone set under Settings → Notifications, the Ghostfolio status, the latest completed research run for each stock you mention that you have researched before (by ticker in any case, `$TICKER`, or company name; a ticker that is also an everyday word, such as NOW, counts only in capitals or as `$now`), your saved memories with the rule for using them (see [Chat memory](#chat-memory)), and the slash-command directive. That block is not editable.
 - **Placeholders (agents debate only).** Debate prompts are Python format templates. The editor shows the `{placeholders}` the default uses as chips; your text may use any of them and no others. Any other literal brace must be doubled (`{{` or `}}`). Unknown placeholders and stray braces are rejected when you save, with the reason shown under the text.
-- **Contract lines.** The risk manager's output must contain `FINAL TRANSACTION PROPOSAL` and the confidence judge's must ask for a `CONFIDENCE:` line, because the debate parses them. Removing that wording shows a warning but does not block the save; the run may then fail to read a decision or a confidence score.
+- **Contract lines.** The risk manager's output must contain `FINAL TRANSACTION PROPOSAL`, the confidence judge's must ask for a `CONFIDENCE:` line and the owner mandate must ask for an `OWNER VERDICT` line, because the debate parses them. Removing that wording shows a warning but does not block the save; the run may then fail to read a decision, a confidence score or the owner verdict.
 - **Limits.** A prompt cannot be empty or longer than 50,000 characters.
 - **If the api is down.** The debate prompts' defaults come from the api service. While it is unreachable, the Agents debate group shows an error with a retry and its rows cannot be opened; the other groups still work. If a debate run cannot read the overrides, it logs a warning and uses the defaults.
 
@@ -196,10 +210,10 @@ Ghostfolio mirrors the moomoo account, so the two sources overlap on purpose:
 
 | Tab | What it shows |
 |---|---|
-| **overview** | A "needs attention" list (rebalance actions, a position over the concentration limit, goals that are behind) and the performance card with total return, max drawdown and 1/7/30-day change. |
+| **overview** | A "needs attention" list (buckets 3 points or more off target, goals not reached) and the performance card with total return, max drawdown and 1/7/30-day change. |
 | **holdings** | One sortable positions table. When more than one source is connected, a switch picks all accounts, moomoo live or moomoo paper. Closed positions and empty accounts are folded behind a "show N" toggle. moomoo quantities keep their fractional shares (10.0212 NVDA, not 10). Below 640px the table becomes a card list with a sort picker. Price alerts and reminders sit underneath, each with when the server last ran its check. |
-| **plan** | Adjusted net worth, liabilities, monthly surplus, savings rate; allocation against target with the buy/sell amount per bucket (the cash bucket is the `LIQUIDITY` holdings when Ghostfolio lists any, else the account cash total, so the rows add up to 100%; cash is never flagged as a concentrated position); goals; the last five monthly snapshots and a "save today" button. |
-| **risk** | Largest position and its weight, positions over 20% / 10%, and the correlation matrix. The matrix and efficient frontier cover holdings with a Yahoo price history. Cash (Ghostfolio names it by currency, so `USD` would otherwise be priced as the leveraged semiconductor ETF of that ticker) and Ghostfolio manual assets are left out and named in the footnote. Without Ghostfolio, the weights come from the moomoo live account; paper positions are used only when there is no live one. |
+| **plan** | Adjusted net worth, liabilities, monthly surplus, savings rate; allocation against target with the buy/sell amount per bucket (the cash bucket is the `LIQUIDITY` holdings when Ghostfolio lists any, else the account cash total, so the rows add up to 100%; cash is never counted as a position in the risk tab's figures); a line naming the locked holdings and their total, when there are any; goals; the last five monthly snapshots and a "save today" button. |
+| **risk** | Largest position and its weight in investable assets, positions over 20% / 10%, and the correlation matrix. These are stated as plain figures: a large position is not coloured, is not a goal and is not listed under "needs attention". Locked holdings are left out of these figures. The matrix and efficient frontier cover holdings with a Yahoo price history. Cash (Ghostfolio names it by currency, so `USD` would otherwise be priced as the leveraged semiconductor ETF of that ticker) and Ghostfolio manual assets are left out and named in the footnote. Without Ghostfolio, the weights come from the moomoo live account; paper positions are used only when there is no live one. |
 
 **refresh** in the page header refetches the portfolio and the correlation view instead of serving the cached copy.
 
@@ -207,11 +221,26 @@ Ghostfolio mirrors the moomoo account, so the two sources overlap on purpose:
 
 The **plan** tab starts with an "ask the assistant" panel. Each question in it opens the chat with that question in the message box, so you can edit it before you send it. Any page can do the same with a link to `/?ask=<question>`. In the chat you can:
 
-- **Check the plan.** "Am I on track?" reads the plan tab's figures (`planning_get`): allocation against target, goals, emergency fund, debts and cashflow.
-- **Change the plan.** "Set my target to 70% equity, 20% bonds, 10% cash", "my expenses are now RM 4,000 a month" or "add my car loan, RM 20,000 at 3%" saves the change at once (`planning_update`). The reply lists each change as before → after. Say "undo that" to put the old values back. A target model that does not total 100% is refused and nothing is saved. To get a target model suggested, ask the assistant to tailor one: it asks about your situation, proposes a split, and saves it only after you agree.
-- **Plan trades.** "What should I buy this month?" spends your monthly contribution (or an amount you give) on the buckets below target and sells nothing. "Full rebalance plan" buys and sells every bucket to its target and warns that sales can realise gains. Each bucket's amount is split by size over its three largest holdings, so a small amount is not cut into slices smaller than a share; ask for more or fewer. A bucket you hold nothing in is shown without a ticker, and the assistant suggests candidates. A share count is shown only for holdings priced in your base currency. The assistant places none of these trades. To trade, ask for one order at a time; orders go through the normal trading tools and their confirmations.
+- **Check the plan.** "Am I on track?" reads the plan tab's figures (`planning_get`): allocation against target, the locked holdings, goals, emergency fund, debts and cashflow. Monthly expenses or a monthly contribution you have not entered are reported as not set, so the assistant asks for them or leaves them out instead of treating a blank as a missed goal. The monthly contribution is an amount you plan to invest; it is not listed as a goal.
+- **Change the plan.** "Set my target to 70% equity, 20% bonds, 10% cash", "my expenses are now RM 4,000 a month", "add my car loan, RM 20,000 at 3%" or "lock my ASB fund" saves the change at once (`planning_update`). The reply lists each change as before → after. Say "undo that" to put the old values back. A target model that does not total 100% is refused and nothing is saved. To get a target model suggested, ask the assistant to tailor one: it asks about your situation, proposes a split, and saves it only after you agree.
+- **Plan trades.** "What should I buy this month?" spends your monthly contribution (or an amount you give) on the buckets below target and sells nothing. "Full rebalance plan" buys and sells every bucket to its target and warns that sales can realise gains. The assistant places none of these trades.
 
-**edit plan** (page header, or the plan tab) opens a side panel for targets, cash reserve, debts and monthly cashflow. Targets must add up to 100% before **save plan** is enabled; **scale to 100%** rescales them proportionally. Cancel or Esc discards the edits.
+  - **What it proposes.** Only holdings in your live moomoo account. A locked holding, or a fund you track only in Ghostfolio, is never proposed, because no order can reach it. Each bucket's amount is split by size over its three largest broker holdings and rounded down to whole lots; ask for more or fewer. You can also name the symbols to use ("put this month's money into VOO and BND"). The bucket's amount is then split equally over the ones you named, and any the broker cannot trade are reported with the reason. A symbol the broker account does not hold needs its bucket, which the assistant supplies.
+  - **Whole board lots.** Each trade gives the share count, the price and its currency, the exchange rate to your base currency, and what those shares come to in both currencies. The share count is always a whole number of board lots: single shares for US listings, lots of 100 on Bursa Malaysia (`.KL`), where an odd lot goes to a separate, thin market. A sale leaves an odd lot you already hold where it is. Money that buys no whole lot is reported as unallocated; it is not spread into fractions.
+  - **Leftover money.** Rounding down leaves money over. It buys one more lot at a time, first of whichever of those largest holdings is furthest behind its part of the split, then of the bucket's next-largest holdings, until what remains is less than any lot costs. One of the largest holdings that still gets no lot is reported with the cost of one lot. The leftover stays in its own bucket, and money beyond what the buckets are short of their targets is not spent, so the plan never buys past a target. For example, RM 2,000 over a book led by NVDA, MSFT and TSM buys one TSM and one NVDA, then one PLTR with the remainder, and leaves about RM 3; MSFT, at RM 2,068 a share, is reported as out of reach. The plan states this rule with its trades.
+  - **Markets without a known lot size.** Hong Kong and Singapore set the board lot per stock, and the app has no source for it. A holding or a named symbol on any market other than the US and Bursa Malaysia is left out of the trades and reported as `lot_size_unknown`. Check its lot in the moomoo app and size that order yourself.
+  - **Currency.** The plan lists what the buys come to in each currency next to the cash your live broker account holds in that currency, so you can see how much to convert at the time of purchase. It does not assume the money is already converted.
+  - **Data age.** The plan states when the holdings and prices were read. Prices are the tracker's and Yahoo's, which are delayed; the exchange rate is cached for up to an hour. Check the live quote before placing an order. If moomoo cannot be reached, the plan proposes nothing and says the broker is unavailable.
+
+  To trade, ask for one order at a time; orders go through the normal trading tools and their confirmations.
+
+**edit plan** (page header, or the plan tab) opens a side panel for targets, locked holdings, cash reserve, debts and monthly cashflow. Targets must add up to 100% before **save plan** is enabled; **scale to 100%** rescales them proportionally. Cancel or Esc discards the edits.
+
+#### Locked holdings
+
+A locked holding is one you cannot or will not trade, such as a pension. It still counts toward net worth. The plan leaves it out of everything else: allocation percentages and targets, the largest-position and over-20% figures, and rebalance trades are all worked out on your investable assets, which is net worth less the locked holdings. The plan tab shows the locked total once, under the allocation rows.
+
+The KWSP/EPF pension (Ghostfolio symbol `GF_KWSP`) is locked by default. To change the list, open **edit plan** and pick holdings under **locked holdings**, or tell the assistant ("lock my ASB fund", "unlock KWSP"). Emptying the list counts every holding again.
 
 ### Chat tool catalogue
 
@@ -226,7 +255,7 @@ Type `/tools` in chat to see every tool the assistant can use, grouped by purpos
 | **Trading** | to place, change or cancel an order. Paper by default; a live order needs the exact confirmation phrase the assistant gives you. |
 | **Market data** | a price now, a chart, or the order book for one symbol. |
 | **Research** | to dig into one company: what its last earnings really said (`earnings_release`, `earnings_surprise`, `earnings_call_transcript`, `estimate_revisions`), DCF valuation, cheapest names on your watchlist, technicals, a full research memo, a sharp first-principles question, or whether your thesis still holds. |
-| **Agent research runs** | a rated verdict from the multi-agent pipeline. Watch it here ("run the agents on NVDA") or start it in the background and get notified ("research AMD in the background"). Ask "is it done?" or "what did the agents conclude?" afterwards. |
+| **Agent research runs** | a rated verdict from the multi-agent pipeline. Watch it here ("run the agents on NVDA") or start it in the background and get notified ("research AMD in the background"). Ask "is it done?" or "what did the agents conclude?" afterwards. The assistant also runs one on its own before it recommends a buy. |
 | **News & web** | why a stock moved (ticker plus macro and peer news), news on a theme or sector, or a general web search. |
 | **Watchlist** | to see, add or remove watchlist symbols. |
 | **Alerts & reminders** | a price alert (above, below, or a big daily move) or a timed reminder, delivered by email and push. |
@@ -238,9 +267,37 @@ Slash commands run a specific tool directly: `/investment-research <symbol>`, `/
 
 The guide's text lives in `apps/web/server/llm/tool-catalog.ts`. `tests/unit/tool-catalog.test.ts` and the typecheck fail when a tool has no catalog entry, so a new tool cannot ship without its "use it when" line.
 
+#### Debate before a buy
+
+Before the assistant tells you to buy or add to a specific stock, or sizes a new buy, it backs the call with an agents debate verdict for that ticker. You do not have to ask for a deep dive.
+
+- **What triggers it.** An actionable recommendation: "buy X", "add to X", naming X as the pick, or sizing a buy. A price, a valuation, a chart, news, a screen ranking, a hold or sell call, a rebalance plan's bucket split, and broad index, bond or money-market funds do not. If you have already decided and ask for the order to be placed, it places the order (after the usual confirmation) with no debate.
+- **Reuse.** The assistant looks for an existing run before it starts a debate. A completed run for the ticker that finished 7 days ago or less is reused and quoted with its age. An older or failed run, or one that predates the company's latest earnings or material news, is replaced by a new debate.
+- **Cost and time.** A debate takes minutes, not seconds, and costs many times a normal reply. Before it starts one, the assistant says so in one line, so you know why the reply is waiting. The assistant forms its view with the fast tools first and debates only when that view is buy or add. A screen never starts one debate per row: it shortlists, then debates only its top pick, one debate per turn. Other survivors are listed as "candidates, not debated". If the verdict rejects the buy, it says so and offers to debate the next candidate.
+- **What you see.** The debate card runs in the reply and lists each step as it starts. When the run ends, the card shows the rating, the rating the agents reached first if the valuation capped it ("capped from buy") with the cap's reason, the bull case and the bear case, the Risk Judge's rationale, and a link to the run page. The percentage beside the rating is the confidence judge's probability that the call holds over the next 7 trading days (a buy beats SPY by more than 0.5 percentage points, a hold stays within 1 point of SPY, a reduce or sell trails by more than 0.5). It is not conviction in the long-term thesis. A run whose judge returned no number shows "no confidence score". When the run ruled on your own position, the card also shows that verdict as "For your position" with Add, Hold, Trim or Do not add. A long rationale is shortened to its key points on the card; the run page has the full text. The recommendation states the rating and its one-line reason, a cap and why when there was one, the bull and the bear case in a line each, the percentage named as a 7-trading-day probability, and a link to the run. If the verdict is hold, reduce or sell where the assistant leaned buy, the reply says so at the top and follows the verdict, or names what the debate missed and labels the call as against the debate.
+- **When the debate fails.** The reply says so, and either gives no recommendation or labels it "not debate-backed".
+- **What the assistant reads.** `agents_debate` and `research_get` return the same verdict for a run, built from what the run stored: the rating; the owner verdict (add, hold, trim or do not add for your own position) when the run was given your context; the pre-cap rating and the veto reason when the valuation capped it; the confidence, what it measures, and why it is missing when it is; the valuation; the bull case, the bear case and the risk analyst who dissented from the rating, each cut to the sentences that carry the most figures; the rationale cut the same way to about 1,500 characters. Each excerpt is the speaker's own argument, word for word. A sentence that restates an opponent ("The bull says…", a quoted claim) is left out, and a sentence that opens on "But", "So", "That" or the like is kept only with the sentence it answers. A speech written as plain paragraphs, with no headings or bullets, is cut to one unbroken passage instead of separate sentences. The verdict also carries the run's status and age in days; and the run page's address. Runs stored before the debates were recorded have no bull case, bear case or dissent. For those the verdict says so and gives the research manager's summary of both sides. `research_get` by symbol returns the latest completed run. A newer attempt that failed or is still running is reported beside it and does not replace it. The symbol matches with or without its market prefix (`AMZN` finds a run stored as `US.AMZN`).
+
+  The verdict's `valuation` has one of four states:
+
+  | `valuation.status` | Meaning | What it carries |
+  |---|---|---|
+  | `valued` | A DCF fair value exists. | Fair value, price, margin of safety, data quality |
+  | `multiples_only` | The DCF was skipped (for example, on negative free cash flow), so there is no fair value. The stock was still priced on multiples. | The run's reason, price, current P/E, P/B, P/S and P/FCF, and the stock's own historical multiples, where the run stored them |
+  | `discarded` | A DCF ran and its result was thrown out. | The reason, price, and the same multiples |
+  | `unavailable` | The valuation failed or was never stored. | The reason |
+
+  The assistant is told to report `multiples_only` and `discarded` as "no DCF fair value, and why", with the multiples, and not as an unvalued stock.
+
+These rules are instructions to the model in the chat system prompt and the tool descriptions, not a hard check in code, so a model can still miss one. If you have edited the chat system prompt, see **Defaults** under [Editable prompts](#editable-prompts).
+
+#### Reply style
+
+Replies lead with the answer and skip the preamble, the restated question, the list of tools used, repeated caveats and generic disclaimers. Numbers keep their units and currencies, and caveats that matter (currency basis, partial coverage, screen gaps, a failed debate) stay, stated once. Three or more comparable items come back as a table. Memos you ask for (`/investment-research`, `/dyp-ask`) keep their sections.
+
 #### Developer reference
 
-Tools are defined in `apps/web/server/llm/tools.ts` and the routing rules in `apps/web/server/llm/chat-context.ts`. A unit test (`tests/unit/chat-prompt-tool-names.test.ts`) fails when the prompt or a slash command names a tool that no longer exists.
+Tools are defined in `apps/web/server/llm/tools.ts`. The routing rules are the chat system prompt, whose default is `CHAT_SYSTEM_DEFAULT` in `apps/web/server/lib/prompts/defaults.ts`; `apps/web/server/llm/chat-context.ts` appends the runtime block to it. A unit test (`tests/unit/chat-prompt-tool-names.test.ts`) fails when the prompt or a slash command names a tool that no longer exists.
 
 | Group | Tools |
 |---|---|
@@ -261,7 +318,7 @@ Tools are defined in `apps/web/server/llm/tools.ts` and the routing rules in `ap
 - When OpenD is down, each api call to it makes one connection attempt (at most 20 s) and then fails with 502, or reports `reachable: false` for `/quote/state`. OpenD calls run off the event loop, so the other api routes keep answering.
 - The chat's chart (`market_kline`) and quote (`market_snapshot`) tools, and the risk report's price and chart, fall back to Yahoo's delayed data when moomoo refuses the symbol. That happens for markets your moomoo account has no quote permission for (Bursa Malaysia `MY.*` on this account), or while OpenD is down. Daily, weekly and monthly charts fall back; intraday charts (`1m`–`60m`) still fail. The chat reply says the data is delayed from Yahoo. The risk report's price header reads **yahoo · delayed** in place of **moomoo**, and shows the market's currency (`MYR` for `MY.*`, `HKD` for `HK.*`, and so on) rather than always `USD`. moomoo codes map to Yahoo symbols as `MY.1066` → `1066.KL`, `SG.` → `.SI`, `JP.` → `.T`, `AU.` → `.AX`, `CA.` → `.TO`. The web server's other Yahoo lookups (fundamentals, earnings, news) use the same mapping, so they now find those symbols too.
 - Valuations are computed in the currency the company reports in. When the quote trades in another currency (an HKD-listed company reporting in CNY) the price series and the market cap are converted at the current FX rate and the result says so (before, the market cap stayed in the trading currency, so HSBC showed a false "market cap mismatch" and P/FCF divided an HKD market cap by USD cash flow); the card labels prices with the ISO code.
-- The agent streams **NDJSON** chunks (`run-start`, `node-start`, `node-end`, `tool-call`, `tool-result`, `debate-round`, `risk-debate-turn`, `report`, `decision`, `synthesis`, `final-state`) which the chat + research UIs parse inline.
+- The agent streams **NDJSON** chunks (`run-start`, `node-start`, `node-end`, `tool-call`, `tool-result`, `debate-round`, `risk-debate-turn`, `report`, `valuation`, `decision`, `synthesis`, `final-state`) which the chat + research UIs parse inline.
 
 ### Long replies and runs survive the browser
 
@@ -269,11 +326,13 @@ Chat replies and research runs are generated on the server, apart from the page 
 
 - **Chat.** Reopening a chat while its reply is still generating replays the reply so far and follows it to the end. After a dropped connection the page waits until it is back online, then reattaches once. If that fails too, a card under the thread shows the error with **retry**. An error the server answers with (no model provider configured, a server error) is not a dropped connection: the card shows it with its HTTP status. A chat takes one reply at a time. Sending is blocked while a reply is generating, and a send from a second tab puts the text back in the box and follows the running reply. **Stop** ends the generation on the server and keeps the partial reply, marked stopped. Stop cannot recall a request already sent: a tool call that changes something (an order, an alert, a reminder, the watchlist, the kill switch) stopped mid-call says it may still have gone through, so check before retrying. It also works while the chat is still waiting for the first token; on a new chat the page then opens the thread the question was saved to. Stopping from one tab updates every other tab following the reply, and opening another chat stops following the old one. A reply that ended with an error or was stopped, a reply that finished without an answer (an empty completion, the model's output limit, a content filter, or the step limit reached on a tool call), or a question left without a reply (the web container restarted mid-reply) shows the same card, saying which, with **retry**. An error from the provider before the first token is saved with the thread, so a reload shows it too. Retrying does not save the question twice, and the retried reply replaces the failed one, so a reload shows the question once with the new reply. Deleting a chat stops its reply. Hovering a message shows **copy** (the reply's text, without reasoning or tool output), and the newest reply also has **retry**. **Edit** on one of your questions puts it back in the box; sending replaces that question and every reply after it, and a reload shows the edited thread. **Cancel** above the box keeps the thread as it was. A finished tool call folds into one line ("Fetched quote"); a failed one keeps its card and says why. The thread follows a streaming reply unless you scroll up. A new chat is named by the quick model from its first question (a few words, such as "AMZN Q3 cloud margins"), shown in History once the reply finishes and used as the push title; if no quick model answers, the question itself stays as the title. The naming prompt is editable in Settings → Prompts (**Chat titles**). To keep long chats cheap, each message sends the model the full text of the thread but tool results only from the previous reply; for older data it calls the tool again.
 - **Ghostfolio.** The chat waits at most 3 s for the Ghostfolio MCP server. If the server is down, the reply goes ahead without the `ghostfolio_*` tools, and the connection is retried after 60 s.
-- **Research.** Leaving or reloading `/research/<symbol>` does not stop a run. Reopening the page replays its events and follows the rest, and a run started from chat or another tab shows up the same way. A symbol has at most one running run. Starting another, from the page or from chat, follows the one already running instead. A dropped stream reconnects on its own, and so does a stream that goes silent for 45 s (the server pings every 15 s). After repeated failures the page shows **connection lost** with **reconnect**, separate from the run's own status. The api sends heartbeats during long silent steps, and a run whose upstream goes quiet for 90 s ends as failed rather than hanging. A run whose start cannot reach the api ends as failed. If the web or api restarts mid-run, the run ends as failed. **Cancel** stops a running run; a run that finished first keeps its result. If the cancel request fails, the error shows next to the button. **Resume** continues a failed or cancelled run from its last checkpoint with the same options, and its events continue the same timeline. The button is disabled while the resume request is pending, and a completed run cannot be resumed.
+- **Research.** Leaving or reloading `/research/<symbol>` does not stop a run. Reopening the page replays its events and follows the rest, and a run started from chat or another tab shows up the same way. While a run is running, the header shows the time elapsed and the step that last reported, with its own tool call. Once the run has ended, the header shows how long the run took ("9 min 46 s") and no activity line. A run that recorded no end time shows no duration. A symbol has at most one running run. Starting another, from the page or from chat, follows the one already running instead. A dropped stream reconnects on its own, and so does a stream that goes silent for 45 s (the server pings every 15 s). After repeated failures the page shows **connection lost** with **reconnect**, separate from the run's own status. The api sends heartbeats during long silent steps, and a run whose upstream goes quiet for 90 s ends as failed rather than hanging. A run whose start cannot reach the api ends as failed. If the web or api restarts mid-run, the run ends as failed. **Cancel** stops a running run; a run that finished first keeps its result. If the cancel request fails, the error shows next to the button. **Resume** continues a failed or cancelled run from its last checkpoint with the same options, and its events continue the same timeline. The button is disabled while the resume request is pending, and a completed run cannot be resumed.
 
 ### Research pipeline
 
 One `/research/<symbol>` run flows through the TradingAgents LangGraph: four analysts pull from their own data sources, two researchers debate, the trader proposes a transaction, three risk personas debate the proposal, the portfolio manager calls it, and the decision lands as either a paper or (gated) live order on moomoo.
+
+The four analysts run at the same time. No analyst reads another's report, and each keeps its own conversation and tool loop, so the stage takes about as long as its slowest analyst. The run page shows all four as started together, and each finishes on its own. The DCF valuation is computed alongside them. Before the debate, the run page states how the stock was valued in one line: a DCF fair value was computed, the run has multiples only and why the DCF was skipped, or no valuation is available and why. When the valuation caps the rating, the veto shows on the timeline with the reason. Everything after the analysts runs in order, because each speaker answers the one before it: bull then bear, the Research Manager, the Trader, the three risk personas in turn, then the Portfolio Manager. Each speaker has its own step on the run page. The debaters' steps sit above the debate they speak in, and a debater shows as running again while it writes a later round. A step opens only when it holds something the page does not show elsewhere: its tool calls, its report or a one-line summary. The Portfolio Manager's step (named Risk Manager on the page) stays running until the confidence judge has scored the call. In chat, the debate card lists a debater once however many rounds it speaks. A run makes up to four quick-model calls at once, so a provider with a low rate limit may throttle the analyst stage. If one analyst fails, a resumed run redoes only the analysts that had not finished.
 
 ```mermaid
 flowchart LR
@@ -288,7 +347,7 @@ flowchart LR
     end
 
     %% ───── Analyst Team ─────
-    subgraph ANL["🔬 Analyst Team (LangGraph nodes)"]
+    subgraph ANL["🔬 Analyst Team (run in parallel)"]
         direction TB
         MA["Market Analyst"]
         FA["Fundamentals Analyst"]
@@ -396,9 +455,68 @@ flowchart LR
 | **Confidence judge** | Reads the whole debate and the final call, then states the probability (0–100) that the rating is right over the next 7 trading days, scored the same way the backtest scores it. A failed or unreadable reply stores no confidence rather than a placeholder. | Debate + decision |
 | **Execution** | Places the order against `SIMULATE` (paper) by default; `REAL` is gated by `MAX_DAILY_LIVE_NOTIONAL_USD`. | Manager decision → moomoo OpenD |
 
-Each run starts fresh: agents do not carry lessons from past decisions into later runs. The only extra context is the deterministic DCF valuation, which the Research Manager and Risk Manager see before they rule.
+Each run starts fresh: agents do not carry lessons from past decisions into later runs. Upstream's prompts tell the Bull, the Bear, the Research Manager, the Trader and the Portfolio Manager to learn from reflections on past trades, and hand them a memory that this app never fills. Asked for lessons it did not have, one run's Bull wrote "I've been burned before". The default prompts for those five roles therefore drop that wording and say instead that the role has no record of earlier debates or decisions and must not write as if it remembers any. `{past_memory_str}` is still an allowed placeholder for those five prompts, so a prompt saved under Settings → Prompts that uses it keeps working; it is filled with a fixed sentence saying nothing is on record. A saved prompt keeps its own wording, so reset any of those five you saved earlier to get the new default.
+
+The extra context is the deterministic valuation and, on runs started from this app, the owner's position (see [Deciding for the owner](#deciding-for-the-owner)). It is computed while the analysts work, and the debate waits for it. Its summary is appended to the prompt of every node from the Bull Researcher to the Portfolio Manager, after whatever text Settings → Prompts has saved for that node, so an edited prompt receives it too. The analysts do not see it.
+
+The run says how the valuation went in a `valuation` event before the first debate turn, and stores the same two fields under `valuation` in the run's final state:
+
+| `status` | Meaning | `reason` |
+|---|---|---|
+| `ok` | A DCF fair value was computed. | `null` |
+| `multiples_only` | The engine ran but skipped or discarded the DCF (non-positive free cash flow, a bank or insurer, a fair value outside the band a DCF can resolve). The debate gets the multiples and is told there is no DCF target. | The engine's reason |
+| `unavailable` | The data fetch or the computation failed. The debate is told no fair value exists and not to invent one. The run continues. | The error message |
+
+A resumed run computes the valuation again and sends the event again.
+
+Every node in the table from the Market Analyst to the Portfolio Manager sends a `node-start` event when it starts work and a `node-end` event when it has written its output. The stream names the Portfolio Manager `Risk Manager`. The analysts all start together, so their four `node-start` events open the run. Each debate node sends its `node-start` when it is called, before its model has answered, so the page can show which node is working. A debater that speaks in more than one round sends one `node-start` and one `node-end` for each turn. `node-end` carries a `summary`: the first line of prose the node wrote, as plain text, at most 200 characters. A resumed run sends these events only for the nodes it runs again.
 
 Upstream TradingAgents gives the Trader and the Portfolio Manager only the plan and the debate, so a fact no debater repeated never reached the final call. This app appends the four analyst reports to their input, with an instruction to check the debate against them. The reports are prompt input only and are not saved into the trader plan or the decision.
+
+Each debater reads the debate so far once. Upstream's prompts for the Bull, the Bear and the three risk debaters send the debate history and then the latest arguments again, which the history already ends with. The default prompts for those five roles send the history only. `{current_response}` and the three `{current_..._response}` placeholders are still allowed in a prompt saved under Settings → Prompts.
+
+Most of a run's input tokens are the four analyst reports, which are sent whole to all eight nodes from the Bull Researcher to the Portfolio Manager. A longer report therefore costs eight times its length in the debate.
+
+#### Deciding for the owner
+
+Upstream TradingAgents rules for a short-term trading desk. Every run started from this app (the chat's debate and the research page) also tells the debate who it is deciding for. A direct call to the api without `owner_context`, and a backtest, run as before.
+
+When a run starts, the web app reads the accounts and sends an `owner_context` object. The api validates it and rejects a malformed one with 422.
+
+| Field | Content |
+|---|---|
+| `position.status` | `held`, `not_held`, or `unknown` when the accounts could not be read. The debate is told not to assume either way on `unknown`. |
+| `position.quantity`, `market_value`, `currency`, `weight_pct`, `unrealized_pnl_pct` | Present on a held position. The weight is the share of investable assets from the tracker. |
+| `base_currency`, `investable_total` | From the tracker. `null` when it cannot be read. |
+| `monthly_contribution` | From the planning settings. `null` when it was never set. |
+| `notes` | Your saved chat memories (see [Chat memory](#chat-memory)), at most 30 of 240 characters each. |
+
+A failed read never blocks a run: the part that failed is sent as `null`. The object is stored in the run's `config`, so a resumed run decides for the same owner it started with.
+
+The api turns the object into an `## Owner Context` section and appends it, after the valuation, to the prompt of every node from the Bull Researcher to the Portfolio Manager. The analysts do not see it.
+
+The section has one line for every value, whether or not the run has it. A missing value is written as `unknown` and the debate is told not to assume, estimate or invent a figure for it. Without a monthly contribution the debate is told not to state an amount and not to work out a position weight after a contribution. With no saved memories it is told not to attribute any preference or past decision to you. A line left out reads to a model as room to guess: one run with no contribution on record wrote that "a normal monthly contribution" would take the position to 1.5%–2%. Set **invest / month** in the portfolio plan to give the debate the real amount. The amount is in your base currency. The debate is told which currency that is when it differs from the position's, and when the base currency could not be read (Ghostfolio unreachable) it is told not to compare the amount with the position at all.
+
+The Research Manager, the Trader and the Portfolio Manager also get the **owner mandate** after the owner context. It is the `Owner mandate` prompt under Settings → Prompts, so how the debate must rule for you is your text, not code. The default says you accumulate for the long term and add money monthly, that your US technology concentration is deliberate, and that you do not use stop-losses, tranche ladders, price-trigger exits or options. It asks for one of four answers with reasons, and says Hold is a complete answer, which upstream prompts discourage. It asks for the position weight after adding only when the owner context states the monthly contribution. Both sections are appended after whatever text is saved for a node, so an edited node prompt receives them too.
+
+The mandate asks for the verdict on a line of its own, and the `decision` event carries it as `owner_verdict` when the Portfolio Manager wrote one. The existing `rating` then follows it:
+
+| `OWNER VERDICT` line | `owner_verdict` | `rating` |
+|---|---|---|
+| `ADD` | `add` | `buy` |
+| `HOLD` | `hold` | `hold` |
+| `TRIM` | `trim` | `reduce` |
+| `DO NOT ADD AT THIS SIZE` | `do-not-add` | `hold` |
+
+If the line appears more than once, the last one counts. Without the line, `rating` is read as before and `owner_verdict` is absent. The valuation veto still applies to `rating` afterwards.
+
+The confidence judge is unchanged. Its number is still the probability that the rating is right over the next 7 trading days, which is a shorter horizon than the mandate rules for. The run page's verdict card shows the owner verdict as "For your position" under the rating, and states the percentage as that probability ("43% chance the stock beats SPY by more than 0.5 percentage points over 7 trading days"), not as a conviction level.
+
+#### How the rating is read
+
+Without an owner verdict, the rating comes from the Portfolio Manager's `FINAL TRANSACTION PROPOSAL` line. The Portfolio Manager sometimes quotes the Trader's line before writing its own, so the last such line counts. Only when there is none does the reader fall back to a `Recommendation:` style header and then to the words in the text.
+
+Two runs on the same day can still disagree. The models run without a fixed seed, and the debate is free text.
 
 #### Reading earnings below the headline
 
@@ -415,9 +533,11 @@ The chat assistant has the same tools (`earnings_release`, `earnings_surprise`, 
 
 **Alpha Vantage budget.** The two Alpha Vantage tools need `ALPHA_VANTAGE_API_KEY` in `.env` (free key from https://www.alphavantage.co/support/#api-key). The free tier allows 25 requests a day and 1 a second. The web app counts every request in a per-day counter in Redis (UTC day), spaces requests 1.5 s apart, and stops at 25. If Alpha Vantage still answers with its per-second notice, the app waits 3 s and retries once. If it answers with its daily-limit notice first, the app marks the day as used up. Answers are cached (estimates 12 hours, a published transcript 30 days, a not-yet-published transcript 6 hours), so asking again costs nothing. A fresh company costs up to 3 requests: estimates, plus one or two transcript lookups. When the budget is used up, the tools say so and the analysts continue without them. The **usage** page shows the requests left today, and `usage_summary` in chat reports the same number.
 
-**DCF out-of-regime guard.** The DCF is discarded when its base free cash flow is negative or under 1% of revenue, or when fair value lands outside 0.2×–5× the price. A discarded DCF does not cap the rating (no "valuation veto"); the agents are told why it was discarded. Before this, a capex-heavy company with negative FCF could get a nonsense fair value (e.g. $3.56 against a $254 price) that still blocked a BUY.
+**DCF out-of-regime guard.** The DCF is discarded when its base free cash flow is negative or under 1% of revenue, when the price is 3× the fair value or more (a margin of safety of −200% or worse), or when the fair value is more than 5× the price. A discarded DCF states no fair value and does not cap the rating (no "valuation veto"); the valuation card, the chat and the agents are given the reason. Before this, a capex-heavy company with negative FCF could get a nonsense fair value (e.g. $3.56 against a $254 price) that still blocked a BUY. The 3× bound replaced a looser 5× one that left Apple ($106 against $345) and Microsoft ($116 against $522) with a fair value, a warning that the fair value was out of regime, and a veto all at once.
 
-**DCF base and banks.** The DCF now starts from trailing operating cash flow − capex (SEC filings, or Yahoo's statements outside the US) when that figure is positive, the same measure its growth history uses. Yahoo's levered FCF is only the fallback: for Microsoft it was $2.99B against $59.96B of OCF − capex, so the DCF was being discarded as a rounding error, and its P/FCF read 1294 instead of 65. P/FCF now uses the same base. The "own history" P/E beside each current multiple skips loss years: Intel's two priced years were both losses, which had produced a negative historical P/E, and it now shows none. With the real base, Microsoft's DCF stands and the "price ≥ 1.5× fair value" veto applies to it as it already did to Apple and Nvidia. Banks, insurers, capital-markets firms and mortgage lenders (by Yahoo industry) get no DCF at all, because their operating cash flow carries deposits, loans or policy float; the result says so and points at P/B against return on equity, and P/E. HSBC had been shown a $58 fair value against a $17.30 price. Card networks such as Visa keep their DCF.
+**Valuation veto.** The veto caps a BUY or STRONG-BUY from the agent debate at HOLD. It needs two things to agree. First, the DCF signals overvaluation: the price is 1.5× the fair value or more (margin of safety −50% or worse), or the growth the price implies is more than 2.5× the company's historical FCF growth. Second, the stock trades at 1.5× or more of its own historical P/E or P/S. The DCF signal alone no longer caps the rating, because the DCF grows FCF at a dampened historical rate capped at 15% a year and so marks most durable growers as overvalued: Apple, Microsoft, Nvidia and Visa were all vetoed at once. When the DCF signals overvaluation and the multiples do not back it, the result keeps its fair value, carries no veto, and adds a warning that names both multiples. When there is no historical P/E or P/S to compare, the result carries no veto and the warning says the valuation check is unverified, not passed; `veto.corroboration` holds the state (`corroborated`, `not_corroborated` or `unavailable`). The "own history" multiples are thin: they are priced from the last 252 daily bars, so they cover one or two fiscal years. All four thresholds are constants at the top of `apps/api/app/services/valuation/compose.py`.
+
+**DCF base and banks.** The DCF now starts from trailing operating cash flow − capex (SEC filings, or Yahoo's statements outside the US) when that figure is positive, the same measure its growth history uses. Yahoo's levered FCF is only the fallback: for Microsoft it was $2.99B against $59.96B of OCF − capex, so the DCF was being discarded as a rounding error, and its P/FCF read 1294 instead of 65. P/FCF now uses the same base. The "own history" P/E beside each current multiple skips loss years: Intel's two priced years were both losses, which had produced a negative historical P/E, and it now shows none. With the real base, Microsoft's DCF is no longer discarded as a rounding error (it is now discarded by the out-of-regime guard above, because the price is 4.5× its fair value). Banks, insurers, capital-markets firms and mortgage lenders (by Yahoo industry) get no DCF at all, because their operating cash flow carries deposits, loans or policy float; the result says so and points at P/B against return on equity, and P/E. HSBC had been shown a $58 fair value against a $17.30 price. Card networks such as Visa keep their DCF.
 
 **Annual balance sheet and FCF.** Yahoo's summary statements have carried only revenue and net income since late 2024, so the annual history now takes total debt, cash, total assets, equity and free cash flow (operating cash flow − capex) from Yahoo's annual fundamentals time series. `get_balance_sheet` shows real figures and debt/equity again, the DCF subtracts real net debt (debt − cash), and DCF growth comes from the company's FCF history instead of the 3% default. Before this, every company was valued as debt-free and growing at 3%.
 
@@ -445,6 +565,34 @@ cd apps/web && pnpm exec playwright test
 ```
 
 The e2e test passes if either a chart canvas OR an inline error message appears — so it works with or without a working model key.
+
+### Chat evals (real model)
+
+`apps/web/tests/eval/` measures the chat prompts against the models chosen in Settings. The tools are stubbed with fixed data, so nothing is read from the broker, no order is placed and no debate is run. The evals are skipped unless `EVAL_LLM=1` is set, and they spend API credit: one pass of the three `chat-*` suites at the default 3 runs measured about 140 model requests.
+
+```sh
+cd apps/web && EVAL_LLM=1 DATABASE_URL=postgresql://<user>:<password>@localhost:5435/<db> ENCRYPTION_KEY=<key> pnpm exec vitest run tests/eval
+```
+
+`DATABASE_URL` must reach the compose Postgres from the host (port 5435), because the model choice and provider keys are read from it. `ENCRYPTION_KEY` is the one in `.env`.
+
+| File | What it measures |
+|---|---|
+| `portfolio-answers.eval.test.ts` | Portfolio answers use the right figures and currency basis. |
+| `chat-settled-risks.eval.test.ts` | With memories saying the USD exposure and tech tilt are settled, replies do not warn about them again and still carry the figures. Reports reply length per scenario. |
+| `chat-buy-debate.eval.test.ts` | A debate (or a reused fresh run) backs a buy recommendation, no debate runs for a fact, a sell-side question or an order you already decided on, and a disagreeing verdict leads the reply. A reply that cites a verdict says when the valuation capped it and why, gives the bull and the bear case, names the 7-day horizon of the percentage and links the run. |
+| `chat-memory-extract.eval.test.ts` | The memory extractor saves standing preferences and nothing else. |
+
+Each scenario runs several times. A gated check must hold in at least two thirds of the runs; observations are reported and never fail the test. One quick-model request per judged reply grades what a regular expression cannot (is this sentence a warning, does the reply open with the answer).
+
+| Variable | Effect |
+|---|---|
+| `EVAL_RUNS` | Runs per scenario. Default 3. |
+| `EVAL_REPORT_DIR` | Writes one JSON file per suite with every reply, tool call, check result and the request count. |
+| `EVAL_CHAT_SYSTEM_FILE` | Uses the text in this file as the chat system prompt, to compare a prompt version against the current default. |
+| `EVAL_REPLAY_DIR` | Re-scores the replies saved in a report directory instead of calling the model, after a check changes. |
+
+Add `-t "<scenario name>"` to run one scenario.
 
 `scripts/repro/` holds runtime checks for the streaming behaviour above (dropped chat connections, long silent debate steps, api restarts mid-run, resume). They run against the compose stack; see `scripts/repro/README.md`. The debate checks restart the api with `AGENTS_STUB_RUN_SECONDS` set, which swaps the TradingAgents graph for a stub that sleeps that long and decides `hold` without calling a model. Never set it in `.env`.
 

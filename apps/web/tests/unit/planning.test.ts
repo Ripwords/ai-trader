@@ -92,7 +92,6 @@ describe('planning summary', () => {
       drift_pct: -5,
       action_value: 5_000,
       action: 'buy',
-      severity: 'watch',
     })
     expect(out.allocation_rows).toContainEqual({
       key: 'equity',
@@ -104,12 +103,32 @@ describe('planning summary', () => {
       drift_pct: 10,
       action_value: -10_000,
       action: 'sell',
-      severity: 'alert',
     })
-    expect(out.rebalance_actions.map(a => a.key)).toEqual(['equity', 'cash', 'bond'])
   })
 
-  it('surfaces cash reserve and concentration goals', () => {
+  it('rounds net worth to cents and carries no copy of the settings or of its own rows', () => {
+    const out = buildPlanningSummary(portfolio({ net_worth_total: 151581.33838376327 }))
+    expect(out.net_worth_total).toBe(151581.34)
+    expect(Object.keys(out)).not.toEqual(expect.arrayContaining(['rebalance_actions']))
+    expect(out).not.toHaveProperty('assumptions')
+    expect(out).not.toHaveProperty('target_model')
+  })
+
+  it('has no goal for the monthly contribution, which is an input and not a target to reach', () => {
+    for (const monthly_contribution of [0, 4_000]) {
+      const out = buildPlanningSummary(portfolio(), { monthly_contribution })
+      expect(out.goals.map(g => g.key)).toEqual(['cash_reserve'])
+    }
+  })
+
+  it('reports position concentration once, as numbers, and never as a goal to reach', () => {
+    const out = buildPlanningSummary(portfolio())
+    expect(out.concentration).toEqual({ top_position: { symbol: 'VOO', allocation_pct: 70 }, positions_over_10_pct: 2, positions_over_20_pct: 2 })
+    expect(out.goals.map(g => g.key)).not.toContain('concentration')
+    expect(JSON.stringify(out.goals)).not.toMatch(/concentration|above 20%/i)
+  })
+
+  it('surfaces the cash reserve goal', () => {
     const out = buildPlanningSummary(portfolio())
 
     expect(out.goals).toContainEqual({
@@ -118,13 +137,12 @@ describe('planning summary', () => {
       current_value: 5_000,
       target_value: 10_000,
       progress_pct: 50,
-      status: 'behind',
+      reached: false,
       note: 'Cash is below the 10% reserve target.',
     })
     expect(out.concentration.top_position).toMatchObject({
       symbol: 'VOO',
       allocation_pct: 70,
-      severity: 'critical',
     })
     expect(out.concentration.positions_over_10_pct).toBe(2)
     expect(out.concentration.positions_over_20_pct).toBe(2)
@@ -161,7 +179,7 @@ describe('planning summary', () => {
       emergency_fund_months: 6,
       monthly_contribution: 0,
     })
-    expect(kept.target_model.map(t => [t.key, t.target_pct])).toEqual([
+    expect(kept.allocation_rows.map(r => [r.key, r.target_pct])).toEqual([
       ['cash', 10], ['equity', 60], ['bond', 5], ['crypto', 25],
     ])
   })
@@ -178,24 +196,17 @@ describe('planning summary', () => {
       monthly_contribution: 0,
     })
 
-    expect(out.target_model.map(t => [t.key, t.target_pct])).toEqual([
-      ['cash', 20],
-      ['equity', 70],
-      ['bond', 10],
-    ])
     expect(out.allocation_rows.find(row => row.key === 'cash')).toMatchObject({
       target_pct: 20,
       target_value: 20_000,
       drift_pct: -15,
       action_value: 15_000,
-      severity: 'alert',
     })
     expect(out.allocation_rows.find(row => row.key === 'equity')).toMatchObject({
       target_pct: 70,
       target_value: 70_000,
       drift_pct: 25,
       action_value: -25_000,
-      severity: 'alert',
     })
   })
 
@@ -211,22 +222,11 @@ describe('planning summary', () => {
       monthly_contribution: 4_000,
     })
 
-    expect(out.assumptions).toEqual({
-      monthly_expenses: 6_000,
-      emergency_fund_months: 6,
-      monthly_contribution: 4_000,
-    })
     expect(out.goals.find(goal => goal.key === 'cash_reserve')).toMatchObject({
       target_value: 36_000,
       progress_pct: 13.89,
-      status: 'behind',
+      reached: false,
       note: 'Cash is below the 6-month reserve target.',
-    })
-    expect(out.goals.find(goal => goal.key === 'monthly_contribution')).toMatchObject({
-      current_value: 4_000,
-      target_value: 36_000,
-      progress_pct: 11.11,
-      status: 'on_track',
     })
   })
 
@@ -340,7 +340,7 @@ describe('planning summary', () => {
       current_value: 255_000,
       target_value: 0,
       progress_pct: 0,
-      status: 'behind',
+      reached: false,
     })
   })
 
@@ -393,5 +393,64 @@ describe('planning summary', () => {
       replacement,
       existing[2],
     ])
+  })
+
+  describe('locked holdings', () => {
+    // 150k net worth: 15k cash, 75k equity, 20k bonds and a 40k pension the
+    // owner cannot sell. Investable is 110k.
+    const withPension = () => portfolio({
+      net_worth_total: 150_000,
+      cash_total: 15_000,
+      positions_value: 135_000,
+      positions: [
+        { symbol: 'VOO', name: 'VOO', quantity: 100, market_price: 750, market_value: 75_000, investment: 70_000, allocation_pct: 50, pnl_pct: 7, asset_class: 'EQUITY', data_source: 'YAHOO', sectors: [], currency: 'USD' },
+        { symbol: 'AGG', name: 'AGG', quantity: 200, market_price: 100, market_value: 20_000, investment: 20_000, allocation_pct: 13.33, pnl_pct: 0, asset_class: 'FIXED_INCOME', data_source: 'YAHOO', sectors: [], currency: 'USD' },
+        { symbol: 'GF_KWSP', name: 'KWSP', quantity: 1, market_price: 40_000, market_value: 40_000, investment: 30_000, allocation_pct: 26.67, pnl_pct: 33, asset_class: 'FIXED_INCOME', data_source: 'MANUAL', sectors: [], currency: 'MYR' },
+      ],
+    })
+
+    it('locks the pension by default and reports it once, outside the allocation', () => {
+      const out = buildPlanningSummary(withPension())
+      expect(out.net_worth_total).toBe(150_000)
+      expect(out.investable_total).toBe(110_000)
+      expect(out.locked).toEqual({ total: 40_000, holdings: [{ symbol: 'GF_KWSP', name: 'KWSP', value: 40_000 }] })
+    })
+
+    it('computes allocation rows over the investable subtotal', () => {
+      const out = buildPlanningSummary(withPension())
+      expect(out.allocation_rows.find(r => r.key === 'bond')).toMatchObject({
+        current_value: 20_000, actual_pct: 18.18, target_value: 5_500, action: 'sell', action_value: -14_500,
+      })
+      expect(out.allocation_rows.find(r => r.key === 'equity')).toMatchObject({
+        current_value: 75_000, actual_pct: 68.18, target_value: 93_500, action: 'buy', action_value: 18_500,
+      })
+      expect(out.allocation_rows.reduce((sum, r) => sum + r.current_value, 0)).toBe(110_000)
+      expect(out.allocation_rows.reduce((sum, r) => sum + r.actual_pct, 0)).toBeCloseTo(100, 1)
+    })
+
+    it('leaves a locked holding out of concentration and weighs the rest against investable assets', () => {
+      const out = buildPlanningSummary(withPension())
+      expect(out.concentration.top_position).toEqual({ symbol: 'VOO', allocation_pct: 68.18 })
+      expect(out.concentration.positions_over_20_pct).toBe(1)
+    })
+
+    it('counts everything when the owner unlocks the pension', () => {
+      const out = buildPlanningSummary(withPension(), { locked_symbols: [] })
+      expect(out.investable_total).toBe(150_000)
+      expect(out.locked).toEqual({ total: 0, holdings: [] })
+      expect(out.allocation_rows.find(r => r.key === 'bond')?.current_value).toBe(60_000)
+      expect(out.concentration.top_position?.symbol).toBe('VOO')
+    })
+
+    it('keeps the owner\'s own list of locked holdings, without duplicates or blanks', () => {
+      expect(normalizePlanningSettings({}).locked_symbols).toEqual(['GF_KWSP'])
+      expect(normalizePlanningSettings({ locked_symbols: [] }).locked_symbols).toEqual([])
+      expect(normalizePlanningSettings({ locked_symbols: ['AGG', ' AGG ', '', 7, 'GF_KWSP'] }).locked_symbols).toEqual(['AGG', 'GF_KWSP'])
+    })
+
+    it('states drift and concentration as numbers, with no severity words', () => {
+      const text = JSON.stringify(buildPlanningSummary(withPension()))
+      expect(text).not.toMatch(/critical|alert|behind|severity|watch/i)
+    })
   })
 })

@@ -1,6 +1,7 @@
 import type { PromptGroup } from '../../../types/prompts'
 import {
   ALGO_CODEGEN_DEFAULT,
+  CHAT_MEMORY_DEFAULT,
   CHAT_SYSTEM_DEFAULT,
   CHAT_TITLE_DEFAULT,
   CONTEXTUAL_ANGLES_DEFAULT,
@@ -61,6 +62,14 @@ const WEB_PROMPTS = [
     default: CHAT_TITLE_DEFAULT,
   },
   {
+    id: 'chat.memory',
+    group: 'chat',
+    label: 'Chat memory',
+    description: 'Decides what to remember about you after each chat message: standing preferences, intentional decisions, acknowledged risks, constraints and goals. Runs on the quick model; the output shape is fixed by a schema. The saved memories are under Settings → memory.',
+    engine: 'web',
+    default: CHAT_MEMORY_DEFAULT,
+  },
+  {
     id: 'research.risk_report',
     group: 'research',
     label: 'Risk report',
@@ -114,6 +123,12 @@ const AGENTS_PROMPTS: readonly AgentsPromptMeta[] = [
     'Risk manager',
     'Makes the final call. Its reply must keep the FINAL TRANSACTION PROPOSAL line, which the rating is read from.',
     'FINAL TRANSACTION PROPOSAL',
+  ),
+  agents(
+    'owner_mandate',
+    'Owner mandate',
+    'Who the debate decides for and how: your horizon, what you never do, and the verdicts you want. Added after your position to the research manager, the trader and the risk manager on every run started from this app. Its text must keep the OWNER VERDICT line format, which the verdict is read from.',
+    'OWNER VERDICT',
   ),
   agents(
     'confidence_judge',

@@ -18,7 +18,8 @@ function parseSeq(v: unknown): number {
  * Server-sent events for one run: every persisted event after `after` (or the
  * browser's Last-Event-ID on reconnect), then new ones as the drain writes
  * them. Opens with a `run` event carrying startedAt; each event message's id
- * is its seq. Ends with an `end` event carrying the terminal status. An
+ * is its seq. Ends with an `end` event carrying the terminal status and, when
+ * the run recorded one, finishedAt. An
  * EventSource client must close on `end`, or the browser reconnects.
  */
 export default defineEventHandler(async (event) => {
@@ -56,7 +57,8 @@ export default defineEventHandler(async (event) => {
         if (frame.kind === 'event') {
           await stream.push({ id: String(frame.seq), data: JSON.stringify(frame.event) })
         } else {
-          await stream.push({ event: 'end', data: JSON.stringify({ status: frame.status, error: frame.error }) })
+          const { kind: _kind, ...end } = frame
+          await stream.push({ event: 'end', data: JSON.stringify(end) })
         }
       }
     } catch (e: unknown) {

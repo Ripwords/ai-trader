@@ -1,82 +1,80 @@
 """TradingAgents LangGraph wiring + stream adapter.
 
-Investigation findings (tradingagents 0.2.4, the version pinned in
-``pyproject.toml``):
+What we take from tradingagents (0.5.0, pinned in ``uv.lock``) and what we own:
 
-1. There is **no** ``tradingagents.default_config`` module — the plan's
-   ``from tradingagents.default_config import DEFAULT_CONFIG`` would fail.
-   Configuration is a typed pydantic model: :class:`tradingagents.config.TradingAgentsConfig`
-   with required fields ``llm_provider``, ``deep_think_llm``, ``quick_think_llm``,
-   ``max_debate_rounds``, ``max_risk_discuss_rounds``, ``max_recur_limit``.
-2. :class:`tradingagents.graph.trading_graph.TradingAgentsGraph` does **not**
-   accept a ``toolkit`` kwarg. Tools are imported as module-level globals from
-   ``tradingagents.agents.utils.agent_utils`` by ``graph/setup.py`` and bound to
-   ``ToolNode`` inside the graph builder. Wiring our own toolkit therefore
-   requires monkey-patching those module attributes before graph compilation.
-3. The compiled DAG lives at ``graph_obj.graph`` (a ``CompiledStateGraph``),
-   which is a ``cached_property`` — accessing it triggers compilation and
-   freezes ``max_debate_rounds`` (it is read once at compile time inside
-   :class:`tradingagents.graph.conditional_logic.ConditionalLogic`). Mutating
-   ``cfg["max_debate_rounds"]`` after construction is a no-op for the running
-   graph; per-run overrides must be passed to :func:`build_graph`.
-4. The stream method is ``graph_obj.graph.astream(state, **graph_args)`` where
-   ``graph_args = {"stream_mode": "values", "config": {"recursion_limit": N}}``.
-   Each chunk is a dict-shaped ``AgentState`` snapshot (full state after the
-   node that just ran), keyed by ``messages``, ``market_report``,
-   ``investment_debate_state``, ``risk_debate_state``, ``final_trade_decision``,
-   etc. There is **no** ``metadata.langgraph_node`` in this mode.
-5. ``state.messages`` are langchain ``BaseMessage`` subclasses (``AIMessage``,
-   ``ToolMessage``, ``HumanMessage``); tool calls live on ``AIMessage.tool_calls``
-   and tool results arrive as ``ToolMessage`` instances.
+1. Configuration is a typed pydantic model,
+   :class:`tradingagents.config.TradingAgentsConfig`. There is no
+   ``DEFAULT_CONFIG``.
+2. :class:`tradingagents.graph.trading_graph.TradingAgentsGraph` does not
+   accept a toolkit, and its own graph runs the four analysts one after
+   another on a shared ``messages`` list. ``build_graph`` therefore compiles
+   the workflow itself (:func:`_compile_graph`) and seeds it onto the
+   instance: the analysts fan out, each on a private conversation with our
+   HTTP-backed tools, and the Bull Researcher waits for all of them. The
+   debate, trader and risk stages are upstream's nodes in upstream's order.
+3. ``max_debate_rounds`` is read once, when the graph is compiled. Per-run
+   overrides must be passed to :func:`build_graph`.
+4. The stream is ``graph_obj.graph.astream(state, **graph_args)`` in two
+   modes. ``values`` gives one full state snapshot per graph step, with no
+   ``metadata.langgraph_node``; a step can hold several analysts' work.
+   ``custom`` carries each debate node's own notice that it has started.
+5. Conversations hold langchain ``BaseMessage`` subclasses; tool calls live on
+   ``AIMessage.tool_calls`` and tool results arrive as ``ToolMessage``.
 
-Adaptations made here:
+``run_graph`` diffs successive snapshots into the **normalized** chunk shape
+:func:`app.services.agents.streaming.translate_chunks` expects. Tool calls and
+results come from each analyst's own conversation; debate rounds and decisions
+come from changes to ``investment_debate_state`` and ``final_trade_decision``.
 
-- ``build_graph`` constructs a :class:`TradingAgentsConfig` (no DEFAULT_CONFIG).
-- The toolkit is wired by monkey-patching ``tradingagents.agents.utils.agent_utils``
-  so the graph picks up our HTTP-backed tools when its setup module imports them.
-- ``run_graph`` diffs successive AgentState snapshots and translates them into
-  the **normalized** chunk shape :func:`app.services.agents.streaming.translate_chunks`
-  expects. Stream-tool-call/-result pairs come from inspecting message deltas;
-  debate rounds and decisions come from observing changes to
-  ``investment_debate_state`` and ``final_trade_decision``.
+Checkpointing:
 
-Checkpointing (Task 8):
-
-- :class:`TradingAgentsGraph.graph` compiles the workflow with **no**
-  checkpointer (``setup_graph`` calls ``workflow.compile()`` with no args).
-  We can't pass one through the constructor.
-- The ``CompiledStateGraph`` returned exposes a ``builder`` attribute holding
-  the original :class:`StateGraph`. To wire a checkpointer we therefore
-  *recompile*: read ``ta.graph.builder``, call
-  ``builder.compile(checkpointer=saver)``, and reassign the result onto
-  ``ta.graph`` (overriding the ``cached_property``).
-- The saver itself is shared across runs — it is owned by the FastAPI
-  lifespan and lives on ``app.state.checkpointer``. ``run_graph`` only needs
-  to thread the per-run ``thread_id`` (== our ``run_id``) into the LangGraph
-  config so checkpoints associate with the right conversation.
-- ``app.state.checkpointer`` is ``None`` when ``DATABASE_URL`` isn't set
-  (unit tests, dev without DB) — :func:`attach_checkpointer` is a no-op in
-  that case so existing tests stay green.
+- The saver is shared across runs. It is owned by the FastAPI lifespan and
+  lives on ``app.state.checkpointer``; ``build_graph`` compiles it in.
+  ``run_graph`` threads the per-run ``thread_id`` (== our ``run_id``) into the
+  LangGraph config so checkpoints associate with the right run.
+- ``app.state.checkpointer`` is ``None`` when ``DATABASE_URL`` isn't set (unit
+  tests, dev without DB), which compiles a graph that keeps no checkpoints.
+- A checkpoint taken while the analysts are working records which of them
+  finished, so a resume reruns only the rest.
 """
 
 from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import re
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, Literal
 
 from langchain_core.callbacks import AsyncCallbackHandler
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, RemoveMessage, ToolMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.config import get_stream_writer
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from langgraph.types import Command
+from pydantic import BaseModel, Field
+from tradingagents.agents import (
+    AgentState,
+    create_aggressive_debator,
+    create_bear_researcher,
+    create_bull_researcher,
+    create_conservative_debator,
+    create_neutral_debator,
+    create_research_manager,
+)
 from tradingagents.agents.managers.risk_manager import (
     create_risk_manager as _upstream_create_risk_manager,
 )
 from tradingagents.agents.trader.trader import create_trader as _upstream_create_trader
-from tradingagents.agents.utils import agent_utils as _agent_utils
 from tradingagents.config import TradingAgentsConfig
+from tradingagents.graph.conditional_logic import ConditionalLogic
+from tradingagents.graph.setup import GraphSetup
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 from .confidence import judge_confidence
@@ -84,20 +82,23 @@ from .deepseek_compat import install_litellm_thinking_patch
 from . import llm_config
 from . import prompts as prompts_mod
 from .llm_config import LlmRuntimeConfig
+from .owner import format_owner_context, owner_mandate
+from .run_context import ContextLlm, RunContext
 from .toolkit import AgentToolkit, OpenDClient, build_toolkit
+from app.schemas.agents import OwnerContext
 from app.services.valuation.compose import apply_veto, value
 from app.services.valuation.fetch import fetch_valuation_input
 from app.services.valuation.models import ValuationResult
 from app.services.valuation.persist import record_valuation_snapshot
 from app.services.valuation.summary import format_valuation_for_agents
 
+logger = logging.getLogger(__name__)
 
-# ``build_graph`` mutates module globals on ``tradingagents.agents.utils.agent_utils``
-# (it monkey-patches in our HTTP-backed toolkit, which the compiled graph
-# binds to during setup). Two concurrent calls would race on those globals.
-# This module-level lock serialises every ``build_graph_locked`` call so the
-# critical section (``_install_toolkit`` -> ``TradingAgentsGraph(...)`` ->
-# accessing ``ta.graph``) is always single-threaded.
+
+# ``TradingAgentsGraph(...)`` registers its config as tradingagents' process-wide
+# active config (``set_config``), which the prompt loader reads for the response
+# language. The lock keeps one build's construct-and-compile from interleaving
+# with another's.
 _build_lock = asyncio.Lock()
 
 # Every node module reads its prompt through the override-aware loader.
@@ -105,23 +106,6 @@ prompts_mod.install_prompt_overrides()
 
 Judge = Callable[[dict, str], Awaitable[int | None]]
 
-
-# Names on tradingagents.agents.utils.agent_utils we override with our toolkit.
-_TOOLKIT_ATTRS = (
-    "get_stock_data",
-    "get_indicators",
-    "get_fundamentals",
-    "get_balance_sheet",
-    "get_cashflow",
-    "get_income_statement",
-    "get_insider_transactions",
-    "get_news",
-    "get_global_news",
-    "get_earnings_release",
-    "get_earnings_surprise",
-    "get_earnings_call_transcript",
-    "get_estimate_revisions",
-)
 
 # Tools each analyst may call. Upstream hardcodes 4 for fundamentals and 3 for
 # news; we add the earnings tools so a post-earnings run can compare the print
@@ -151,49 +135,104 @@ _MARKET_TOOLS = ("get_stock_data", "get_indicators")
 _SOCIAL_TOOLS = ("get_news",)
 
 
-def _analyst_factory(
-    toolkit: AgentToolkit, prompt_name: str, tool_attrs: tuple[str, ...], report_key: str
-) -> Callable[[Any], Callable[[Any], dict[str, Any]]]:
-    """Analyst node factory that binds *our* tool objects to the LLM.
+@dataclass(frozen=True)
+class Analyst:
+    """One analyst: its prompt, its tools, and where its work lands."""
 
-    Mirrors the upstream ``create_fundamentals_analyst`` / ``create_news_analyst``
-    node body (tradingagents 0.2.4) with two differences: the tool list comes
-    from the per-run toolkit (so the LLM sees our docstrings and the earnings
-    tools), and the system prompt is read through the override-aware loader.
+    key: str  # the name ``selected_analysts`` uses
+    prompt: str
+    tools: tuple[str, ...]
+    report: str  # AgentState field holding the finished report
+    kind: str  # tag on the report's stream event
+
+    @property
+    def label(self) -> str:
+        return f"{self.key.capitalize()} Analyst"
+
+    @property
+    def channel(self) -> str:
+        return f"{self.key}_messages"
+
+    @property
+    def tools_node(self) -> str:
+        return f"tools_{self.key}"
+
+    @property
+    def clear_node(self) -> str:
+        return f"Msg Clear {self.key.capitalize()}"
+
+
+ANALYSTS = (
+    Analyst("market", "market_analyst", _MARKET_TOOLS, "market_report", "market"),
+    Analyst("social", "social_media_analyst", _SOCIAL_TOOLS, "sentiment_report", "sentiment"),
+    Analyst("news", "news_analyst", _NEWS_TOOLS, "news_report", "news"),
+    Analyst("fundamentals", "fundamentals_analyst", _FUNDAMENTALS_TOOLS, "fundamentals_report", "fundamentals"),
+)
+_ANALYST_BY_KEY = {analyst.key: analyst for analyst in ANALYSTS}
+
+
+class RunState(AgentState):
+    """Upstream's state plus a private conversation per analyst.
+
+    Upstream's analysts share ``messages``, which is the only thing that made
+    them take turns: two tool loops on one list would read each other's calls
+    and results. One field per :class:`Analyst` ``channel``.
     """
-    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-    tools = [getattr(toolkit, attr) for attr in tool_attrs]
+    market_messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
+    social_messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
+    news_messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
+    fundamentals_messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
+
+
+def analyst_node(
+    analyst: Analyst, toolkit: AgentToolkit, llm: Any, *, leads: bool
+) -> Callable[[Any], Command]:
+    """An analyst node that binds *our* tool objects to the LLM.
+
+    Mirrors the upstream ``create_*_analyst`` node bodies (tradingagents
+    0.5.0) with three differences: the tool list comes from the per-run
+    toolkit (so the LLM sees our docstrings and the earnings tools), the
+    system prompt is read through the override-aware loader, and the
+    conversation is the analyst's own.
+
+    ``leads`` marks the first selected analyst. In upstream's chain its
+    conversation opened with the symbol and every later analyst's opened with
+    the "Continue" the previous Msg Clear left behind. Each conversation opens
+    the same way here, so every analyst gets the input it got in the chain.
+
+    The node names its own next step. When one analyst fails LangGraph cancels
+    the others and checkpoints whatever each had written, then treats those as
+    finished on resume. A conditional edge is a second write after the state
+    update, so a cancel between the two saved a report with nowhere to go and
+    the resumed run ended before the debate. A ``Command`` is one write.
+    """
+    tools = [getattr(toolkit, attr) for attr in analyst.tools]
     tool_names = ", ".join(t.name for t in tools)
 
-    def create(llm: Any) -> Callable[[Any], dict[str, Any]]:
-        def analyst_node(state: Any) -> dict[str, Any]:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", prompts_mod.load_prompt_with_overrides(prompt_name)),
-                MessagesPlaceholder(variable_name="messages"),
-            ])
-            prompt = prompt.partial(
-                tool_names=tool_names,
-                current_date=state.trade_date,
-                ticker=state.company_of_interest,
-            )
-            result = (prompt | llm.bind_tools(tools)).invoke(state.messages)
-            report = "" if result.tool_calls else result.content
-            return {"messages": [result], report_key: report}
+    def node(state: Any) -> Command:
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", prompts_mod.load_prompt_with_overrides(analyst.prompt)),
+            MessagesPlaceholder(variable_name="messages"),
+        ])
+        prompt = prompt.partial(
+            tool_names=tool_names,
+            current_date=state.trade_date,
+            ticker=state.company_of_interest,
+        )
+        conversation = getattr(state, analyst.channel)
+        opening = [] if conversation else [
+            HumanMessage(content=state.company_of_interest if leads else "Continue")
+        ]
+        result = (prompt | llm.bind_tools(tools)).invoke([*opening, *conversation])
+        report = "" if result.tool_calls else result.content
+        return Command(
+            update={analyst.channel: [*opening, result], analyst.report: report},
+            goto=analyst.tools_node if result.tool_calls else analyst.clear_node,
+        )
 
-        analyst_node.__name__ = f"{prompt_name}_node"
-        return analyst_node
-
-    create.__ai_trader_toolkit__ = True  # type: ignore[attr-defined]
-    return create
-
-
-def fundamentals_analyst_factory(toolkit: AgentToolkit) -> Callable[[Any], Callable[[Any], dict[str, Any]]]:
-    return _analyst_factory(toolkit, "fundamentals_analyst", _FUNDAMENTALS_TOOLS, "fundamentals_report")
-
-
-def news_analyst_factory(toolkit: AgentToolkit) -> Callable[[Any], Callable[[Any], dict[str, Any]]]:
-    return _analyst_factory(toolkit, "news_analyst", _NEWS_TOOLS, "news_report")
+    node.__name__ = f"{analyst.prompt}_node"
+    return node
 
 
 _REPORT_SECTIONS = (
@@ -222,6 +261,17 @@ def with_analyst_reports(plan: str, state: Any) -> str:
     )
 
 
+class _NoMemory:
+    """Stands in for upstream's per-role memory of past trades. Nothing here
+    ever stores a lesson, and upstream's empty memory hands the node an empty
+    string (or "No past memories found."), which a prompt asking for lessons
+    reads as lessons to make up. The default prompts no longer ask; a saved
+    override that still has ``{past_memory_str}`` gets this instead."""
+
+    def get_memories(self, _situation: str, n_matches: int = 1) -> list[dict[str, str]]:
+        return [{"recommendation": prompts_mod.NO_MEMORY_VALUE}]
+
+
 def trader_with_reports(llm: Any, memory: Any) -> Callable[[Any], dict[str, Any]]:
     node = _upstream_create_trader(llm, memory)
 
@@ -242,64 +292,130 @@ def risk_manager_with_reports(llm: Any, memory: Any) -> Callable[[Any], dict[str
     return risk_manager_node
 
 
+# The stream has always called the Risk Judge node the Risk Manager.
+_WIRE_LABELS = {"Risk Judge": "Risk Manager"}
+
+
+def _announcing(label: str, node: Callable[[Any], dict[str, Any]]) -> Callable[[Any], dict[str, Any]]:
+    """``node``, saying on the graph's ``custom`` stream that it has started.
+
+    A state snapshot only shows a node once it has written its field, so
+    without this the stream names a debate node the moment it finishes. A
+    node restored from a checkpoint does not run, and so is not announced.
+    """
+
+    def announced(state: Any) -> dict[str, Any]:
+        get_stream_writer()({"node_started": label})
+        return node(state)
+
+    return announced
+
+
 def _tool_nodes(toolkit: AgentToolkit) -> dict[str, Any]:
-    """ToolNodes matching each analyst's bound tools (seeded onto ``ta``)."""
-    from langgraph.prebuilt import ToolNode
-
-    def node(attrs: tuple[str, ...]) -> Any:
-        return ToolNode([getattr(toolkit, a) for a in attrs])
-
+    """Each analyst's ToolNode, reading and answering on that analyst's own
+    conversation (seeded onto ``ta``)."""
     return {
-        "market": node(_MARKET_TOOLS),
-        "social": node(_SOCIAL_TOOLS),
-        "news": node(_NEWS_TOOLS),
-        "fundamentals": node(_FUNDAMENTALS_TOOLS),
+        analyst.key: ToolNode(
+            [getattr(toolkit, attr) for attr in analyst.tools], messages_key=analyst.channel
+        )
+        for analyst in ANALYSTS
     }
 
 
-def _install_toolkit(toolkit: AgentToolkit) -> None:
-    """Replace the tradingagents-bundled tools with our HTTP-backed ones.
+def _clear_conversation(analyst: Analyst) -> Callable[[Any], dict[str, Any]]:
+    """The report is all the debate reads, so the finished tool loop is dropped
+    rather than carried in every later checkpoint."""
 
-    Patching only ``agent_utils`` is NOT sufficient. ``trading_graph.py`` does:
+    def clear(state: Any) -> dict[str, Any]:
+        return {analyst.channel: [RemoveMessage(id=m.id) for m in getattr(state, analyst.channel)]}
 
-        from tradingagents.agents.utils.agent_utils import (
-            get_stock_data, get_news, get_balance_sheet, ...
-        )
+    return clear
 
-    at module load time, which COPIES function-object references into
-    ``trading_graph``'s namespace. ``ToolNode([get_stock_data, ...])`` then
-    binds to those copies, not to the live ``agent_utils`` attribute. Patching
-    ``agent_utils`` after the import is a no-op for the compiled DAG.
 
-    To make the swap stick, we patch BOTH modules — ``agent_utils`` for any
-    code path that does ``getattr(agent_utils, ...)`` lookup at runtime, and
-    ``trading_graph`` so the eager-imported references in its namespace point
-    at our toolkit when ``ToolNode`` is constructed (at compile time, inside
-    the cached_property accessor that fires after this function returns).
+def _compile_graph(
+    ta: TradingAgentsGraph, toolkit: AgentToolkit, checkpointer: BaseCheckpointSaver | None
+) -> Any:
+    """Upstream's workflow with the analyst stage fanned out.
+
+    Upstream chains the analysts (analyst, its tools, Msg Clear, next analyst).
+    No analyst reads another's report, so here they all start at once and the
+    Bull Researcher waits for every one of them. From the Bull Researcher on,
+    the wiring is upstream's ``GraphSetup.setup_graph`` edge for edge; a test
+    compares the two, because each speaker in both debates answers the one
+    before it and that order is part of the result.
     """
-    from tradingagents.graph import trading_graph as _trading_graph
+    selected = [
+        _ANALYST_BY_KEY[key]
+        for key in GraphSetup.validate_selected_analysts(ta.selected_analysts)
+    ]
+    quick, deep = ta.quick_thinking_llm, ta.deep_thinking_llm
+    logic = ConditionalLogic(
+        max_debate_rounds=ta.config.max_debate_rounds,
+        max_risk_discuss_rounds=ta.config.max_risk_discuss_rounds,
+    )
 
-    from tradingagents.agents.analysts import market_analyst as _market_analyst
-    from tradingagents.agents.analysts import social_media_analyst as _social_analyst
-    from tradingagents.graph import setup as _setup
+    workflow = StateGraph(RunState)
+    for position, analyst in enumerate(selected):
+        workflow.add_node(
+            analyst.label,
+            analyst_node(analyst, toolkit, quick, leads=position == 0),
+            destinations=(analyst.tools_node, analyst.clear_node),
+        )
+        workflow.add_node(analyst.tools_node, ta.tool_nodes[analyst.key])
+        workflow.add_node(analyst.clear_node, _clear_conversation(analyst))
+        workflow.add_edge(START, analyst.label)
+        workflow.add_edge(analyst.tools_node, analyst.label)
 
-    for attr in _TOOLKIT_ATTRS:
-        replacement = getattr(toolkit, attr)
-        setattr(_agent_utils, attr, replacement)
-        if hasattr(_trading_graph, attr):
-            setattr(_trading_graph, attr, replacement)
-    # The market and social analysts bind tool objects copied into their own
-    # module namespaces at import; repoint them so the LLM sees our schemas.
-    for module, attrs in ((_market_analyst, _MARKET_TOOLS), (_social_analyst, _SOCIAL_TOOLS)):
-        for attr in attrs:
-            if hasattr(module, attr):
-                setattr(module, attr, getattr(toolkit, attr))
-    # Fundamentals and news get their own factories: upstream hardcodes their
-    # tool lists, so the earnings tools could not be added otherwise.
-    _setup.create_fundamentals_analyst = fundamentals_analyst_factory(toolkit)
-    _setup.create_news_analyst = news_analyst_factory(toolkit)
-    _setup.create_trader = trader_with_reports
-    _setup.create_risk_manager = risk_manager_with_reports
+    # The analysts keep the bare model: the run's context is not ready while
+    # they work, and they bind tools to it.
+    # The three nodes that decide also get the owner mandate.
+    argues = ContextLlm(quick, ta.run_context)
+    quick_decides = ContextLlm(quick, ta.run_context, decides=True)
+    deep_decides = ContextLlm(deep, ta.run_context, decides=True)
+    memory = _NoMemory()
+    debate_nodes = {
+        "Bull Researcher": create_bull_researcher(argues, memory),
+        "Bear Researcher": create_bear_researcher(argues, memory),
+        "Research Manager": create_research_manager(deep_decides, memory),
+        "Trader": trader_with_reports(quick_decides, memory),
+        "Aggressive Analyst": create_aggressive_debator(argues),
+        "Neutral Analyst": create_neutral_debator(argues),
+        "Conservative Analyst": create_conservative_debator(argues),
+        "Risk Judge": risk_manager_with_reports(deep_decides, memory),
+    }
+    for name, node in debate_nodes.items():
+        workflow.add_node(name, _announcing(_WIRE_LABELS.get(name, name), node))
+
+    workflow.add_edge([analyst.clear_node for analyst in selected], "Bull Researcher")
+    workflow.add_conditional_edges(
+        "Bull Researcher",
+        logic.should_continue_debate,
+        {"Bear Researcher": "Bear Researcher", "Research Manager": "Research Manager"},
+    )
+    workflow.add_conditional_edges(
+        "Bear Researcher",
+        logic.should_continue_debate,
+        {"Bull Researcher": "Bull Researcher", "Research Manager": "Research Manager"},
+    )
+    workflow.add_edge("Research Manager", "Trader")
+    workflow.add_edge("Trader", "Aggressive Analyst")
+    workflow.add_conditional_edges(
+        "Aggressive Analyst",
+        logic.should_continue_risk_analysis,
+        {"Conservative Analyst": "Conservative Analyst", "Risk Judge": "Risk Judge"},
+    )
+    workflow.add_conditional_edges(
+        "Conservative Analyst",
+        logic.should_continue_risk_analysis,
+        {"Neutral Analyst": "Neutral Analyst", "Risk Judge": "Risk Judge"},
+    )
+    workflow.add_conditional_edges(
+        "Neutral Analyst",
+        logic.should_continue_risk_analysis,
+        {"Aggressive Analyst": "Aggressive Analyst", "Risk Judge": "Risk Judge"},
+    )
+    workflow.add_edge("Risk Judge", END)
+    return workflow.compile(checkpointer=checkpointer)
 
 
 def build_graph(
@@ -313,6 +429,7 @@ def build_graph(
     response_language: str = "en-US",
     selected_analysts: list[str] | None = None,
     company_name: str | None = None,
+    owner_context: OwnerContext | None = None,
     results_dir: Path | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> TradingAgentsGraph:
@@ -330,9 +447,8 @@ def build_graph(
     ``social`` typically saves ~20% of the LLM cost on a run; skipping
     ``news`` saves another ~15%. ``None`` defaults to all four.
 
-    ``checkpointer`` (optional) — recompile the underlying StateGraph with a
-    checkpoint saver attached. See :func:`attach_checkpointer`. Pass ``None``
-    to keep TradingAgents' default (no checkpointing).
+    ``checkpointer`` (optional) — the saver the graph is compiled with, so a
+    halted run can resume. ``None`` compiles a graph that keeps no checkpoints.
 
     ``models`` supplies the deep agents (chat role) and the fast ones (quick
     role), each with its own provider and key.
@@ -355,9 +471,7 @@ def build_graph(
     # that aren't litellm-routed.
     install_litellm_thinking_patch()
     toolkit = build_toolkit(opend_client, company_name=company_name)
-    _install_toolkit(toolkit)
-    # ``selected_analysts`` is forwarded to ``GraphSetup`` via the kwarg of
-    # the same name; defaults are TradingAgents' four analysts.
+    # ``selected_analysts`` defaults to TradingAgents' four analysts.
     ta_kwargs: dict[str, Any] = {"config": cfg, "debug": False}
     if selected_analysts is not None:
         ta_kwargs["selected_analysts"] = selected_analysts
@@ -366,17 +480,12 @@ def build_graph(
     # Seeding its cached properties gives each role its own provider and key.
     ta.__dict__["deep_thinking_llm"] = llm_config.build_role_model(models.chat, reasoning_effort=effort)
     ta.__dict__["quick_thinking_llm"] = llm_config.build_role_model(models.quick, reasoning_effort=effort)
-    # Upstream's ToolNodes omit the earnings tools; seed ours before compile.
+    # Seeded for the same reason: upstream's own ToolNodes and graph bind its
+    # bundled tools and run the analysts one after another.
     ta.__dict__["tool_nodes"] = _tool_nodes(toolkit)
-    # Touch ``ta.graph`` (a cached_property) inside the build path so the
-    # compile step — which reads the toolkit globals we just installed — runs
-    # before another concurrent caller can monkey-patch them with a different
-    # toolkit. ``attach_checkpointer`` already triggers the same compile, so
-    # only force it when no checkpointer is wired.
-    if checkpointer is not None:
-        attach_checkpointer(ta, checkpointer)
-    else:
-        _ = ta.graph
+    ta.__dict__["run_context"] = RunContext()
+    ta.__dict__["owner_context"] = owner_context
+    ta.__dict__["graph"] = _compile_graph(ta, toolkit, checkpointer)
     return ta
 
 
@@ -390,6 +499,7 @@ async def build_graph_locked(
     response_language: str = "en-US",
     selected_analysts: list[str] | None = None,
     company_name: str | None = None,
+    owner_context: OwnerContext | None = None,
     results_dir: Path | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> TradingAgentsGraph:
@@ -426,31 +536,10 @@ async def build_graph_locked(
             response_language=response_language,
             selected_analysts=selected_analysts,
             company_name=company_name,
+            owner_context=owner_context,
             results_dir=results_dir,
             checkpointer=checkpointer,
         )
-
-
-def attach_checkpointer(
-    ta: TradingAgentsGraph, saver: BaseCheckpointSaver
-) -> None:
-    """Recompile ``ta.graph`` with ``saver`` wired in.
-
-    ``TradingAgentsGraph.graph`` is a :class:`functools.cached_property` that
-    computes a :class:`langgraph.graph.state.CompiledStateGraph`. The compiled
-    object exposes its source :class:`langgraph.graph.state.StateGraph` via
-    the ``builder`` attribute. We re-call ``builder.compile(checkpointer=...)``
-    to get a fresh compiled graph bound to our saver, then assign it to
-    ``ta.graph`` (overriding the cached_property descriptor by writing the
-    instance dict, which Python prefers over the descriptor on read).
-
-    The result: every ``ta.graph.astream(state, config=...)`` call now writes
-    checkpoints to the saver, and ``astream(None, config=...)`` resumes from
-    the latest checkpoint for the matching ``thread_id``.
-    """
-    compiled = ta.graph  # triggers initial compile via cached_property
-    builder = compiled.builder
-    ta.graph = builder.compile(checkpointer=saver)  # type: ignore[misc]
 
 
 def _normalize_chunk(node: str | None, values: dict[str, Any], finished: bool) -> dict:
@@ -461,64 +550,52 @@ def _normalize_chunk(node: str | None, values: dict[str, Any], finished: bool) -
     }
 
 
-# AgentState fields that look like "Analyst <X> just produced a report".
-# Used to attribute tool-call/result deltas to a sensible node name.
-_REPORT_NODE_MAP = {
-    "market_report": "Market Analyst",
-    "sentiment_report": "Social Analyst",
-    "news_report": "News Analyst",
-    "fundamentals_report": "Fundamentals Analyst",
+# The debate stage that just finished, by the AgentState field it wrote. The
+# analysts are attributed from their own conversations and reports instead.
+_STAGE_NODES = {
     "investment_plan": "Research Manager",
     "trader_investment_plan": "Trader",
     "final_trade_decision": "Risk Manager",
 }
 
-
-# Map a tool name back to the analyst likely calling it. We use this when an
-# analyst is mid-execution (calling tools but hasn't finished its report yet)
-# so we can emit a ``node-start`` event early instead of leaving the UI silent
-# for the 15-30s it takes the first analyst to finish a report. Order doesn't
-# matter; each tool maps to exactly one analyst by design.
-_TOOL_TO_NODE = {
-    "get_balance_sheet": "Fundamentals Analyst",
-    "get_cashflow": "Fundamentals Analyst",
-    "get_income_statement": "Fundamentals Analyst",
-    "get_fundamentals": "Fundamentals Analyst",
-    "get_insider_transactions": "Fundamentals Analyst",
-    "get_news": "News Analyst",
-    "get_global_news": "News Analyst",
-    "get_stock_data": "Market Analyst",
-    "get_indicators": "Market Analyst",
+# The node behind each ``side`` of the bull/bear debate and each ``speaker``
+# of the risk debate.
+_SPEAKER_NODES = {
+    "bull": "Bull Researcher",
+    "bear": "Bear Researcher",
+    "aggressive": "Aggressive Analyst",
+    "conservative": "Conservative Analyst",
+    "neutral": "Neutral Analyst",
 }
 
 
-def _detect_node(prev: dict, curr: dict) -> str | None:
-    """Pick a node label by spotting which AgentState field changed."""
-    for field, label in _REPORT_NODE_MAP.items():
-        if (curr.get(field) or "") != (prev.get(field) or ""):
-            return label
+def _stage_written(prev: dict, curr: dict) -> tuple[str, str] | None:
+    """The stage whose AgentState field changed, and what it wrote there."""
+    for field, label in _STAGE_NODES.items():
+        text = curr.get(field) or ""
+        if text != (prev.get(field) or ""):
+            return label, text
     return None
 
 
-def _infer_node_from_tools(
-    calls: list[dict], results: list[dict]
-) -> str | None:
-    """Infer which analyst is running based on the tool name in flight.
+SUMMARY_MAX_CHARS = 200
+_LINE_MARKUP = re.compile(r"^(#+|[-*+]|\d+\.)\s+")
+_SPEAKER_PREFIX = re.compile(r"^(Bull|Bear|Aggressive|Conservative|Neutral) Analyst:\s*")
 
-    A report-field change marks "analyst finished"; before that, the only
-    signal we have is which tool just got called. Mapping tool name -> analyst
-    lets the UI render a 'X Analyst (working...)' card the moment the first
-    tool call lands rather than waiting for the report to finalise.
-    """
-    for tc in calls:
-        node = _TOOL_TO_NODE.get(tc.get("name") or "")
-        if node:
-            return node
-    for tr in results:
-        node = _TOOL_TO_NODE.get(tr.get("name") or "")
-        if node:
-            return node
-    return None
+
+def _summary(text: str) -> str:
+    """The first line of prose in what a node wrote, as plain text, for the
+    ``node-end`` event. A heading is used only when there is nothing else."""
+    lines = [line.strip() for line in text.splitlines()]
+    lines = [line for line in lines if re.search(r"\w", line) and not line.startswith("|")]
+    if not lines:
+        return ""
+    line = next((line for line in lines if not line.startswith("#")), lines[0])
+    line = _SPEAKER_PREFIX.sub("", _LINE_MARKUP.sub("", line))
+    line = re.sub(r"[*`]", "", line).strip()
+    if len(line) > SUMMARY_MAX_CHARS:
+        line = line[: SUMMARY_MAX_CHARS - 1].rstrip() + "…"
+    return line
 
 
 def _new_messages(prev: list, curr: list) -> list:
@@ -554,8 +631,8 @@ def _extract_tool_events(new_msgs: list) -> tuple[list[dict], list[dict]]:
 
 def _extract_debate(prev: dict, curr: dict) -> dict | None:
     """Detect a new bull/bear turn by comparing investment_debate_state.count."""
-    pdb = (prev.get("investment_debate_state") or {}) if isinstance(prev.get("investment_debate_state"), dict) else {}
-    cdb = (curr.get("investment_debate_state") or {}) if isinstance(curr.get("investment_debate_state"), dict) else {}
+    pdb = prev.get("investment_debate_state") or {}
+    cdb = curr.get("investment_debate_state") or {}
     pcount = pdb.get("count", 0)
     ccount = cdb.get("count", 0)
     if ccount <= pcount:
@@ -567,18 +644,6 @@ def _extract_debate(prev: dict, curr: dict) -> dict | None:
     return {"round": (ccount + 1) // 2, "side": side, "text": text}
 
 
-# Map ``*_report`` AgentState field → (kind tag, analyst label). The tag is
-# what the UI uses to colour-code / route the report; the label matches the
-# ``node`` we already emit elsewhere so the report can be attached to the
-# right step card.
-_REPORT_KIND_MAP: tuple[tuple[str, str, str], ...] = (
-    ("market_report",       "market",       "Market Analyst"),
-    ("sentiment_report",    "sentiment",    "Social Analyst"),
-    ("news_report",         "news",         "News Analyst"),
-    ("fundamentals_report", "fundamentals", "Fundamentals Analyst"),
-)
-
-
 def _extract_reports(prev: dict, curr: dict) -> list[dict]:
     """Return one entry per analyst report that just landed.
 
@@ -588,13 +653,17 @@ def _extract_reports(prev: dict, curr: dict) -> list[dict]:
     pipeline's output never reached the UI. Now we emit a separate ``report``
     event with the full markdown so the UI can render each analyst's full
     research note.
+
+    ``kind`` is what the UI uses to colour-code and route the report; ``node``
+    matches the label on the analyst's other events so the report attaches to
+    the right step card.
     """
     out: list[dict] = []
-    for field, kind, node in _REPORT_KIND_MAP:
-        pval = prev.get(field) or ""
-        cval = curr.get(field) or ""
+    for analyst in ANALYSTS:
+        pval = prev.get(analyst.report) or ""
+        cval = curr.get(analyst.report) or ""
         if cval and cval != pval:
-            out.append({"kind": kind, "node": node, "content": cval})
+            out.append({"kind": analyst.kind, "node": analyst.label, "content": cval})
     return out
 
 
@@ -616,16 +685,15 @@ def _extract_synthesis(prev: dict, curr: dict) -> list[dict]:
     c_tr = curr.get("trader_investment_plan") or ""
     if c_tr and c_tr != p_tr:
         out.append({"stage": "trader-plan", "node": "Trader", "content": c_tr})
-    # The Research Manager's ``judge_decision`` on the bull/bear debate is
-    # also a distinct artifact — closing argument for the investment debate
-    # before the Trader picks it up.
+    # The Research Manager's ``judge_decision`` on the bull/bear debate is its
+    # own artifact only when it says something the plan doesn't: tradingagents
+    # 0.5.0 writes one reply to both fields, and the page would show it twice.
     pdb = prev.get("investment_debate_state") or {}
     cdb = curr.get("investment_debate_state") or {}
-    if isinstance(pdb, dict) and isinstance(cdb, dict):
-        pj = pdb.get("judge_decision") or ""
-        cj = cdb.get("judge_decision") or ""
-        if cj and cj != pj:
-            out.append({"stage": "judge-decision", "node": "Research Manager", "content": cj})
+    pj = pdb.get("judge_decision") or ""
+    cj = cdb.get("judge_decision") or ""
+    if cj and cj != pj and cj != c_inv:
+        out.append({"stage": "judge-decision", "node": "Research Manager", "content": cj})
     return out
 
 
@@ -651,8 +719,6 @@ def _extract_risk_debate(prev: dict, curr: dict) -> dict | None:
     """
     pdb = prev.get("risk_debate_state") or {}
     cdb = curr.get("risk_debate_state") or {}
-    if not (isinstance(pdb, dict) and isinstance(cdb, dict)):
-        return None
     pcount = pdb.get("count", 0)
     ccount = cdb.get("count", 0)
     if ccount <= pcount:
@@ -712,6 +778,11 @@ _VERDICT_MARKER_PATTERN = re.compile(
 )
 
 
+_FINAL_MARKER_PATTERN = re.compile(
+    r"FINAL\s+TRANSACTION\s+PROPOSAL\s*:[\s*]*(BUY|SELL|HOLD)\b", re.IGNORECASE
+)
+
+
 def _regex_rating(text: str) -> str | None:
     """First matching 5-bucket rating from the priority-ordered regex, or None.
 
@@ -733,7 +804,14 @@ def _canonical_signal(text: str) -> str | None:
     The extractor prioritises the canonical ``FINAL TRANSACTION PROPOSAL: <X>``
     marker the Risk Manager is prompted to emit and rejects ambiguous text
     (raising ``ValueError``), which we treat as "no authoritative signal".
+
+    The extractor also gives up when two markers disagree. The Risk Manager
+    refines the trader's plan and can quote the trader's marker before its
+    own, so the last marker is the verdict.
     """
+    markers = _FINAL_MARKER_PATTERN.findall(text)
+    if markers:
+        return markers[-1].lower()
     try:
         from tradingagents.graph.signal_processing import extract_trade_signal
         signal = extract_trade_signal(text).lower()
@@ -784,6 +862,23 @@ def _parse_rating(text: str) -> str:
     return regex or "hold"
 
 
+# The verdict the owner mandate asks the deciding nodes for. A judge that
+# quotes the trader's line before giving its own states its own last.
+_OWNER_VERDICT_PATTERN = re.compile(
+    r"OWNER\s+VERDICT\s*:[\s*_`]*(DO\s+NOT\s+ADD|ADD|HOLD|TRIM)\b", re.IGNORECASE
+)
+_OWNER_VERDICT_RATING = {"add": "buy", "hold": "hold", "trim": "reduce", "do-not-add": "hold"}
+
+
+def _parse_owner_verdict(text: str) -> str | None:
+    """``add``, ``hold``, ``trim`` or ``do-not-add`` from the last
+    ``OWNER VERDICT:`` line, or None when the text has none."""
+    verdicts = _OWNER_VERDICT_PATTERN.findall(text)
+    if not verdicts:
+        return None
+    return "-".join(verdicts[-1].lower().split())
+
+
 def _extract_decision(
     prev: dict,
     curr: dict,
@@ -811,12 +906,15 @@ def _extract_decision(
     cdec = curr.get("final_trade_decision") or ""
     if not cdec or cdec == pdec:
         return None
-    rating = _parse_rating(cdec)
+    owner_verdict = _parse_owner_verdict(cdec)
+    rating = _OWNER_VERDICT_RATING[owner_verdict] if owner_verdict else _parse_rating(cdec)
     decision: dict = {
         "rating": rating,
         "confidence": None,
         "rationale": cdec,
     }
+    if owner_verdict:
+        decision["owner_verdict"] = owner_verdict
     if valuation is not None and valuation.veto.triggered:
         effective, veto = apply_veto(rating, valuation)
         if effective != rating:
@@ -826,34 +924,22 @@ def _extract_decision(
     return decision
 
 
-def _state_snapshot(state: Any) -> dict:
-    """Coerce a stream chunk into a plain dict for diffing.
+_DEBATE_STATES = ("investment_debate_state", "risk_debate_state")
 
-    AgentState chunks are normally dicts in ``stream_mode="values"`` but some
-    LangGraph paths return pydantic models — handle both.
+
+def _state_snapshot(state: dict) -> dict:
+    """A graph state with the two debate states as plain dicts.
+
+    LangGraph hands over the top level as a dict, in a stream chunk and in a
+    checkpoint alike, but the debate states inside it are still upstream's
+    ``InvestDebateState`` and ``RiskDebateState`` models. Everything that
+    reads a snapshot (the extractors, the confidence judge, the final-state
+    record) reads dicts, so the models are converted here and nowhere else.
     """
-    if isinstance(state, dict):
-        return state
-    if hasattr(state, "model_dump"):
-        return state.model_dump()
-    return dict(state) if state else {}
-
-
-def _seed_valuation_context(
-    graph: TradingAgentsGraph, symbol: str, trade_date: date, summary: str
-) -> None:
-    """Put the deterministic valuation summary in front of the two judges.
-
-    TradingAgents' Research Manager and Risk Manager read their
-    ``FinancialSituationMemory`` (a BM25 over situation/recommendation pairs)
-    at prompt time; seeding the summary there is how the DCF reaches them
-    without patching the upstream prompts. Other roles never see it.
-    """
-    if not summary:
-        return
-    pair = (f"{symbol} valuation on {trade_date.isoformat()}", summary)
-    graph.invest_judge_memory.add_situations([pair])
-    graph.risk_manager_memory.add_situations([pair])
+    return {
+        key: value.model_dump() if key in _DEBATE_STATES and isinstance(value, BaseModel) else value
+        for key, value in state.items()
+    }
 
 
 def _serialize_final_state(state: dict) -> dict:
@@ -872,45 +958,113 @@ def _serialize_final_state(state: dict) -> dict:
         if v:
             out[f] = v
     inv = state.get("investment_debate_state") or {}
-    if isinstance(inv, dict):
-        out["investment_debate_state"] = {
-            k: inv.get(k, "") for k in ("bull_history", "bear_history", "judge_decision")
-        }
+    out["investment_debate_state"] = {
+        k: inv.get(k, "") for k in ("bull_history", "bear_history", "judge_decision")
+    }
     risk = state.get("risk_debate_state") or {}
-    if isinstance(risk, dict):
-        out["risk_debate_state"] = {
-            k: risk.get(k, "") for k in (
-                "aggressive_history", "conservative_history", "neutral_history",
-                "judge_decision",
-            )
-        }
+    out["risk_debate_state"] = {
+        k: risk.get(k, "") for k in (
+            "aggressive_history", "conservative_history", "neutral_history",
+            "judge_decision",
+        )
+    }
     return out
 
 
-async def _compute_run_valuation(
-    symbol: str, run_id: str | None = None
-) -> tuple[ValuationResult | None, str]:
-    """Compute the deterministic valuation for this run, fail-soft.
+@dataclass(frozen=True)
+class ValuationOutcome:
+    """How the run's valuation went, and what the debate is told about it."""
 
-    Returns (result, agent-facing summary markdown). Any data/compute error
-    returns (None, "") so a valuation outage never aborts the agent run.
+    # ``multiples_only``: the engine ran but skipped or discarded the DCF.
+    status: Literal["ok", "multiples_only", "unavailable"]
+    reason: str | None
+    result: ValuationResult | None
+    summary: str  # agent-facing markdown
 
-    On success the result is persisted to ``valuation_snapshots``
-    (source='agent_run', linked to ``run_id``) as a record of what the
-    judges saw. The persist call is best-effort and separately guarded — even a raising
-    recorder must not kill the run's valuation context.
+    def public(self) -> dict[str, str | None]:
+        """The part the stream and the run record carry."""
+        return {"status": self.status, "reason": self.reason}
+
+
+def _valuation_unavailable(reason: str, result: ValuationResult | None = None) -> ValuationOutcome:
+    summary = (
+        "## Deterministic Valuation\n"
+        f"Valuation unavailable for this run: {reason}. No fair value was "
+        "computed. Do not cite or invent a DCF target."
+    )
+    return ValuationOutcome("unavailable", reason, result, summary)
+
+
+async def _compute_run_valuation(symbol: str, run_id: str | None = None) -> ValuationOutcome:
+    """Compute the deterministic valuation for this run.
+
+    A data or compute error is an ``unavailable`` outcome, never an exception:
+    a valuation outage must not abort the run, and the debate and the stream
+    are told why it is missing.
+
+    A computed result is persisted to ``valuation_snapshots``
+    (source='agent_run', linked to ``run_id``) as a record of what the debate
+    saw. A failed snapshot does not cost the run its valuation.
     """
     try:
         vi = await fetch_valuation_input(symbol)
         result = value(vi)
     except Exception as e:  # noqa: BLE001 - valuation is best-effort context
-        print(f"[agents] valuation skipped for {symbol}: {e}")
-        return None, ""
+        logger.warning("valuation unavailable for %s: %r", symbol, e)
+        return _valuation_unavailable((str(e) or type(e).__name__)[:300])
     try:
         await record_valuation_snapshot(result, source="agent_run", run_id=run_id)
-    except Exception as e:  # noqa: BLE001 - snapshot is best-effort
-        print(f"[agents] valuation snapshot failed for {symbol}: {e}")
-    return result, format_valuation_for_agents(result)
+    except Exception:  # noqa: BLE001 - snapshot is best-effort
+        logger.exception("valuation snapshot failed for %s", symbol)
+    if result.data_quality == "unavailable":
+        return _valuation_unavailable("market data could not be retrieved", result)
+    summary = format_valuation_for_agents(result)
+    if result.data_quality == "multiples_only":
+        # Every multiples-only path in the engine records why first.
+        reason = result.dcf_invalid_reason or next(iter(result.warnings), "no DCF fair value")
+        return ValuationOutcome("multiples_only", reason, result, summary)
+    return ValuationOutcome("ok", None, result, summary)
+
+
+class _RunValuation:
+    """The run's deterministic valuation, fetched while the analysts work.
+
+    Every debate prompt carries its summary, so the debate waits for it; the
+    analysts do not.
+    """
+
+    def __init__(
+        self, graph: TradingAgentsGraph, symbol: str, run_id: str | None
+    ) -> None:
+        self.outcome: ValuationOutcome | None = None
+        self._context: RunContext = graph.run_context
+        self._task = asyncio.ensure_future(_compute_run_valuation(symbol, run_id=run_id))
+
+    @property
+    def result(self) -> ValuationResult | None:
+        return self.outcome.result if self.outcome else None
+
+    async def settle(self) -> dict | None:
+        """Wait for the valuation and put its summary into the run's context.
+        Returns the chunk announcing the outcome, the first time only."""
+        if self.outcome is not None:
+            return None
+        self.outcome = await self._task
+        self._context.valuation = self.outcome.summary
+        return _normalize_chunk(None, {"valuation": self.outcome.public()}, finished=False)
+
+    def cancel(self) -> None:
+        self._task.cancel()
+
+
+def _brief_on_owner(graph: TradingAgentsGraph, symbol: str) -> None:
+    """Write who the run is for into its context. The mandate is read here,
+    in the run's task, where this run's prompt overrides are set."""
+    owner: OwnerContext | None = graph.owner_context
+    if owner is None:
+        return
+    graph.run_context.owner = format_owner_context(owner, symbol)
+    graph.run_context.mandate = owner_mandate()
 
 
 async def run_graph(
@@ -945,16 +1099,24 @@ async def run_graph(
     """
     del max_debate_rounds, deep_thinking  # baked in at build_graph time
 
-    run_valuation, valuation_summary = await _compute_run_valuation(symbol, run_id=run_id)
-    _seed_valuation_context(graph, symbol, trade_date, valuation_summary)
-
+    _brief_on_owner(graph, symbol)
+    valuation = _RunValuation(graph, symbol, run_id)
     init_state = graph.propagator.create_initial_state(symbol, trade_date.isoformat())
     args = _graph_args(graph, run_id, usage)
-    async for chunk in _translate_states(
-        graph.graph.astream(init_state, **args), run_valuation, prev={},
-        judge=_confidence_judge(graph, args),
-    ):
-        yield chunk
+    selected = [analyst for analyst in ANALYSTS if analyst.label in graph.graph.nodes]
+    try:
+        # Every selected analyst starts in the first step, so say so before any
+        # of them has a tool call to show.
+        for analyst in selected:
+            yield _normalize_chunk(analyst.label, {}, finished=False)
+        async for chunk in _translate_states(
+            graph.graph.astream(init_state, **args), valuation, prev={},
+            judge=_confidence_judge(graph, args),
+            debate_waits_for=tuple(analyst.report for analyst in selected),
+        ):
+            yield chunk
+    finally:
+        valuation.cancel()
 
 
 async def resume_graph(
@@ -970,15 +1132,23 @@ async def resume_graph(
     (``astream(None, ...)``) first re-emits the checkpointed state, so diffing
     starts from that state: only what the resumed steps add is streamed, and
     the final-state chunk still covers the whole run.
+
+    A run that halted with some analysts done reruns only the unfinished ones.
+    The valuation is awaited up front here: the checkpoint may sit one step
+    before a debate turn. It is computed again, so a resumed run announces it
+    a second time.
     """
-    run_valuation, valuation_summary = await _compute_run_valuation(symbol, run_id=run_id)
-    _seed_valuation_context(graph, symbol, trade_date, valuation_summary)
+    _brief_on_owner(graph, symbol)
+    valuation = _RunValuation(graph, symbol, run_id)
+    announced = await valuation.settle()
+    if announced:
+        yield announced
 
     args = _graph_args(graph, run_id, usage)
     checkpoint = await graph.graph.aget_state(args["config"])
     prev = _state_snapshot(checkpoint.values) if checkpoint is not None else {}
     async for chunk in _translate_states(
-        graph.graph.astream(None, **args), run_valuation, prev=prev,
+        graph.graph.astream(None, **args), valuation, prev=prev,
         judge=_confidence_judge(graph, args),
     ):
         yield chunk
@@ -988,7 +1158,8 @@ def _graph_args(
     graph: TradingAgentsGraph, run_id: str | None, usage: AsyncCallbackHandler | None
 ) -> dict:
     """The propagator's stream args with our thread_id and usage callback merged
-    into its config (which already carries recursion_limit)."""
+    into its config (which already carries recursion_limit). The ``custom``
+    mode is added to its ``values`` so a debate node can say it has started."""
     args = graph.propagator.get_graph_args()
     existing_config = args.get("config") or {}
     configurable = dict(existing_config.get("configurable") or {})
@@ -997,7 +1168,7 @@ def _graph_args(
     new_config = {**existing_config, "configurable": configurable}
     if usage is not None:
         new_config["callbacks"] = [*(new_config.get("callbacks") or []), usage]
-    return {**args, "config": new_config}
+    return {**args, "stream_mode": ["values", "custom"], "config": new_config}
 
 
 def _confidence_judge(graph: TradingAgentsGraph, args: dict) -> Judge:
@@ -1008,50 +1179,84 @@ def _confidence_judge(graph: TradingAgentsGraph, args: dict) -> Judge:
     )
 
 
+def _analyst_chunk(analyst: Analyst, prev: dict, curr: dict, reports: list[dict]) -> dict | None:
+    """What one analyst did in this step.
+
+    Tool calls are read from the analyst's own conversation, so analysts
+    working in the same step never get each other's. The report landing is
+    what marks the analyst finished.
+    """
+    added = _new_messages(prev.get(analyst.channel) or [], curr.get(analyst.channel) or [])
+    calls, results = _extract_tool_events(added)
+    mine = [r for r in reports if r["node"] == analyst.label]
+    values: dict[str, Any] = {}
+    if calls:
+        values["tool_calls"] = calls
+    if results:
+        values["tool_results"] = results
+    if mine:
+        values["reports"] = mine
+        values["summary"] = _summary(mine[0]["content"])
+    if not values:
+        return None
+    return _normalize_chunk(analyst.label, values, finished=bool(mine))
+
+
+def _debate_may_be_next(state: dict, debate_waits_for: tuple[str, ...]) -> bool:
+    """Whether the graph's next step can be a debate turn: every selected
+    analyst has reported, or the debate is already running."""
+    turns = (state.get("investment_debate_state") or {}).get("count", 0)
+    reported = bool(debate_waits_for) and all(state.get(field) for field in debate_waits_for)
+    return reported or turns > 0
+
+
 async def _translate_states(
     states: AsyncIterator[Any],
-    run_valuation: ValuationResult | None,
+    valuation: _RunValuation | None,
     prev: dict,
     judge: Judge | None = None,
+    debate_waits_for: tuple[str, ...] = (),
 ) -> AsyncIterator[dict]:
     """Diff successive AgentState snapshots into normalized chunks, then yield
-    the terminal state as a ``final_state`` chunk."""
-    async for chunk in states:
-        curr = _state_snapshot(chunk)
-        # ``node`` from a report-field change means "this analyst just finished".
-        # We mark such chunks ``node_finished=True`` so the UI flips the card to
-        # done. Mid-run chunks (tool call/result) get ``node`` from
-        # ``_infer_node_from_tools`` so the card *appears* early — the user sees
-        # 'Fundamentals Analyst (working...)' as soon as the first
-        # get_balance_sheet call fires, instead of staring at "running..." until
-        # the report finalises 15-30s later.
-        finished_node = _detect_node(prev, curr)
+    the terminal state as a ``final_state`` chunk.
 
-        prev_msgs = prev.get("messages") or []
-        curr_msgs = curr.get("messages") or []
-        added = _new_messages(prev_msgs, curr_msgs)
-        calls, results = _extract_tool_events(added)
+    ``states`` is the graph's stream in the ``values`` and ``custom`` modes, so
+    each item is a ``(mode, payload)`` pair. A ``custom`` payload is a debate
+    node saying it has started. A ``values`` payload is a snapshot of one
+    graph step, and several analysts can move in one step. Each chunk still
+    names a single node, so a step yields one chunk per analyst that moved,
+    then one for the debate node that wrote in it.
+    """
+    async for mode, payload in states:
+        if mode == "custom":
+            yield _normalize_chunk(payload["node_started"], {}, finished=False)
+            continue
+        curr = _state_snapshot(payload)
 
-        node = finished_node or _infer_node_from_tools(calls, results)
+        reports = _extract_reports(prev, curr)
+        for analyst in ANALYSTS:
+            analyst_chunk = _analyst_chunk(analyst, prev, curr, reports)
+            if analyst_chunk:
+                yield analyst_chunk
 
+        node, wrote = _stage_written(prev, curr) or (None, "")
         values: dict[str, Any] = {}
-        if calls:
-            values["tool_calls"] = calls
-        if results:
-            values["tool_results"] = results
         debate = _extract_debate(prev, curr)
         if debate:
             values["debate"] = debate
+            node, wrote = _SPEAKER_NODES[debate["side"]], debate["text"]
         risk_debate = _extract_risk_debate(prev, curr)
         if risk_debate:
             values["risk_debate"] = risk_debate
-        reports = _extract_reports(prev, curr)
-        if reports:
-            values["reports"] = reports
+            node, wrote = _SPEAKER_NODES[risk_debate["speaker"]], risk_debate["text"]
+        if node:
+            values["summary"] = _summary(wrote)
         synthesis = _extract_synthesis(prev, curr)
         if synthesis:
             values["synthesis"] = synthesis
-        decision = _extract_decision(prev, curr, valuation=run_valuation)
+        decision = _extract_decision(
+            prev, curr, valuation=valuation.result if valuation else None
+        )
         if decision:
             if judge is not None:
                 decision["confidence"] = await judge(curr, decision["rating"])
@@ -1063,9 +1268,17 @@ async def _translate_states(
                     **decision["veto"],
                 }
 
-        finished = bool(finished_node and (calls or results or debate or decision or reports))
-        if values or node:
-            yield _normalize_chunk(node, values, finished=finished)
+        if values:
+            # A node is named here by what it wrote, so naming it means it is done.
+            yield _normalize_chunk(node, values, finished=node is not None)
+
+        # The graph only takes its next step when this loop asks for the next
+        # snapshot, so waiting here puts the valuation into the context before
+        # the first debate prompt is built.
+        if valuation is not None and _debate_may_be_next(curr, debate_waits_for):
+            announced = await valuation.settle()
+            if announced:
+                yield announced
 
         prev = curr
 
@@ -1073,5 +1286,7 @@ async def _translate_states(
     # tee can persist it on agent_runs.final_state.
     if prev:
         snapshot = _serialize_final_state(prev)
+        if valuation is not None and valuation.outcome is not None:
+            snapshot["valuation"] = valuation.outcome.public()
         if snapshot:
             yield _normalize_chunk(None, {"final_state": snapshot}, finished=False)

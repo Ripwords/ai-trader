@@ -12,7 +12,7 @@ function sse(...parts: string[]): string {
   return parts.join('')
 }
 const msg = (seq: number, ev: AgentEvent) => `id: ${seq}\ndata: ${JSON.stringify(ev)}\n\n`
-const end = (status: string, error: string | null = null) => `event: end\ndata: ${JSON.stringify({ status, error })}\n\n`
+const end = (status: string, error: string | null = null, finishedAt?: string) => `event: end\ndata: ${JSON.stringify({ status, error, finishedAt })}\n\n`
 const runMeta = (startedAt: string) => `event: run\ndata: ${JSON.stringify({ startedAt })}\n\n`
 
 function sseResponse(body: string, opts: { hang?: boolean } = {}): Response {
@@ -61,8 +61,20 @@ describe('applyFrame', () => {
     expect(v.events).toEqual([runStart, market, decision])
     expect(v.lastSeq).toBe(2)
     expect(v.currentNode).toBe('market')
-    expect(v.verdict).toEqual({ rating: 'buy', confidence: 70, rationale: 'ok' })
+    expect(v.verdict).toEqual({ rating: 'buy', ownerVerdict: null, confidence: 70, rationale: 'ok' })
     expect(v.status).toBe('running')
+  })
+
+  it('takes the finish time from the end frame and drops it when the run goes on', () => {
+    const done = applyFrame({ ...EMPTY_VIEW, status: 'running' }, { kind: 'end', status: 'failed', error: 'x', finishedAt: '2026-05-10T12:09:46.000Z' })
+    expect(done.finishedAt).toBe('2026-05-10T12:09:46.000Z')
+    expect(applyFrame(done, { kind: 'end', status: 'complete', error: null }).finishedAt).toBeNull()
+  })
+
+  it('carries the owner verdict of a decision, and none when the run had no mandate', () => {
+    const owned = applyFrame(EMPTY_VIEW, { kind: 'event', seq: 0, event: { ...decision, owner_verdict: 'trim' } })
+    expect(owned.verdict?.ownerVerdict).toBe('trim')
+    expect(applyFrame(EMPTY_VIEW, { kind: 'event', seq: 0, event: decision }).verdict?.ownerVerdict).toBeNull()
   })
 
   it('takes the terminal status and reason from the end frame', () => {
@@ -133,6 +145,28 @@ describe('useAgentsRun.start', () => {
 })
 
 describe('useAgentsRun.follow', () => {
+  it('reports when the run finished, and nothing while it is running', async () => {
+    mockFetch(() => sseResponse(sse(
+      runMeta('2026-05-10T12:00:00.000Z'), msg(0, runStart), end('complete', null, '2026-05-10T12:09:46.000Z'),
+    )))
+    const run = useAgentsRun()
+    expect(run.finishedAt.value).toBeNull()
+
+    await run.follow('r-7')
+
+    expect(run.finishedAt.value?.toISOString()).toBe('2026-05-10T12:09:46.000Z')
+  })
+
+  it('starts as the given run loading, without opening its stream', () => {
+    const fetchSpy = mockFetch(() => new Response(null, { status: 500 }))
+    const run = useAgentsRun({ initialRunId: 'r-7' })
+
+    expect(run.runId.value).toBe('r-7')
+    expect(run.status.value).toBe('running')
+    expect(run.events.value).toEqual([])
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('resets to idle when the run does not exist', async () => {
     mockFetch(() => new Response('', { status: 404 }))
     const run = useAgentsRun()

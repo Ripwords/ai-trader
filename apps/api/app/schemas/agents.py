@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+)
 
 
 _SUPPORTED_ANALYSTS = {"market", "social", "news", "fundamentals"}
@@ -59,6 +66,49 @@ class BacktestRequest(BaseModel):
         return out
 
 
+class OwnerPosition(BaseModel):
+    """What the owner holds of the run's symbol. ``unknown`` means the
+    accounts could not be read, which is different from holding nothing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["held", "not_held", "unknown"]
+    quantity: float | None = Field(default=None, ge=0)
+    market_value: float | None = Field(default=None, ge=0)
+    # Currency of ``market_value``; it can differ from the base currency.
+    currency: str | None = Field(default=None, max_length=8)
+    weight_pct: float | None = Field(default=None, ge=0)
+    unrealized_pnl_pct: float | None = None
+
+
+class OwnerContext(BaseModel):
+    """Who the run decides for. Facts only: how the deciding agents must rule
+    for this owner is the ``owner_mandate`` prompt, edited in Settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_currency: str | None = Field(default=None, max_length=8)
+    position: OwnerPosition
+    # In ``base_currency``.
+    investable_total: float | None = Field(default=None, ge=0)
+    monthly_contribution: float | None = Field(default=None, ge=0)
+    # What the owner asked the chat to remember, in their own words.
+    notes: list[Annotated[str, StringConstraints(max_length=240)]] = Field(
+        default_factory=list, max_length=30
+    )
+
+
+def owner_context_from_config(raw: object) -> OwnerContext | None:
+    """The owner context a run stored when it started, for a resume. A stored
+    value that no longer validates resumes the run without one."""
+    if raw is None:
+        return None
+    try:
+        return OwnerContext.model_validate(raw)
+    except ValidationError:
+        return None
+
+
 class RunRequest(BaseModel):
     """POST /agents/run request body.
 
@@ -94,6 +144,9 @@ class RunRequest(BaseModel):
         default_factory=lambda: ["market", "social", "news", "fundamentals"]
     )
     run_id: str | None = Field(default=None, min_length=1, max_length=64)
+    # Built by the Nuxt proxy from the owner's accounts. Without it the run
+    # decides for no one in particular, as a backtest does.
+    owner_context: OwnerContext | None = None
 
     @field_validator("selected_analysts")
     @classmethod

@@ -24,6 +24,7 @@ describe('prompt registry', () => {
       'chat.system',
       'chat.moomoo_rules',
       'chat.title',
+      'chat.memory',
       'research.risk_report',
       'news.contextual_angles',
       'algo.codegen',
@@ -40,6 +41,7 @@ describe('prompt registry', () => {
       'agents.conservative_debator',
       'agents.neutral_debator',
       'agents.risk_manager',
+      'agents.owner_mandate',
       'agents.confidence_judge',
     ])
   })
@@ -47,6 +49,7 @@ describe('prompt registry', () => {
   it('pins the output contracts the parsers depend on', () => {
     expect(findPrompt('agents.risk_manager')?.contract).toBe('FINAL TRANSACTION PROPOSAL')
     expect(findPrompt('agents.confidence_judge')?.contract).toBe('CONFIDENCE:')
+    expect(findPrompt('agents.owner_mandate')?.contract).toBe('OWNER VERDICT')
   })
 
   it('keeps the runtime parts out of the editable chat body', () => {

@@ -1,17 +1,15 @@
 """The fundamentals and news analysts must be able to call the earnings tools.
 
 Upstream TradingAgents hardcodes each analyst's tool list and binds the tool
-objects it imported at load time, so a toolkit swap alone neither adds the new
-tools nor puts our docstrings in front of the LLM. ``build_graph`` installs
-its own analyst factories and ToolNodes for those two analysts.
+objects it imported at load time. ``build_graph`` compiles its own analyst
+nodes and ToolNodes from the per-run toolkit instead.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
-from tradingagents.agents.utils.agent_states import AgentState
+from langchain_core.messages import AIMessage
 
 from app.services.agents.llm_config import LlmRuntimeConfig, RoleModel
 from app.services.agents.toolkit import build_toolkit
@@ -62,33 +60,19 @@ class _RecordingLLM:
         return RunnableLambda(answer)
 
 
-def _state() -> AgentState:
-    return AgentState(
-        messages=[HumanMessage(content="AMZN")],
-        company_of_interest="AMZN",
-        trade_date="2026-10-31",
-    )
-
-
-def test_analyst_factories_bind_our_toolkit_including_earnings_tools() -> None:
-    from app.services.agents.graph import fundamentals_analyst_factory, news_analyst_factory
+def test_analyst_nodes_bind_our_toolkit_including_earnings_tools() -> None:
+    from app.services.agents.graph import _ANALYST_BY_KEY, RunState, analyst_node
 
     toolkit = build_toolkit(None)
-    for factory, report_key in ((fundamentals_analyst_factory, "fundamentals_report"), (news_analyst_factory, "news_report")):
+    state = RunState(company_of_interest="AMZN", trade_date="2026-10-31")
+    for key in ("fundamentals", "news"):
+        analyst = _ANALYST_BY_KEY[key]
         llm = _RecordingLLM()
-        out = factory(toolkit)(llm)(_state())
+        out = analyst_node(analyst, toolkit, llm, leads=True)(state)
         names = {t.name for t in llm.bound}
         assert EARNINGS <= names
         # The bound objects are ours (our docstrings reach the LLM), not upstream's.
         assert toolkit.get_earnings_release in llm.bound
-        assert out[report_key] == "report"
+        assert out.update[analyst.report] == "report"
         assert "get_earnings_surprise" in llm.system  # tool_names placeholder filled
         assert "consensus" in llm.system  # earnings-aware default prompt
-
-
-def test_build_graph_patches_setup_with_the_toolkit_factories(tmp_path: Any) -> None:
-    from tradingagents.graph import setup as ta_setup
-
-    _build(tmp_path)
-    assert getattr(ta_setup.create_fundamentals_analyst, "__ai_trader_toolkit__", False)
-    assert getattr(ta_setup.create_news_analyst, "__ai_trader_toolkit__", False)
