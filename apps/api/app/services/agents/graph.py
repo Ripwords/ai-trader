@@ -259,6 +259,17 @@ def with_analyst_reports(plan: str, state: Any) -> str:
     )
 
 
+class _NoMemory:
+    """Stands in for upstream's per-role memory of past trades. Nothing here
+    ever stores a lesson, and upstream's empty memory hands the node an empty
+    string (or "No past memories found."), which a prompt asking for lessons
+    reads as lessons to make up. The default prompts no longer ask; a saved
+    override that still has ``{past_memory_str}`` gets this instead."""
+
+    def get_memories(self, _situation: str, n_matches: int = 1) -> list[dict[str, str]]:
+        return [{"recommendation": prompts_mod.NO_MEMORY_VALUE}]
+
+
 def trader_with_reports(llm: Any, memory: Any) -> Callable[[Any], dict[str, Any]]:
     node = _upstream_create_trader(llm, memory)
 
@@ -340,14 +351,15 @@ def _compile_graph(
     argues = ContextLlm(quick, ta.run_context)
     quick_decides = ContextLlm(quick, ta.run_context, decides=True)
     deep_decides = ContextLlm(deep, ta.run_context, decides=True)
-    workflow.add_node("Bull Researcher", create_bull_researcher(argues, ta.bull_memory))
-    workflow.add_node("Bear Researcher", create_bear_researcher(argues, ta.bear_memory))
-    workflow.add_node("Research Manager", create_research_manager(deep_decides, ta.invest_judge_memory))
-    workflow.add_node("Trader", trader_with_reports(quick_decides, ta.trader_memory))
+    memory = _NoMemory()
+    workflow.add_node("Bull Researcher", create_bull_researcher(argues, memory))
+    workflow.add_node("Bear Researcher", create_bear_researcher(argues, memory))
+    workflow.add_node("Research Manager", create_research_manager(deep_decides, memory))
+    workflow.add_node("Trader", trader_with_reports(quick_decides, memory))
     workflow.add_node("Aggressive Analyst", create_aggressive_debator(argues))
     workflow.add_node("Neutral Analyst", create_neutral_debator(argues))
     workflow.add_node("Conservative Analyst", create_conservative_debator(argues))
-    workflow.add_node("Risk Judge", risk_manager_with_reports(deep_decides, ta.risk_manager_memory))
+    workflow.add_node("Risk Judge", risk_manager_with_reports(deep_decides, memory))
 
     workflow.add_edge([analyst.clear_node for analyst in selected], "Bull Researcher")
     workflow.add_conditional_edges(

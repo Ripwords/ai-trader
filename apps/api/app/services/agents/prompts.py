@@ -1,8 +1,9 @@
 """Editable debate prompts.
 
 The defaults are TradingAgents' own ``.md`` prompts (with our earnings
-rules appended to the fundamentals and news analysts) plus our confidence
-judge and the owner mandate.
+rules appended to the fundamentals and news analysts, and the requests for
+lessons from past trades taken out) plus our confidence judge and the owner
+mandate.
 Settings in the web app stores overrides; each run fetches them once, at the
 start, and keeps them in a ``ContextVar`` so concurrent runs never see each
 other's text. Every node module calls ``load_prompt(name)`` from its own
@@ -55,9 +56,6 @@ _transport: httpx.AsyncBaseTransport | None = None
 
 _run_overrides: ContextVar[dict[str, str]] = ContextVar("agents_prompt_overrides", default={})
 
-_upstream_load_prompt = ta_prompts.load_prompt
-
-
 class PromptDefault(TypedDict):
     text: str
     placeholders: list[str]
@@ -96,21 +94,94 @@ DEFAULT_PROMPT_ADDITIONS: dict[str, str] = {
 }
 
 
+NO_MEMORY = (
+    "You have no record of earlier debates, of past decisions or of how they turned out. "
+    "Do not refer to past experience or to errors of your own, and do not write as if you "
+    "remember any."
+)
+
+# What ``{past_memory_str}`` holds in a saved override that still uses it.
+NO_MEMORY_VALUE = "None. No earlier decision or its outcome is on record for this run. Do not refer to any."
+
+# (upstream text, replacement) pairs applied to the upstream ``.md``. Upstream
+# tells five roles to learn from reflections on past trades and hands them a
+# memory nothing in this app ever fills. Asked to address lessons it was not
+# given, the Bull wrote "I've been burned before" in one run and the judges
+# reasoned about missing lessons. Each target must occur exactly once, so an
+# upstream release that rewords one fails ``raw_node_prompt`` and its tests.
+_RESEARCHER_MEMORY_EDITS = (
+    ("Reflections from similar situations and lessons learned: {past_memory_str}\n", ""),
+    (
+        " You must also address reflections and learn from lessons and mistakes you made in the past.",
+        f" {NO_MEMORY}",
+    ),
+)
+DEFAULT_PROMPT_EDITS: dict[str, tuple[tuple[str, str], ...]] = {
+    "bull_researcher": _RESEARCHER_MEMORY_EDITS,
+    "bear_researcher": _RESEARCHER_MEMORY_EDITS,
+    "research_manager": (
+        (
+            "Take into account your past mistakes on similar situations. Use these insights to "
+            "refine your decision-making and ensure you are learning and improving. ",
+            f"{NO_MEMORY} ",
+        ),
+        ('Here are your past reflections on mistakes:\n"{past_memory_str}"\n\n', ""),
+    ),
+    "trader_system": (
+        (
+            " Do not forget to utilize lessons from past decisions to learn from your mistakes. "
+            "Here is some reflections from similar situations you traded in and the lessons "
+            "learned: {past_memory_str}",
+            f" {NO_MEMORY}",
+        ),
+    ),
+    "risk_manager": (
+        (
+            "4. **Learn from Past Mistakes**: Use lessons from **{past_memory_str}** to address "
+            "prior misjudgments and improve the decision you are making now to make sure you "
+            "don't make a wrong BUY/SELL/HOLD call that loses money.",
+            f"4. **Use Only This Run**: {NO_MEMORY}",
+        ),
+        ("anchored in the debate and past reflections.", "anchored in the debate."),
+        (
+            "Focus on actionable insights and continuous improvement. Build on past lessons, "
+            "critically evaluate all perspectives, and ensure each decision advances better "
+            "outcomes.",
+            "Focus on actionable insights and critically evaluate all perspectives.",
+        ),
+    ),
+}
+
+
+def _upstream_text(name: str) -> str:
+    return (ta_prompts._PROMPT_DIR / f"{name}.md").read_text()
+
+
 def raw_node_prompt(name: str) -> str:
     """The default prompt text, without the language line ``load_prompt`` appends:
-    the upstream ``.md`` plus any of our additions for that node."""
-    upstream = (ta_prompts._PROMPT_DIR / f"{name}.md").read_text()
-    return upstream + DEFAULT_PROMPT_ADDITIONS.get(name, "")
+    the upstream ``.md`` with our edits applied, plus any of our additions."""
+    text = _upstream_text(name)
+    for old, new in DEFAULT_PROMPT_EDITS.get(name, ()):
+        if text.count(old) != 1:
+            raise ValueError(f"{name}: expected one occurrence of {old[:60]!r} in the upstream prompt")
+        text = text.replace(old, new)
+    return text + DEFAULT_PROMPT_ADDITIONS.get(name, "")
 
 
 def prompt_defaults() -> dict[str, PromptDefault]:
     from .confidence import JUDGE_PROMPT_TEMPLATE
     from .owner import OWNER_MANDATE_DEFAULT, OWNER_MANDATE_PROMPT
 
-    texts = {name: raw_node_prompt(name) for name in NODE_PROMPTS}
-    texts[OWNER_MANDATE_PROMPT] = OWNER_MANDATE_DEFAULT
-    texts[JUDGE_PROMPT] = JUDGE_PROMPT_TEMPLATE
-    return {name: {"text": text, "placeholders": placeholders(text)} for name, text in texts.items()}
+    defaults: dict[str, PromptDefault] = {}
+    for name in NODE_PROMPTS:
+        text = raw_node_prompt(name)
+        # The node still fills every upstream field, so a saved override that
+        # uses one our default dropped stays valid.
+        fields = sorted({*placeholders(text), *placeholders(_upstream_text(name))})
+        defaults[name] = {"text": text, "placeholders": fields}
+    for name, text in ((OWNER_MANDATE_PROMPT, OWNER_MANDATE_DEFAULT), (JUDGE_PROMPT, JUDGE_PROMPT_TEMPLATE)):
+        defaults[name] = {"text": text, "placeholders": placeholders(text)}
+    return defaults
 
 
 def set_run_overrides(overrides: dict[str, str]) -> Token[dict[str, str]]:
@@ -128,11 +199,8 @@ def get_override(name: str) -> str | None:
 def load_prompt_with_overrides(name: str) -> str:
     """``load_prompt`` that prefers this run's override, keeping the language line."""
     override = get_override(name)
-    if override is None:
-        if name in DEFAULT_PROMPT_ADDITIONS:
-            return raw_node_prompt(name) + ta_prompts._language_instruction()
-        return _upstream_load_prompt(name)
-    return override + ta_prompts._language_instruction()
+    text = raw_node_prompt(name) if override is None else override
+    return text + ta_prompts._language_instruction()
 
 
 def install_prompt_overrides() -> None:
