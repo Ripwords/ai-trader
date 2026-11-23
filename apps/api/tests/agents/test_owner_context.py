@@ -329,3 +329,27 @@ async def test_the_run_endpoint_rejects_a_malformed_owner_context(
 
     assert status == 422
     assert seen == {}
+
+
+def test_a_contribution_without_a_base_currency_is_not_left_to_read_as_dollars() -> None:
+    text = format_owner_context(
+        _owner({"position": {"status": "held", "currency": "USD"}, "monthly_contribution": 2000}),
+        "US.NVDA",
+    )
+
+    assert (
+        "- Monthly contribution: they add about 2,000 of new money every month, in their base "
+        "currency, which is unknown. It is not known to be in USD. Do not compare the amount with "
+        "the position's value, convert it, or work out a position weight after a contribution."
+    ) in text
+
+
+def test_a_contribution_in_another_currency_than_the_position_says_so() -> None:
+    text = format_owner_context(
+        _owner({**HELD, "monthly_contribution": 2000}), "US.NVDA"
+    )
+
+    assert (
+        "- Monthly contribution: they add about 2,000 MYR of new money every month. "
+        "That is MYR, not USD: convert before comparing it with the position's value."
+    ) in text

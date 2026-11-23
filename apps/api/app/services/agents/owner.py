@@ -69,7 +69,7 @@ def _position_line(position: OwnerPosition, symbol: str) -> str:
     return line + f" Unrealised gain or loss: {position.unrealized_pnl_pct:+.1f}%."
 
 
-def _contribution_line(amount: float | None, currency: str) -> str:
+def _contribution_line(amount: float | None, currency: str, position_currency: str | None) -> str:
     if amount is None:
         return (
             "- Monthly contribution: unknown. How much new money the owner adds each month is not "
@@ -79,7 +79,20 @@ def _contribution_line(amount: float | None, currency: str) -> str:
     stated = f"{_amount(amount)} {currency}".rstrip()
     if amount == 0:
         return f"- Monthly contribution: {stated}. The owner adds no new money each month."
-    return f"- Monthly contribution: they add about {stated} of new money every month."
+    line = f"- Monthly contribution: they add about {stated} of new money every month"
+    if not currency:
+        not_known_to_be = f" It is not known to be in {position_currency}." if position_currency else ""
+        return (
+            f"{line}, in their base currency, which is unknown.{not_known_to_be} Do not compare "
+            "the amount with the position's value, convert it, or work out a position weight "
+            "after a contribution."
+        )
+    if position_currency and position_currency != currency:
+        return (
+            f"{line}. That is {currency}, not {position_currency}: convert before comparing it "
+            "with the position's value."
+        )
+    return line + "."
 
 
 def format_owner_context(owner: OwnerContext, symbol: str) -> str:
@@ -99,7 +112,7 @@ def format_owner_context(owner: OwnerContext, symbol: str) -> str:
         _position_line(owner.position, symbol),
         f"- Investable assets: {total}.",
         f"- Base currency: {owner.base_currency or 'unknown'}.",
-        _contribution_line(owner.monthly_contribution, currency),
+        _contribution_line(owner.monthly_contribution, currency, owner.position.currency),
     ]
     if owner.notes:
         lines.append("- What the owner has asked to be remembered about them:")
