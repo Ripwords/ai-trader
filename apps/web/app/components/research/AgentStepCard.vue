@@ -70,7 +70,10 @@ function previewSnippet(s: string | undefined): string {
   >
     <header class="step__head" @click="toggle">
       <span class="step__rule" aria-hidden="true">
-        <UIcon :name="stateIcon" class="step__rule-glyph" aria-hidden="true" />
+        <!-- Keyed by name: @nuxt/icon writes a late-loading icon's CSS under
+             the class the instance has by then, so an instance that changes
+             name can paint the old glyph under the new class. -->
+        <UIcon :key="stateIcon" :name="stateIcon" class="step__rule-glyph" aria-hidden="true" />
       </span>
       <span class="step__node">{{ label }}</span>
       <span v-if="toolCalls.length > 0" class="step__count" data-mono>

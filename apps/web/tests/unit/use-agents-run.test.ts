@@ -133,6 +133,16 @@ describe('useAgentsRun.start', () => {
 })
 
 describe('useAgentsRun.follow', () => {
+  it('starts as the given run loading, without opening its stream', () => {
+    const fetchSpy = mockFetch(() => new Response(null, { status: 500 }))
+    const run = useAgentsRun({ initialRunId: 'r-7' })
+
+    expect(run.runId.value).toBe('r-7')
+    expect(run.status.value).toBe('running')
+    expect(run.events.value).toEqual([])
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('resets to idle when the run does not exist', async () => {
     mockFetch(() => new Response('', { status: 404 }))
     const run = useAgentsRun()

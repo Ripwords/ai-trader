@@ -91,11 +91,19 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   })
 }
 
-export function useAgentsRun(opts: { backoffMs?: (attempt: number) => number; idleMs?: number } = {}) {
+interface Options {
+  backoffMs?: (attempt: number) => number
+  idleMs?: number
+  /** A run the page follows once mounted. The view starts as that run
+   *  loading, so the server render and the client's first render agree. */
+  initialRunId?: string | null
+}
+
+export function useAgentsRun(opts: Options = {}) {
   const backoffMs = opts.backoffMs ?? defaultBackoff
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
-  const view = shallowRef<RunView>(EMPTY_VIEW)
-  const runId = ref<string | null>(null)
+  const runId = ref<string | null>(opts.initialRunId ?? null)
+  const view = shallowRef<RunView>(runId.value ? { ...EMPTY_VIEW, status: 'running' } : EMPTY_VIEW)
   const connection = ref<Connection>('idle')
   // Set when the symbol could not be uniquely resolved (422), so the page can
   // offer a picker instead of a bare failure.

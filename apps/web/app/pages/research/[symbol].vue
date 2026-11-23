@@ -37,7 +37,7 @@ const {
   events, status, verdict, runId, error, resolution, startedAt, connection,
   start, resume, cancel, follow, reconnect, reset, resuming,
   cancelling: runCancelling, cancelError: runCancelError,
-} = useAgentsRun()
+} = useAgentsRun({ initialRunId: queryRunId.value })
 
 // Candidates to offer when the symbol couldn't be uniquely resolved (422).
 // Prefer a moomoo code when one exists; otherwise use the Yahoo ticker.
@@ -113,6 +113,7 @@ onUnmounted(() => {
 })
 
 watch([status, startedAt], ([s]) => {
+  if (import.meta.server) return
   if (s === 'running') {
     recomputeElapsed()
     if (elapsedTimer) clearInterval(elapsedTimer)
@@ -200,33 +201,39 @@ watch(liveRunId, (id, prev) => {
   if (id !== prev) followLive(id)
 })
 
-watch(
-  queryRunId,
-  async (id, prev) => {
-    if (import.meta.server || id === prev) return
+async function showRun(id: string) {
+  await follow(id)
 
-    if (!id) {
-      reset()
-      void refreshHistory()
-      return
-    }
+  // The run no longer exists (a stale URL): drop the dead ``?run=``.
+  if (status.value === 'idle' && runId.value === null) {
+    const { run: _drop, ...rest } = route.query
+    void router.replace({ query: rest })
+  }
+  else {
+    void refreshHistory()
+  }
+}
 
-    // Started on this page; already following it.
-    if (id === runId.value) return
+// The stream opens after hydration. Opening it during setup changed the view
+// before the client's first render, which then disagreed with the server's.
+onMounted(() => {
+  if (queryRunId.value) void showRun(queryRunId.value)
+})
 
-    await follow(id)
+watch(queryRunId, (id, prev) => {
+  if (id === prev) return
 
-    // The run no longer exists (a stale URL): drop the dead ``?run=``.
-    if (status.value === 'idle' && runId.value === null) {
-      const { run: _drop, ...rest } = route.query
-      void router.replace({ query: rest })
-    }
-    else {
-      void refreshHistory()
-    }
-  },
-  { immediate: true },
-)
+  if (!id) {
+    reset()
+    void refreshHistory()
+    return
+  }
+
+  // Started on this page; already following it.
+  if (id === runId.value) return
+
+  void showRun(id)
+})
 </script>
 
 <template>

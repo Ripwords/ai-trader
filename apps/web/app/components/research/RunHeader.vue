@@ -35,6 +35,7 @@ watch(
 watch(
   () => props.status,
   (s) => {
+    if (import.meta.server) return
     if (s === 'running') {
       if (lastEventAt.value === null) lastEventAt.value = Date.now()
       if (tick) clearInterval(tick)
@@ -163,7 +164,7 @@ const statusLabel = computed(() => {
       <span v-if="activityLine.node" class="run-header__activity-node">
         {{ activityLine.node.replace(/_/g, ' ') }}
       </span>
-      <UIcon v-if="activityLine.icon" :name="activityLine.icon" class="run-header__activity-icon" aria-hidden="true" />
+      <UIcon v-if="activityLine.icon" :key="activityLine.icon" :name="activityLine.icon" class="run-header__activity-icon" aria-hidden="true" />
       <span v-else class="run-header__activity-glyph" data-mono>
         ·
       </span>
