@@ -88,6 +88,13 @@ describe('AgentsDebateCard', () => {
     expect(wrapper.text()).toContain('verdict ready')
   })
 
+  it('lists a debater once however many rounds it speaks, and names the one speaking now', async () => {
+    const starts = ['Bull Researcher', 'Bear Researcher', 'Bull Researcher'].map(node => ({ type: 'node-start', node }))
+    const { wrapper } = await mountCard({ runId: 'run-1', events: starts }, true)
+    expect(wrapper.findAll('ol li').map(li => li.text())).toEqual(['Bull Researcher', 'Bear Researcher'])
+    expect(wrapper.text()).toContain('active: Bull Researcher')
+  })
+
   it('shows the failure when the run produced no verdict', async () => {
     const { wrapper } = await mountCard({ runId: 'run-1', rating: null, error: 'run failed: agents service unreachable' })
     expect(wrapper.text()).toContain('run failed: agents service unreachable')

@@ -60,6 +60,23 @@ function valuationReason(reason: string | null): string | null {
   return first ? `${first.charAt(0).toUpperCase()}${first.slice(1)}.` : null
 }
 
+// The api's node name for each debater, whose turn the debate panels show in full.
+const DEBATE_NODE: Record<'bull' | 'bear', string> = {
+  bull: 'Bull Researcher',
+  bear: 'Bear Researcher',
+}
+const RISK_NODE: Record<RiskSpeaker, string> = {
+  aggressive: 'Aggressive Analyst',
+  conservative: 'Conservative Analyst',
+  neutral: 'Neutral Analyst',
+}
+// The verdict card under the timeline shows the decision this node writes.
+const DECISION_NODE = 'Risk Manager'
+const PANEL_OF_NODE = new Map<string, 'debate' | 'risk-debate'>([
+  ...Object.values(DEBATE_NODE).map(node => [node, 'debate'] as const),
+  ...Object.values(RISK_NODE).map(node => [node, 'risk-debate'] as const),
+])
+
 type RenderItem =
   | ({ kind: 'node' } & NodeRecord)
   | ({ kind: 'debate' } & DebateRecord)
@@ -94,10 +111,15 @@ const items = computed<RenderItem[]>(() => {
   // A resumed run reports its valuation again; the latest one stands.
   let valuation: { label: string; reason: string | null } | null = null
   const vetoRecords: ValuationVetoRecord[] = []
+  // Nodes whose full text a debate panel or synthesis card shows.
+  const shownInFull = new Set<string>()
 
   for (const ev of props.events) {
     if (ev.type === 'node-start') {
-      if (!nodes.has(ev.node)) {
+      const started = nodes.get(ev.node)
+      // A debater starts again for each round it speaks in.
+      if (started) started.state = 'running'
+      else {
         nodes.set(ev.node, {
           node: ev.node,
           toolCalls: [],
@@ -105,7 +127,12 @@ const items = computed<RenderItem[]>(() => {
           report: null,
           state: 'running',
         })
-        order.push({ kind: 'node', node: ev.node })
+        // The second debater starts after the first one's turn opened the
+        // panel. Its card joins the first one's, above the panel.
+        const panel = PANEL_OF_NODE.get(ev.node)
+        const at = panel ? order.findIndex(o => o.kind === panel) : -1
+        if (at === -1) order.push({ kind: 'node', node: ev.node })
+        else order.splice(at, 0, { kind: 'node', node: ev.node })
       }
     }
     else if (ev.type === 'tool-call') {
@@ -113,13 +140,11 @@ const items = computed<RenderItem[]>(() => {
       if (n) n.toolCalls.push({ tool: ev.tool, args: ev.args })
     }
     else if (ev.type === 'tool-result') {
-      const n = nodes.get(ev.node)
-      if (n) {
-        const tc = n.toolCalls[n.toolCalls.length - 1]
-        if (tc && tc.tool === ev.tool) {
-          tc.ok = ev.ok
-          tc.preview = ev.preview
-        }
+      // A step sends several calls at once and their results follow in the same order.
+      const tc = nodes.get(ev.node)?.toolCalls.find(c => c.tool === ev.tool && c.ok === undefined)
+      if (tc) {
+        tc.ok = ev.ok
+        tc.preview = ev.preview
       }
     }
     else if (ev.type === 'node-end') {
@@ -151,6 +176,7 @@ const items = computed<RenderItem[]>(() => {
       }
       if (ev.side === 'bull') d.bull = ev.text
       else d.bear = ev.text
+      shownInFull.add(DEBATE_NODE[ev.side])
     }
     else if (ev.type === 'risk-debate-turn') {
       if (riskTurns === null) {
@@ -158,8 +184,14 @@ const items = computed<RenderItem[]>(() => {
         order.push({ kind: 'risk-debate' })
       }
       riskTurns.push({ speaker: ev.speaker, text: ev.text, turn: ev.turn })
+      shownInFull.add(RISK_NODE[ev.speaker])
     }
     else if (ev.type === 'synthesis') {
+      shownInFull.add(ev.node)
+      // The plan is the step's whole output, and runs stored before the api
+      // reported these steps' ends have nothing else to finish them.
+      const author = nodes.get(ev.node)
+      if (author) author.state = 'done'
       const existing = synth.get(ev.stage)
       if (existing) {
         existing.content = ev.content
@@ -169,6 +201,9 @@ const items = computed<RenderItem[]>(() => {
         synth.set(ev.stage, { stage: ev.stage, node: ev.node, content: ev.content })
         order.push({ kind: 'synthesis', stage: ev.stage })
       }
+    }
+    else if (ev.type === 'decision') {
+      shownInFull.add(DECISION_NODE)
     }
     else if (ev.type === 'valuation') {
       if (valuation === null) order.push({ kind: 'valuation' })
@@ -193,7 +228,10 @@ const items = computed<RenderItem[]>(() => {
   }
 
   return order.map((o): RenderItem => {
-    if (o.kind === 'node')           return { kind: 'node', ...nodes.get(o.node)! }
+    if (o.kind === 'node') {
+      const node = nodes.get(o.node)!
+      return { kind: 'node', ...node, summary: shownInFull.has(o.node) ? null : node.summary }
+    }
     if (o.kind === 'debate')         return { kind: 'debate', ...debates.get(o.round)! }
     if (o.kind === 'risk-debate')    return { kind: 'risk-debate', turns: riskTurns ?? [] }
     if (o.kind === 'valuation-veto') return { kind: 'valuation-veto', ...vetoRecords[o.idx]! }

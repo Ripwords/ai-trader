@@ -4,6 +4,24 @@ import { mount } from '@vue/test-utils'
 import AgentStepCard from '../../app/components/research/AgentStepCard.vue'
 
 describe('AgentStepCard', () => {
+  it('offers nothing to open when the step has no tool calls, report or summary', async () => {
+    const wrapper = mount(AgentStepCard, {
+      props: { node: 'Bull Researcher', toolCalls: [], summary: null, state: 'done' },
+    })
+    expect(wrapper.find('.step__chevron').exists()).toBe(false)
+    await wrapper.find('.step__head').trigger('click')
+    expect(wrapper.find('.step__body').exists()).toBe(false)
+  })
+
+  it('opens to the summary of a step that has one', async () => {
+    const wrapper = mount(AgentStepCard, {
+      props: { node: 'Market Analyst', toolCalls: [], summary: 'Price is above the 50-day.', state: 'done' },
+    })
+    expect(wrapper.find('.step__chevron').exists()).toBe(true)
+    await wrapper.find('.step__head').trigger('click')
+    expect(wrapper.find('.summary').text()).toBe('Price is above the 50-day.')
+  })
+
   // @nuxt/icon writes a late-loading icon's CSS under the class the instance
   // has when the load resolves. An instance whose name changed from diamond to
   // check in the meantime paints the diamond under the check class.

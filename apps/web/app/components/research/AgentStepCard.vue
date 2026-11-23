@@ -29,6 +29,8 @@ const props = defineProps<Props>()
 // the per-card toggle can stay quiet until the user opts in.
 const expanded = ref(false)
 
+const hasBody = computed(() => props.toolCalls.length > 0 || !!props.report || !!props.summary)
+
 function toggle() {
   expanded.value = !expanded.value
 }
@@ -68,7 +70,7 @@ function previewSnippet(s: string | undefined): string {
     :data-tone="tone"
     data-testid="agent-step-card"
   >
-    <header class="step__head" @click="toggle">
+    <header class="step__head" :data-openable="hasBody" @click="toggle">
       <span class="step__rule" aria-hidden="true">
         <!-- Keyed by name: @nuxt/icon writes a late-loading icon's CSS under
              the class the instance has by then, so an instance that changes
@@ -79,10 +81,10 @@ function previewSnippet(s: string | undefined): string {
       <span v-if="toolCalls.length > 0" class="step__count" data-mono>
         {{ toolCalls.length }} call{{ toolCalls.length === 1 ? '' : 's' }}
       </span>
-      <span class="step__chevron" data-mono :data-expanded="expanded">›</span>
+      <span v-if="hasBody" class="step__chevron" data-mono :data-expanded="expanded">›</span>
     </header>
 
-    <div v-if="expanded" class="step__body">
+    <div v-if="expanded && hasBody" class="step__body">
       <ol v-if="toolCalls.length > 0" class="tools">
         <li
           v-for="(tc, i) in toolCalls"
@@ -158,7 +160,8 @@ function previewSnippet(s: string | undefined): string {
   user-select: none;
   border-top: 1px solid var(--ink-line);
 }
-.step__head:hover { background: color-mix(in srgb, var(--paper-0) 1.5%, transparent); }
+.step__head[data-openable="false"] { cursor: default; }
+.step__head[data-openable="true"]:hover { background: color-mix(in srgb, var(--paper-0) 1.5%, transparent); }
 
 .step__rule {
   position: relative;
