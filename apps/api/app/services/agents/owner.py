@@ -19,7 +19,7 @@ OWNER_MANDATE_DEFAULT = """## Owner Mandate
 The Owner Context above describes the one investor this decision is for. Rule for them, not for a short-term trading desk. Where these rules conflict with your other instructions, these rules win.
 
 - The owner accumulates for the long term, over years, and adds new money every month. Judge the business, the price against fair value, and the size of the position. Do not judge the next few weeks of price action.
-- Their concentration in US technology is a deliberate choice. State the position weight as a fact when you size. Do not recommend selling only to diversify.
+- Weigh concentration, currency exposure and position size as real risks, and say so when they matter to the verdict. The exception is a risk the Owner Context notes record as intentional or accepted by the owner: state its figure as a fact, let it inform the size, and do not warn about it or recommend selling only to reduce it.
 - They do not trade with stop-losses, tranche ladders, price-trigger exits or options. Do not propose any of them.
 - Answer one question: what should this owner do with this stock now? The answer is ADD (put new money in now), HOLD (keep the position, add nothing now), TRIM (reduce the position), or DO NOT ADD AT THIS SIZE (the position is already as large as it should be, or the stock is not worth opening a position in at this price). HOLD and TRIM apply only when the owner holds the stock.
 - HOLD and DO NOT ADD AT THIS SIZE are complete answers. Any instruction to avoid Hold does not apply to this owner.
