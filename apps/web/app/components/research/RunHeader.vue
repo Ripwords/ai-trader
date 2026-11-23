@@ -5,7 +5,9 @@ import type { AgentEvent } from '../../../types/agents'
 interface Props {
   status: 'idle' | 'running' | 'complete' | 'failed' | 'cancelled'
   events: AgentEvent[]
-  elapsedSec: number
+  /** Seconds since the run started while it runs; how long it took once it
+   *  has ended. Null when a finished run recorded no end time. */
+  durationSec: number | null
   symbol: string
   runId: string | null
   cancelling?: boolean
@@ -17,7 +19,7 @@ const emit = defineEmits<{ cancel: [] }>()
 // ─── Last-event clock ───────────────────────────────────────────────
 // Records the wall-clock at which we last saw any event flow in. Drives
 // the "no signal for X seconds" stuck hint — if the LLM is hung waiting
-// on a slow provider, this counter ticks up while ``elapsedSec`` keeps
+// on a slow provider, this counter ticks up while the run clock keeps
 // rising too. The two together let the user distinguish "still working"
 // from "really stuck".
 const lastEventAt = ref<number | null>(null)
@@ -59,32 +61,13 @@ onUnmounted(() => {
 })
 
 // ─── Activity readout ──────────────────────────────────────────────
-const activeNode = computed(() => {
-  for (let i = props.events.length - 1; i >= 0; i--) {
-    const ev = props.events[i]
-    if (ev?.type === 'node-start') return ev.node
-  }
-  return null
-})
-
-const lastTool = computed(() => {
-  for (let i = props.events.length - 1; i >= 0; i--) {
-    const ev = props.events[i]
-    if (ev?.type === 'tool-call' || ev?.type === 'tool-result') return ev
-  }
-  return null
-})
-
+// The analysts run at the same time, so the node that started last is not
+// the node whose tool call came last. A tool event names its own node.
 const activityLine = computed(() => {
-  const tool = lastTool.value
-  const node = activeNode.value
-  if (tool) {
-    const icon = tool.type === 'tool-call' ? 'i-lucide-arrow-right' : 'i-lucide-arrow-left'
-    return { node, icon, tool: tool.tool }
-  }
-  if (node) return { node, icon: null, tool: 'thinking' }
-  if (props.events.length === 0) return { node: null, icon: null, tool: 'spinning up' }
-  return { node, icon: null, tool: '—' }
+  const last = props.events.findLast(ev => ev.type === 'node-start' || ev.type === 'tool-call' || ev.type === 'tool-result')
+  if (!last) return { node: null, icon: null, tool: props.events.length === 0 ? 'spinning up' : '—' }
+  if (last.type === 'node-start') return { node: last.node, icon: null, tool: 'thinking' }
+  return { node: last.node, icon: last.type === 'tool-call' ? 'i-lucide-arrow-right' : 'i-lucide-arrow-left', tool: last.tool }
 })
 
 // ─── Stuck hint thresholds ─────────────────────────────────────────
@@ -97,12 +80,15 @@ const stuckLevel = computed<'ok' | 'soft' | 'hard'>(() => {
   return 'ok'
 })
 
-// Format elapsed like a tape readout: 0:00 / 1:34 / 12:07.
-const elapsedFmt = computed(() => {
-  const t = Math.max(0, Math.floor(props.elapsedSec))
+// A running clock reads like a tape: 0:00 / 1:34 / 12:07. A finished run
+// states its duration in words, so it cannot be mistaken for a clock.
+const clock = computed(() => {
+  if (props.durationSec === null) return null
+  const t = Math.max(0, Math.floor(props.durationSec))
   const m = Math.floor(t / 60)
-  const s = (t % 60).toString().padStart(2, '0')
-  return `${m}:${s}`
+  const s = t % 60
+  if (props.status === 'running') return { value: `${m}:${s.toString().padStart(2, '0')}`, unit: 'elapsed' }
+  return { value: m > 0 ? `${m} min ${s} s` : `${s} s`, unit: 'duration' }
 })
 
 const statusLabel = computed(() => {
@@ -131,11 +117,11 @@ const statusLabel = computed(() => {
         <span class="run-header__symbol">{{ symbol }}</span>
       </div>
 
-      <!-- Center: elapsed time as a tape readout. The big number on the page. -->
-      <div class="run-header__elapsed" data-mono>
-        <span class="run-header__elapsed-value">{{ elapsedFmt }}</span>
-        <span class="run-header__elapsed-unit">elapsed</span>
+      <div v-if="clock" class="run-header__elapsed" data-mono data-testid="run-clock">
+        <span class="run-header__elapsed-value">{{ clock.value }}</span>
+        <span class="run-header__elapsed-unit">{{ clock.unit }}</span>
       </div>
+      <span v-else />
 
       <!-- Right: cancel + meta. Cancel only when running. -->
       <div class="run-header__actions">
@@ -159,8 +145,7 @@ const statusLabel = computed(() => {
       {{ cancelError }}
     </p>
 
-    <!-- Activity line: who's working, what they're doing, when we last heard. -->
-    <div class="run-header__activity" :data-quiet="status !== 'running'">
+    <div v-if="status === 'running'" class="run-header__activity" data-testid="run-activity">
       <span v-if="activityLine.node" class="run-header__activity-node">
         {{ activityLine.node.replace(/_/g, ' ') }}
       </span>
@@ -172,7 +157,7 @@ const statusLabel = computed(() => {
         {{ activityLine.tool }}
       </span>
       <span
-        v-if="status === 'running' && sinceLastEventSec > 5"
+        v-if="sinceLastEventSec > 5"
         class="run-header__since"
         data-mono
         :data-stuck="stuckLevel"
@@ -299,6 +284,7 @@ const statusLabel = computed(() => {
   align-items: center;
   gap: 0.05rem;
   min-width: 6.5rem;
+  white-space: nowrap;
 }
 .run-header__elapsed-value {
   font-size: 1.65rem;
@@ -367,7 +353,6 @@ const statusLabel = computed(() => {
   flex-wrap: wrap;
   min-height: 1.2rem;
 }
-.run-header__activity[data-quiet="true"] { color: var(--paper-3); }
 .run-header__activity-node {
   text-transform: lowercase;
   letter-spacing: 0.04em;

@@ -41,17 +41,24 @@ export interface RunView {
   currentNode: string | null
   verdict: VerdictState | null
   error: string | null
+  /** ISO time the run ended; null while it runs or when none was recorded. */
+  finishedAt: string | null
 }
 
 export const EMPTY_VIEW: RunView = {
-  status: 'idle', events: [], lastSeq: -1, currentNode: null, verdict: null, error: null,
+  status: 'idle', events: [], lastSeq: -1, currentNode: null, verdict: null, error: null, finishedAt: null,
 }
 
 /** The run's view is a fold over its frames. Replays after a reconnect
  *  overlap what was already seen, so frames at or below lastSeq are dropped. */
 export function applyFrame(view: RunView, frame: RunFrame): RunView {
   if (frame.kind === 'end') {
-    return { ...view, status: frame.status, error: frame.status === 'complete' ? null : (frame.error ?? view.error) }
+    return {
+      ...view,
+      status: frame.status,
+      error: frame.status === 'complete' ? null : (frame.error ?? view.error),
+      finishedAt: frame.finishedAt ?? null,
+    }
   }
   if (frame.seq <= view.lastSeq) return view
   const ev = frame.event
@@ -168,7 +175,7 @@ export function useAgentsRun(opts: Options = {}) {
             v = applyFrame(v, { kind: 'event', seq: Number(m.id), event: JSON.parse(m.data) as AgentEvent })
           }
           else if (m.event === 'end') {
-            const end = JSON.parse(m.data) as { status: Exclude<RunStatus, 'running'>; error: string | null }
+            const end = JSON.parse(m.data) as { status: Exclude<RunStatus, 'running'>; error: string | null; finishedAt?: string }
             view.value = applyFrame(v, { kind: 'end', ...end })
             return settle('ended')
           }
@@ -274,7 +281,7 @@ export function useAgentsRun(opts: Options = {}) {
       view.value = { ...view.value, status: 'failed', error: `resume failed (${res?.status ?? 'network'})` }
       return
     }
-    view.value = { ...view.value, status: 'running', error: null }
+    view.value = { ...view.value, status: 'running', error: null, finishedAt: null }
     await follow(id, { keep: true })
   }
 
@@ -315,6 +322,7 @@ export function useAgentsRun(opts: Options = {}) {
     currentNode: computed(() => view.value.currentNode),
     verdict: computed(() => view.value.verdict),
     error: computed(() => view.value.error),
+    finishedAt: computed(() => (view.value.finishedAt ? new Date(view.value.finishedAt) : null)),
     runId, resolution, startedAt, connection, resuming, cancelling, cancelError,
     start, resume, cancel, follow, reconnect, reset,
   }

@@ -34,7 +34,7 @@ const queryRunId = computed(() => {
 useHead({ title: () => `research · ${symbol.value}` })
 
 const {
-  events, status, verdict, runId, error, resolution, startedAt, connection,
+  events, status, verdict, runId, error, resolution, startedAt, finishedAt, connection,
   start, resume, cancel, follow, reconnect, reset, resuming,
   cancelling: runCancelling, cancelError: runCancelError,
 } = useAgentsRun({ initialRunId: queryRunId.value })
@@ -96,15 +96,17 @@ const costSamples = computed(() =>
 // composable on history-replay) rather than ``Date.now()`` at status flip,
 // so a refreshed page shows the cumulative elapsed time, not a re-zeroed
 // counter.
-const elapsedSec = ref(0)
+const elapsedSec = ref<number | null>(0)
 let elapsedTimer: ReturnType<typeof setInterval> | null = null
 
 function recomputeElapsed() {
   if (startedAt.value === null) {
-    elapsedSec.value = 0
+    elapsedSec.value = status.value === 'running' ? 0 : null
     return
   }
-  elapsedSec.value = Math.max(0, Math.floor((Date.now() - startedAt.value.getTime()) / 1000))
+  // A finished run took from its start to its end, however long ago that was.
+  const until = status.value === 'running' ? Date.now() : finishedAt.value?.getTime()
+  elapsedSec.value = until === undefined ? null : Math.max(0, Math.floor((until - startedAt.value.getTime()) / 1000))
 }
 
 onUnmounted(() => {
@@ -112,7 +114,7 @@ onUnmounted(() => {
   elapsedTimer = null
 })
 
-watch([status, startedAt], ([s]) => {
+watch([status, startedAt, finishedAt], ([s]) => {
   if (import.meta.server) return
   if (s === 'running') {
     recomputeElapsed()
@@ -292,7 +294,7 @@ watch(queryRunId, (id, prev) => {
       <RunHeader
         :status="status"
         :events="events"
-        :elapsed-sec="elapsedSec"
+        :duration-sec="elapsedSec"
         :symbol="symbol"
         :run-id="runId"
         :cancelling="runCancelling"

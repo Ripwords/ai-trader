@@ -8,7 +8,7 @@ export type TerminalStatus = Exclude<RunStatus, 'running'>
 
 export type RunFrame =
   | { kind: 'event'; seq: number; event: AgentEvent }
-  | { kind: 'end'; status: TerminalStatus; error: string | null }
+  | { kind: 'end'; status: TerminalStatus; error: string | null; finishedAt?: string }
 
 const BATCH = 500
 
@@ -32,7 +32,7 @@ export async function* tailRun(
     // Status before rows: the tee writes an event row before the status it
     // implies, so a terminal status here means the rows read next are final.
     const [run] = await db
-      .select({ status: agentRuns.status, error: agentRuns.error })
+      .select({ status: agentRuns.status, error: agentRuns.error, finishedAt: agentRuns.finishedAt })
       .from(agentRuns)
       .where(eq(agentRuns.id, runId))
       .limit(1)
@@ -56,7 +56,12 @@ export async function* tailRun(
     } while (rows.length === BATCH)
 
     if (run.status !== 'running') {
-      yield { kind: 'end', status: run.status as TerminalStatus, error: run.error }
+      yield {
+        kind: 'end',
+        status: run.status as TerminalStatus,
+        error: run.error,
+        ...(run.finishedAt ? { finishedAt: run.finishedAt.toISOString() } : {}),
+      }
       return
     }
     await waitForRun(runId, seen, pollMs, signal)
