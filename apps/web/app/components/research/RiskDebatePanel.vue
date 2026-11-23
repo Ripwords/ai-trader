@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { withoutSpeakerPrefix } from '../../../types/agents'
 import type { RiskSpeaker } from '../../../types/agents'
 import MarkdownText from './MarkdownText.vue'
 
@@ -60,7 +61,7 @@ const speakerGlyph: Record<RiskSpeaker, string> = {
           <span class="risk-debate__name">{{ speakerLabel[t.speaker] }} analyst</span>
           <span class="risk-debate__turn-num" data-mono>turn {{ t.turn }}</span>
         </header>
-        <MarkdownText :content="t.text" flush class="risk-debate__text" />
+        <MarkdownText :content="withoutSpeakerPrefix(t.text)" flush class="risk-debate__text" />
       </li>
     </ol>
   </section>
@@ -71,7 +72,7 @@ const speakerGlyph: Record<RiskSpeaker, string> = {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
-  padding: 1rem 0;
+  padding: 1rem;
 }
 
 .risk-debate__head {

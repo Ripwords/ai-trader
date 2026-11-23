@@ -33,6 +33,13 @@ export function confidenceLabel(rating: string, confidence: number): string {
   return `${confidence}% chance ${confidenceCorrectIf(rating)} over ${CONFIDENCE_HORIZON_DAYS} trading days`
 }
 
+const SPEAKER_PREFIX = /^(?:Bull|Bear|Aggressive|Conservative|Neutral|Risky|Safe) Analyst:\s*/gm
+
+/** A debate turn as the speaker wrote it, without the "Bull Analyst:" the api puts in front. */
+export function withoutSpeakerPrefix(text: string): string {
+  return text.replaceAll(SPEAKER_PREFIX, '')
+}
+
 export type RunStatus = 'running' | 'complete' | 'failed' | 'cancelled'
 
 /** Tags for the four analyst reports. Match graph._REPORT_KIND_MAP. */

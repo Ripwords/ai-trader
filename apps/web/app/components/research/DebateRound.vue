@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { withoutSpeakerPrefix } from '../../../types/agents'
 import MarkdownText from './MarkdownText.vue'
 defineProps<{ round: number; bull: string; bear: string }>()
 </script>
@@ -19,7 +20,7 @@ defineProps<{ round: number; bull: string; bear: string }>()
           <span class="debate__arrow" data-mono aria-hidden="true">▲</span>
           bull
         </span>
-        <MarkdownText v-if="bull" :content="bull" flush class="debate__text" />
+        <MarkdownText v-if="bull" :content="withoutSpeakerPrefix(bull)" flush class="debate__text" />
         <p v-else class="debate__text debate__text--empty">—</p>
       </article>
 
@@ -30,7 +31,7 @@ defineProps<{ round: number; bull: string; bear: string }>()
           <span class="debate__arrow" data-mono aria-hidden="true">▼</span>
           bear
         </span>
-        <MarkdownText v-if="bear" :content="bear" flush class="debate__text" />
+        <MarkdownText v-if="bear" :content="withoutSpeakerPrefix(bear)" flush class="debate__text" />
         <p v-else class="debate__text debate__text--empty">—</p>
       </article>
     </div>
@@ -42,7 +43,7 @@ defineProps<{ round: number; bull: string; bear: string }>()
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
-  padding: 1rem 0;
+  padding: 1rem;
   /* No surface card here — debate sits inline in the timeline as a quoted
      dialogue, separated only by typographic devices. */
 }
@@ -104,7 +105,7 @@ defineProps<{ round: number; bull: string; bear: string }>()
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  padding: 0.4rem 0.2rem;
+  padding: 0.4rem 0;
   min-width: 0;
 }
 .debate__col[data-side="bear"] { text-align: left; }

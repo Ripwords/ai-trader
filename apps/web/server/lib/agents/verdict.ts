@@ -3,7 +3,7 @@
  * persisted. `agents_debate` and `research_get` both return it, so a run read
  * inline and the same run read later cannot disagree.
  */
-import { CONFIDENCE_HORIZON_DAYS, confidenceCorrectIf } from '../../../types/agents'
+import { CONFIDENCE_HORIZON_DAYS, confidenceCorrectIf, withoutSpeakerPrefix } from '../../../types/agents'
 import type { OwnerVerdict } from '~~/types/agents'
 import { excerptKeyPoints } from './excerpt'
 
@@ -111,14 +111,11 @@ const DISSENTERS: Record<string, RiskSpeaker[]> = {
   'sell': ['aggressive'],
 }
 
-const SPEAKER_PREFIX = /^(?:Bull|Bear|Aggressive|Conservative|Neutral|Risky|Safe) Analyst:\s*/gm
-
 // A debater opening a sentence on another speaker is restating them, not arguing.
 const RESTATES_ANOTHER_SPEAKER = /^(?:the|my)\s+(?:bull|bear|aggressive|conservative|neutral|risky|safe|trader)\b|^(?:he|she)\s+(?:says|cites|claims|argues)\b/i
 
 function spoken(text: string | null): string | null {
-  const stripped = text?.replaceAll(SPEAKER_PREFIX, '').trim()
-  return stripped || null
+  return (text && withoutSpeakerPrefix(text).trim()) || null
 }
 
 function identify(run: PersistedRun, nowMs: number): RunIdentity {
