@@ -40,6 +40,24 @@ const portfolioCorrelationMock = vi.hoisted(() => ({
   })),
 }))
 
+const proposalStoreMock = vi.hoisted(() => ({ inserted: [] as Record<string, unknown>[] }))
+vi.mock('../../server/lib/order-proposals', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../server/lib/order-proposals')>()
+  return {
+    ...actual,
+    drizzleProposalStore: () => ({
+      insert: async (values: Record<string, unknown>) => {
+        proposalStoreMock.inserted.push(values)
+        return { ...values, id: 'p-1', status: 'pending', createdAt: '2026-11-25T00:00:00Z', expiresAt: '2026-11-26T00:00:00Z', moomooOrderId: null, error: null, decidedAt: null, claimedAt: null }
+      },
+      get: async () => null,
+      claim: async () => null,
+      finish: async () => null,
+      updatePending: async () => null,
+    }),
+  }
+})
+
 vi.mock('../../server/lib/portfolio-correlation', () => ({
   getPortfolioCorrelationCached: portfolioCorrelationMock.getPortfolioCorrelationCached,
 }))
@@ -273,6 +291,7 @@ describe('tool catalogue', () => {
       'trade_orders',
       'trade_place_order',
       'trade_portfolio',
+      'trade_propose_order',
       'usage_summary',
       'value_screen',
       'value_stock',
@@ -443,6 +462,43 @@ describe('tool catalogue', () => {
         order_id: '77', price: 15, trd_env: 'REAL', live_confirmation: 'LIVE MODIFY 77 PRICE 15',
       }),
     ).rejects.toThrow(/Live trade blocked/)
+  })
+
+  it('blocks a live GTC order when the user confirmed a DAY one', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient, { latestUserText: 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100' })
+    await expect(
+      (tools['trade_place_order'] as { execute: (args: Record<string, unknown>) => Promise<unknown> }).execute({
+        code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, order_type: 'NORMAL', time_in_force: 'GTC', trd_env: 'REAL',
+        live_confirmation: 'LIVE PLACE BUY 1 US.NVDA NORMAL @ 100',
+      }),
+    ).rejects.toThrow(/TIF GTC/)
+    expect(c.placeOrder).not.toHaveBeenCalled()
+  })
+
+  it('sends the confirmed trailing stop with its trail, TIF and session', async () => {
+    const c = fakeClient()
+    const phrase = 'LIVE PLACE SELL 5 US.NVDA TRAILING_STOP TRAIL RATIO 8 TIF GTC SESSION ETH'
+    const tools = makeTools(c as unknown as ApiClient, { latestUserText: phrase })
+    await (tools['trade_place_order'] as { execute: (args: Record<string, unknown>) => Promise<unknown> }).execute({
+      code: 'US.NVDA', side: 'SELL', qty: 5, order_type: 'TRAILING_STOP', trail_type: 'RATIO', trail_value: 8,
+      time_in_force: 'GTC', session: 'ETH', trd_env: 'REAL', acc_id: '9', live_confirmation: phrase,
+    })
+    expect(c.placeOrder).toHaveBeenCalledWith(expect.objectContaining({
+      order_type: 'TRAILING_STOP', trail_type: 'RATIO', trail_value: 8, time_in_force: 'GTC', session: 'ETH',
+    }))
+  })
+
+  it('accepts the new order settings in the place and modify tool schemas', () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    const place = (tools['trade_place_order'] as { inputSchema: { safeParse: (v: unknown) => { success: boolean; data?: Record<string, unknown> } } }).inputSchema
+    const parsed = place.safeParse({ code: 'US.NVDA', side: 'BUY', qty: 1, price: 100 })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data).toMatchObject({ order_type: 'NORMAL', time_in_force: 'DAY', session: 'RTH', trd_env: 'SIMULATE' })
+    expect(place.safeParse({ code: 'US.NVDA', side: 'BUY', qty: 1, order_type: 'MARKET_IF_TOUCHED', trigger_price: 90 }).success).toBe(true)
+    expect(place.safeParse({ code: 'US.NVDA', side: 'BUY', qty: 1, price: 100, time_in_force: 'GTD' }).success).toBe(false)
+    const modify = (tools['trade_modify_order'] as { inputSchema: { safeParse: (v: unknown) => { success: boolean } } }).inputSchema
+    expect(modify.safeParse({ order_id: '1', acc_id: '2', trail_type: 'AMOUNT', trail_value: 1, trail_spread: 0.1 }).success).toBe(true)
   })
 
   it('places a confirmed live order once, even when the model calls the tool twice in that turn', async () => {
@@ -908,5 +964,32 @@ describe('tool catalogue', () => {
     } finally {
       planningMock.current = planningMock.portfolio
     }
+  })
+})
+
+describe('trade_propose_order', () => {
+  type Execute = { execute: (args: Record<string, unknown>) => Promise<unknown> }
+  beforeEach(() => { proposalStoreMock.inserted.length = 0 })
+
+  it('queues a live order for approval without a phrase and places nothing', async () => {
+    const c = fakeClient()
+    const tools = makeTools(c as unknown as ApiClient, { latestUserText: 'queue a buy for tonight' })
+    const out = await (tools['trade_propose_order'] as Execute).execute({
+      code: 'US.NVDA', side: 'BUY', qty: 2, price: 120, order_type: 'NORMAL', time_in_force: 'GTC', session: 'RTH',
+      trd_env: 'REAL', acc_id: '777', rationale: 'adds on the pullback',
+    })
+    expect(c.placeOrder).not.toHaveBeenCalled()
+    expect(proposalStoreMock.inserted[0]).toMatchObject({
+      source: 'chat', trdEnv: 'REAL', accId: '777', symbol: 'US.NVDA', qty: 2, price: 120, timeInForce: 'GTC', rationale: 'adds on the pullback',
+    })
+    expect(out).toMatchObject({ status: 'pending', approve_at: '/orders?tab=approvals' })
+  })
+
+  it('refuses a proposal the api would refuse, before queueing it', async () => {
+    const tools = makeTools(fakeClient() as unknown as ApiClient)
+    await expect((tools['trade_propose_order'] as Execute).execute({
+      code: 'US.NVDA', side: 'BUY', qty: 1, order_type: 'STOP', trigger_price: 90, time_in_force: 'DAY', session: 'RTH', trd_env: 'SIMULATE',
+    })).rejects.toThrow(/paper/)
+    expect(proposalStoreMock.inserted).toHaveLength(0)
   })
 })

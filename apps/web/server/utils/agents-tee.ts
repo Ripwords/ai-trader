@@ -5,6 +5,7 @@ import type { AgentEvent } from '../../types/agents'
 import { notifyRun } from '../lib/agents/run-signal'
 import { appPublicUrl, enqueueNotificationSafely } from '../lib/notifications'
 import { researchRunMessage } from '../lib/notifications-messages'
+import { liveDebateDeps, proposeFromDecision, type DebateDecision } from '../lib/debate-proposals'
 
 const QUEUE_CAP = 100
 
@@ -30,6 +31,17 @@ export async function addRunUsage(runId: string, usage: { tokens_in: number; tok
       costUsd: sql`coalesce(${agentRuns.costUsd}, 0) + ${usage.cost_usd}`,
     })
     .where(eq(agentRuns.id, runId))
+}
+
+/**
+ * Settings → Trading → Debate proposals: queue an order for a buy or sell
+ * decision. Fire and forget: it reads a price from the api, so it must not
+ * hold up the run's own writes, and a failure only costs the proposal.
+ */
+function proposeOrder(decision: DebateDecision): void {
+  void liveDebateDeps()
+    .then(deps => proposeFromDecision(decision, deps))
+    .catch((e: unknown) => console.warn('[agents-tee] debate proposal skipped:', e instanceof Error ? e.message : e))
 }
 
 export class AgentRunTee {
@@ -149,7 +161,7 @@ export class AgentRunTee {
               .limit(1)
             const run = rows[0]
             if (run) {
-              await db.insert(agentDecisions).values({
+              const stored = await db.insert(agentDecisions).values({
                 runId: this.runId,
                 userId: this.userId,
                 symbol: run.symbol,
@@ -157,7 +169,11 @@ export class AgentRunTee {
                 rating: ev.rating,
                 confidence: ev.confidence,
                 rationale: ev.rationale,
-              })
+              }).returning({ id: agentDecisions.id })
+              const decisionId = stored[0]?.id
+              if (decisionId) {
+                proposeOrder({ decisionId, symbol: run.symbol, rating: ev.rating, confidence: ev.confidence, rationale: ev.rationale })
+              }
             }
           }
           if (ev.type === 'error') this.errorMessage ??= ev.message

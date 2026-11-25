@@ -8,7 +8,7 @@ import { paperOrders } from '../../db/schema'
  * returned to the caller untouched. Returns whether the row was written.
  */
 
-export type PaperOrderSource = 'agent_decision' | 'chat' | 'algo'
+export type PaperOrderSource = 'agent_decision' | 'chat' | 'algo' | 'ticket'
 
 export interface PaperOrderEntry {
   source: PaperOrderSource

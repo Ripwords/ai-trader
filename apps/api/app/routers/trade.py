@@ -17,6 +17,7 @@ from app.schemas.trade import (
     TrdEnv,
 )
 from app.services.opend import OpendAdapter, OpendError
+from app.services.order_rules import OrderRuleError
 from app.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,8 @@ def _opend_to_http(exc: OpendError) -> HTTPException:
     rejections aren't a gateway problem — the agent should treat them as a
     bad-input case (4xx) and pick a different account / interface."""
     msg = str(exc)
+    if isinstance(exc.__cause__, OrderRuleError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=msg)
     if "does not support" in msg or "IPO account" in msg:
         return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=msg)
     if "unlock needed" in msg.lower() or "trade is locked" in msg.lower():
@@ -67,18 +70,39 @@ def _order_is_dead(order_status: str) -> bool:
     return any(marker in s for marker in _DEAD_ORDER_STATUS_MARKERS)
 
 
+# Finished orders that still count toward the cap (they traded) but can no
+# longer fill or be cancelled.
+_FINISHED_ORDER_STATUSES = ("FILLED_ALL", "CANCELLED_PART", "FILL_CANCELLED")
+
+
+def _order_is_active(order_status: str) -> bool:
+    """Still working at the broker: not dead and not finished."""
+    return not _order_is_dead(order_status) and order_status.upper() not in _FINISHED_ORDER_STATUSES
+
+
 def _estimate_price(
     code: str, price: float | None, opend: OpendAdapter, what: str,
     trigger_price: float | None = None,
+    trail_type: str | None = None,
+    trail_value: float | None = None,
+    trail_spread: float | None = None,
 ) -> float:
-    """A limit price when there is one, else the last trade from a snapshot,
-    or the stop trigger when that is higher: a BUY STOP above the market
-    fills near its trigger, not at today's price. Fails closed: a REAL order
-    we cannot price is a REAL order we refuse."""
+    """A per-share value for the live cap. Fails closed: a REAL order we
+    cannot price is a REAL order we refuse.
+
+    - With a limit price (NORMAL, STOP_LIMIT, LIMIT_IF_TOUCHED): the higher of
+      the limit and the trigger.
+    - With only a trigger (STOP, MARKET_IF_TOUCHED): the higher of the trigger
+      and the last trade, since a BUY STOP above the market fills near its
+      trigger, not at today's price.
+    - Otherwise (MARKET, trailing): the last trade, plus the trail and spread
+      for a trailing order, since a BUY trailing stop fires that far above
+      the low it follows.
+    """
     if price is not None and price > 0:
-        return float(price)
+        return max(float(price), float(trigger_price or 0))
     try:
-        return max(float(opend.get_snapshot(code).last_price), float(trigger_price or 0))
+        last = float(opend.get_snapshot(code).last_price)
     except OpendError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -87,6 +111,10 @@ def _estimate_price(
                 f"snapshot failed: {exc}); refusing it."
             ),
         ) from exc
+    trail = 0.0
+    if trail_value is not None and trail_value > 0:
+        trail = last * trail_value / 100 if trail_type == "RATIO" else float(trail_value)
+    return max(last + trail + float(trail_spread or 0), float(trigger_price or 0))
 
 
 def _todays_live_orders(acc_id: str, opend: OpendAdapter) -> list[Order]:
@@ -114,6 +142,9 @@ def _assert_live_notional_under_cap(
     settings: Settings,
     exclude_order_id: str | None = None,
     trigger_price: float | None = None,
+    trail_type: str | None = None,
+    trail_value: float | None = None,
+    trail_spread: float | None = None,
 ) -> None:
     """Reject a REAL order (new or modified) that would push today's summed
     REAL order notional over MAX_DAILY_LIVE_NOTIONAL_USD.
@@ -124,13 +155,18 @@ def _assert_live_notional_under_cap(
     last traded price from a snapshot; if that estimate can't be obtained we
     fail closed. ``exclude_order_id`` drops the order being modified from the
     spent total so its new size replaces, rather than adds to, its old one."""
-    new_notional = qty * _estimate_price(code, price, opend, "this REAL order", trigger_price)
+    new_notional = qty * _estimate_price(
+        code, price, opend, "this REAL order", trigger_price, trail_type, trail_value, trail_spread,
+    )
 
     spent = 0.0
     for o in _todays_live_orders(acc_id, opend):
         if _order_is_dead(o.status) or o.order_id == exclude_order_id:
             continue
-        spent += o.qty * _estimate_price(o.code, o.price, opend, f"open REAL order {o.order_id}", o.trigger_price)
+        spent += o.qty * _estimate_price(
+            o.code, o.price, opend, f"open REAL order {o.order_id}",
+            o.trigger_price, o.trail_type, o.trail_value, o.trail_spread,
+        )
 
     if spent + new_notional > settings.MAX_DAILY_LIVE_NOTIONAL_USD:
         raise HTTPException(
@@ -171,6 +207,9 @@ def _assert_live_modify_under_cap(
         settings=settings,
         exclude_order_id=body.order_id,
         trigger_price=body.trigger_price if body.trigger_price is not None else current.trigger_price,
+        trail_type=body.trail_type if body.trail_type is not None else current.trail_type,
+        trail_value=body.trail_value if body.trail_value is not None else current.trail_value,
+        trail_spread=body.trail_spread if body.trail_spread is not None else current.trail_spread,
     )
 
 
@@ -205,12 +244,14 @@ def portfolio(
 def orders(
     acc_id: str = Query(...),
     trd_env: TrdEnv = Query("REAL"),
+    active_only: bool = Query(False, description="drop filled, cancelled and failed orders"),
     opend: OpendAdapter = Depends(get_opend),
 ) -> list[Order]:
     try:
-        return opend.list_orders(acc_id=acc_id, trd_env=trd_env)
+        found = opend.list_orders(acc_id=acc_id, trd_env=trd_env)
     except OpendError as exc:
         raise _opend_to_http(exc) from exc
+    return [o for o in found if _order_is_active(o.status)] if active_only else found
 
 
 @router.get("/fills", response_model=list[Fill])
@@ -286,10 +327,12 @@ def place_order(
         _assert_live_notional_under_cap(
             code=body.code, qty=body.qty, price=body.price, acc_id=body.acc_id,
             opend=opend, settings=settings, trigger_price=body.trigger_price,
+            trail_type=body.trail_type, trail_value=body.trail_value, trail_spread=body.trail_spread,
         )
         logger.warning(
-            "placing REAL order: %s %s x%s @ %s (%s)",
+            "placing REAL order: %s %s x%s @ %s (%s %s %s)",
             body.side, body.code, body.qty, body.price, body.order_type,
+            body.time_in_force, body.session,
         )
         return _place(body, opend)
 
@@ -305,6 +348,12 @@ def _place(body: PlaceOrderRequest, opend: OpendAdapter) -> PlaceOrderResult:
             trigger_price=body.trigger_price,
             trd_env=body.trd_env,
             acc_id=body.acc_id,
+            trail_type=body.trail_type,
+            trail_value=body.trail_value,
+            trail_spread=body.trail_spread,
+            time_in_force=body.time_in_force,
+            session=body.session,
+            remark=body.remark,
         )
     except OpendError as exc:
         raise _opend_to_http(exc) from exc
@@ -322,8 +371,9 @@ def modify_order(
     with _LIVE_ORDER_LOCK:
         _assert_live_modify_under_cap(body, opend, settings)
         logger.warning(
-            "modifying REAL order %s: price=%s qty=%s trigger=%s",
+            "modifying REAL order %s: price=%s qty=%s trigger=%s trail=%s %s spread=%s",
             body.order_id, body.price, body.qty, body.trigger_price,
+            body.trail_type, body.trail_value, body.trail_spread,
         )
         return _modify(body, opend)
 
@@ -337,6 +387,9 @@ def _modify(body: ModifyOrderRequest, opend: OpendAdapter) -> dict[str, str]:
             qty=body.qty,
             trigger_price=body.trigger_price,
             trd_env=body.trd_env,
+            trail_type=body.trail_type,
+            trail_value=body.trail_value,
+            trail_spread=body.trail_spread,
         )
     except OpendError as exc:
         raise _opend_to_http(exc) from exc

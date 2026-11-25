@@ -33,6 +33,7 @@ import pandas as pd
 from app.schemas.algo import Strategy
 from app.services.algo import repo
 from app.services.algo.sandbox import compile_strategy
+from app.services import order_proposals
 
 
 class AccountSummary(TypedDict):
@@ -60,6 +61,10 @@ def _now_naive_utc() -> datetime:
 
 
 logger = logging.getLogger(__name__)
+
+# The signal row's note when require_approval queued the order instead of
+# placing it. The web's signal table links it to the approval queue.
+QUEUED_FOR_APPROVAL = "queued for approval"
 
 # How often the scheduler loop wakes. Must be <= the shortest cadence.
 TICK_SEC = 30
@@ -353,6 +358,35 @@ class Scheduler:
         age = (_now_naive_utc() - latest[0].ts).total_seconds()
         return now_mono - max(0.0, age)
 
+    async def _queue_for_approval(
+        self, s: Strategy, ts: datetime, side: str, qty: int, last_close: float
+    ) -> None:
+        """Require approval: put the order in the web's approval queue
+        instead of placing it. A same-side proposal already waiting is
+        enough, so a strategy that signals every bar queues one, not one per
+        bar. The pyramiding counter is not advanced: nothing was placed."""
+        try:
+            if await order_proposals.has_pending_algo_proposal(s.id, side):
+                return
+            await order_proposals.insert_algo_proposal(
+                strategy_id=s.id,
+                symbol=s.symbol,
+                side=side,
+                qty=qty,
+                rationale=(
+                    f"Algo strategy \"{s.name}\" signalled {side} {qty} at "
+                    f"{last_close:g} on its {s.cadence} bars."
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            await repo.append_signal(
+                s.id, ts, side, qty, last_close, None, f"queue for approval: {exc}",
+            )
+            return
+        await repo.append_signal(
+            s.id, ts, side, qty, last_close, None, QUEUED_FOR_APPROVAL,
+        )
+
     async def _fire(self, s: Strategy, *, kill_active: bool) -> None:
         """Run one strategy tick: fetch bars, run on_bar, route intent."""
         if not _market_hours_bypassed() and not market_is_open(s.symbol):
@@ -518,6 +552,10 @@ class Scheduler:
                 s.id, ts, side, qty, last_close, None,
                 f"blocked: daily order cap reached ({orders_today}/{max_orders})",
             )
+            return
+
+        if s.require_approval:
+            await self._queue_for_approval(s, ts, side, qty, last_close)
             return
 
         try:

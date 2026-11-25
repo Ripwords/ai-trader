@@ -53,6 +53,13 @@ function scoreFor(checks: AlgoMaturityCheck[]): number {
   return Math.max(0, Math.min(100, raw))
 }
 
+/** The note the scheduler leaves on a signal it queued for approval (app/services/algo/scheduler.py QUEUED_FOR_APPROVAL). */
+export const QUEUED_FOR_APPROVAL = 'queued for approval'
+
+export function isQueuedSignal(signal: { error?: string | null }): boolean {
+  return signal.error === QUEUED_FOR_APPROVAL
+}
+
 export function assessAlgoMaturity(
   strategy: StrategyRiskInput,
   backtest: BacktestRiskInput | null,
@@ -129,7 +136,7 @@ export function assessAlgoMaturity(
   })
 
   if (signals.length > 0) {
-    const errorCount = signals.filter(signal => signal.error).length
+    const errorCount = signals.filter(signal => signal.error && !isQueuedSignal(signal)).length
     const errorRate = errorCount / signals.length
     checks.push({
       key: 'signals',

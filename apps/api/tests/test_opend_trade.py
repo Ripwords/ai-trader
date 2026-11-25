@@ -423,7 +423,7 @@ def test_place_stop_order_maps_trigger_to_aux_price():
     _adapter_with(ctx).place_order(
         code="US.NVDA", side="SELL", qty=10, price=None,
         order_type="STOP", trigger_price=95.0,
-        trd_env="SIMULATE", acc_id="12345",
+        trd_env="REAL", acc_id="12345",
     )
     call = ctx.place_calls[0]
     assert str(call["order_type"]) == "STOP"
@@ -436,7 +436,7 @@ def test_place_stop_order_requires_trigger_price():
     with pytest.raises(OpendError, match="trigger_price"):
         _adapter_with(ctx).place_order(
             code="US.NVDA", side="SELL", qty=10,
-            order_type="STOP", trd_env="SIMULATE", acc_id="12345",
+            order_type="STOP", trd_env="REAL", acc_id="12345",
         )
     assert ctx.place_calls == []
 
@@ -446,7 +446,7 @@ def test_place_stop_limit_order_maps_price_and_trigger():
     _adapter_with(ctx).place_order(
         code="US.NVDA", side="SELL", qty=10, price=94.5,
         order_type="STOP_LIMIT", trigger_price=95.0,
-        trd_env="SIMULATE", acc_id="12345",
+        trd_env="REAL", acc_id="12345",
     )
     call = ctx.place_calls[0]
     assert str(call["order_type"]) == "STOP_LIMIT"
@@ -459,15 +459,143 @@ def test_place_stop_limit_requires_both_prices():
     with pytest.raises(OpendError, match="trigger_price"):
         _adapter_with(ctx).place_order(
             code="US.NVDA", side="SELL", qty=10, price=94.5,
-            order_type="STOP_LIMIT", trd_env="SIMULATE", acc_id="12345",
+            order_type="STOP_LIMIT", trd_env="REAL", acc_id="12345",
         )
     with pytest.raises(OpendError, match="price"):
         _adapter_with(ctx).place_order(
             code="US.NVDA", side="SELL", qty=10,
             order_type="STOP_LIMIT", trigger_price=95.0,
+            trd_env="REAL", acc_id="12345",
+        )
+    assert ctx.place_calls == []
+
+
+def test_place_order_maps_time_in_force_session_and_remark():
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).place_order(
+        code="US.NVDA", side="BUY", qty=10, price=100.0, order_type="NORMAL",
+        time_in_force="GTC", session="OVERNIGHT", remark="q:abc",
+        trd_env="REAL", acc_id="12345",
+    )
+    call = ctx.place_calls[0]
+    assert str(call["time_in_force"]) == "GTC"
+    assert str(call["session"]) == "OVERNIGHT"
+    assert call["remark"] == "q:abc"
+    # Deprecated in favour of session; sending both lets them disagree.
+    assert "fill_outside_rth" not in call
+    assert call["trail_type"] is None
+    assert call["trail_value"] is None
+    assert call["trail_spread"] is None
+
+
+def test_place_order_defaults_to_a_day_order_in_regular_hours():
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).place_order(
+        code="US.NVDA", side="BUY", qty=10, price=100.0, trd_env="SIMULATE", acc_id="12345",
+    )
+    call = ctx.place_calls[0]
+    assert str(call["time_in_force"]) == "DAY"
+    assert str(call["session"]) == "RTH"
+    assert call["remark"] is None
+
+
+def test_place_order_sends_no_session_for_a_non_us_stock():
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).place_order(
+        code="HK.00700", side="BUY", qty=100, price=300.0, trd_env="SIMULATE", acc_id="12345",
+    )
+    assert str(ctx.place_calls[0]["session"]) in ("N/A", "NONE")
+
+
+def test_place_trailing_stop_limit_maps_trail_fields():
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).place_order(
+        code="US.NVDA", side="SELL", qty=10, order_type="TRAILING_STOP_LIMIT",
+        trail_type="RATIO", trail_value=5.0, trail_spread=0.1,
+        trd_env="REAL", acc_id="12345",
+    )
+    call = ctx.place_calls[0]
+    assert str(call["order_type"]) == "TRAILING_STOP_LIMIT"
+    assert str(call["trail_type"]) == "RATIO"
+    assert call["trail_value"] == 5.0
+    assert call["trail_spread"] == 0.1
+    assert call["price"] == 0
+    assert call["aux_price"] is None
+
+
+@pytest.mark.parametrize("order_type", ["MARKET_IF_TOUCHED", "LIMIT_IF_TOUCHED"])
+def test_place_if_touched_orders_map_trigger_to_aux_price(order_type):
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).place_order(
+        code="US.NVDA", side="BUY", qty=10, price=90.0, order_type=order_type,
+        trigger_price=91.0, trd_env="REAL", acc_id="12345",
+    )
+    call = ctx.place_calls[0]
+    assert str(call["order_type"]) == order_type
+    assert call["aux_price"] == 91.0
+    assert call["price"] == (90.0 if order_type == "LIMIT_IF_TOUCHED" else 0)
+
+
+def test_place_order_refuses_what_moomoo_paper_accounts_cannot_take():
+    ctx = FakeTradeCtx()
+    with pytest.raises(OpendError, match="paper"):
+        _adapter_with(ctx).place_order(
+            code="US.NVDA", side="SELL", qty=10, order_type="STOP", trigger_price=95.0,
             trd_env="SIMULATE", acc_id="12345",
         )
     assert ctx.place_calls == []
+
+
+def test_modify_order_maps_trail_fields():
+    ctx = FakeTradeCtx()
+    _adapter_with(ctx).modify_order(
+        order_id="ord-777", acc_id="12345", trail_type="AMOUNT", trail_value=2.5,
+        trail_spread=0.05, trd_env="REAL",
+    )
+    call = ctx.modify_calls[0]
+    assert str(call["trail_type"]) == "AMOUNT"
+    assert call["trail_value"] == 2.5
+    assert call["trail_spread"] == 0.05
+
+
+def test_list_orders_carries_the_order_settings():
+    _set_ctx(FakeTradeCtx(orders_payload=[
+        {
+            "order_id": "ord-9", "code": "US.NVDA", "trd_side": "SELL", "qty": 10.0,
+            "price": 0.0, "order_status": "SUBMITTED", "create_time": "2026-05-08 09:30:00.123",
+            "order_type": "TRAILING_STOP_LIMIT", "time_in_force": "GTC", "session": "ETH",
+            "dealt_qty": 4.0, "remark": "q:abc", "aux_price": 190.0,
+            "trail_type": "RATIO", "trail_value": 5.0, "trail_spread": 0.1,
+        },
+        {
+            "order_id": "ord-10", "code": "HK.00700", "trd_side": "BUY", "qty": 100.0,
+            "price": 520.0, "order_status": "SUBMITTED", "create_time": "2026-05-08 09:30:00",
+            "order_type": "NORMAL", "time_in_force": "DAY", "session": "N/A",
+            "dealt_qty": 0.0, "remark": "", "aux_price": "N/A",
+            "trail_type": "N/A", "trail_value": "N/A", "trail_spread": "N/A",
+        },
+    ]))
+    adapter = OpendAdapter(host="ignored", port=0, _trade_ctx_factory=lambda: _ctx)
+    orders = {o.order_id: o for o in adapter.list_orders(acc_id="12345", trd_env="REAL")}
+    o = orders["ord-9"]
+    assert o.acc_id == "12345"
+    assert o.trd_env == "REAL"
+    assert o.order_type == "TRAILING_STOP_LIMIT"
+    assert o.time_in_force == "GTC"
+    assert o.session == "ETH"
+    assert o.dealt_qty == 4.0
+    assert o.remark == "q:abc"
+    assert o.trigger_price == 190.0
+    assert o.trail_type == "RATIO"
+    assert o.trail_value == 5.0
+    assert o.trail_spread == 0.1
+    hk = orders["ord-10"]
+    assert hk.session is None
+    assert hk.remark is None
+    assert hk.trigger_price is None
+    assert hk.trail_type is None
+    assert hk.trail_value is None
+    assert hk.trail_spread is None
 
 
 def test_modify_order_maps_fields_and_aux_price():

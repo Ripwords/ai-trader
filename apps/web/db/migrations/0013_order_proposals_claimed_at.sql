@@ -1,0 +1,1 @@
+ALTER TABLE "order_proposals" ADD COLUMN "claimed_at" timestamp with time zone;

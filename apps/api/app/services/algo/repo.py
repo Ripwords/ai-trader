@@ -78,6 +78,7 @@ def _row_to_strategy(row: asyncpg.Record) -> Strategy:
         sizing_mode=row["sizing_mode"],
         sizing_value=float(row["sizing_value"]),
         pyramiding_max=int(row["pyramiding_max"]),
+        require_approval=bool(row["require_approval"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -111,8 +112,8 @@ async def create_strategy(body: StrategyCreate) -> Strategy:
             INSERT INTO algo_strategies
               (user_id, name, symbol, cadence, code,
                initial_capital, commission_bps, slippage_bps,
-               sizing_mode, sizing_value, pyramiding_max)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               sizing_mode, sizing_value, pyramiding_max, require_approval)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING *
             """,
             owner_id,
@@ -126,6 +127,7 @@ async def create_strategy(body: StrategyCreate) -> Strategy:
             body.sizing_mode,
             body.sizing_value,
             body.pyramiding_max,
+            body.require_approval,
         )
     return _row_to_strategy(row)
 

@@ -1,4 +1,5 @@
 import { ofetch } from 'ofetch'
+import type { OrderChange, OrderSettings, TrdEnv } from '../lib/order-types'
 
 // The api's own OpenD connect attempt can take 20 s, plus a query.
 export const API_TIMEOUT_MS = 30_000
@@ -117,6 +118,20 @@ export interface Order {
   price: number
   status: string
   created_at: string
+  trigger_price?: number | null
+  // Set by today's and history order lists; absent from older payloads.
+  acc_id?: string | null
+  trd_env?: TrdEnv | null
+  // Plain strings: moomoo can report types and values this app never places.
+  // null when moomoo reports none ("N/A").
+  order_type?: string | null
+  time_in_force?: string | null
+  session?: string | null
+  dealt_qty?: number | null
+  remark?: string | null
+  trail_type?: string | null
+  trail_value?: number | null
+  trail_spread?: number | null
 }
 
 export interface Fill {
@@ -193,7 +208,8 @@ export class ApiClient {
     return this.fetch('/trade/portfolio', { query: args })
   }
 
-  listOrders(args: { acc_id: string; trd_env?: 'SIMULATE' | 'REAL' }): Promise<Order[]> {
+  /** Today's orders. `active_only` drops filled, cancelled and failed ones. */
+  listOrders(args: { acc_id: string; trd_env?: TrdEnv; active_only?: boolean }): Promise<Order[]> {
     return this.fetch('/trade/orders', { query: args })
   }
 
@@ -221,26 +237,18 @@ export class ApiClient {
     return this.fetch('/trade/fills/history', { query: args })
   }
 
-  placeOrder(args: {
-    code: string
-    side: 'BUY' | 'SELL'
-    qty: number
-    price?: number
-    order_type?: 'NORMAL' | 'MARKET' | 'STOP' | 'STOP_LIMIT'
-    trigger_price?: number
-    trd_env?: 'SIMULATE' | 'REAL'
+  placeOrder(args: OrderSettings & {
+    /** Attached to the order by moomoo; at most 64 UTF-8 bytes. */
+    remark?: string
+    trd_env?: TrdEnv
     acc_id?: string
   }): Promise<PlaceOrderResult> {
     return this.fetch('/trade/order/place', { method: 'POST', body: args, timeout: ORDER_TIMEOUT_MS })
   }
 
-  modifyOrder(args: {
-    order_id: string
+  modifyOrder(args: OrderChange & {
     acc_id: string
-    price?: number
-    qty?: number
-    trigger_price?: number
-    trd_env?: 'SIMULATE' | 'REAL'
+    trd_env?: TrdEnv
   }): Promise<{ order_id: string; status: string }> {
     return this.fetch('/trade/order/modify', { method: 'POST', body: args, timeout: ORDER_TIMEOUT_MS })
   }
@@ -308,6 +316,8 @@ export interface AlgoStrategy {
   sizing_mode: AlgoSizingMode
   sizing_value: number
   pyramiding_max: number
+  /** Signals go to the approval queue on the Orders page instead of being placed. */
+  require_approval: boolean
   created_at: string
   updated_at: string
 }
@@ -323,6 +333,7 @@ export interface AlgoStrategyCreate {
   sizing_mode?: AlgoSizingMode
   sizing_value?: number
   pyramiding_max?: number
+  require_approval?: boolean
 }
 
 export interface AlgoStrategyUpdate {
@@ -337,6 +348,7 @@ export interface AlgoStrategyUpdate {
   sizing_mode?: AlgoSizingMode
   sizing_value?: number
   pyramiding_max?: number
+  require_approval?: boolean
 }
 
 export interface AlgoEquityPoint { t: string, v: number }

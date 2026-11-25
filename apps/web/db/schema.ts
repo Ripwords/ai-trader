@@ -101,6 +101,9 @@ export const algoStrategies = pgTable('algo_strategies', {
   sizingMode: varchar('sizing_mode', { length: 16 }).notNull().default('fixed_qty'),
   sizingValue: numeric('sizing_value', { precision: 18, scale: 4 }).notNull().default('1'),
   pyramidingMax: integer('pyramiding_max').notNull().default(1),
+  // When true the scheduler queues each signal in order_proposals instead of
+  // placing it, and the owner approves it on the Orders page.
+  requireApproval: boolean('require_approval').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 })
@@ -327,6 +330,48 @@ export const priceAlerts = pgTable('price_alerts', {
 }, t => ({
   // Hot path: the evaluation loop only ever loads active alerts.
   activeOnly: index('price_alerts_active_idx').on(t.status).where(sql`status = 'active'`),
+}))
+
+// Orders waiting for the owner's approval. A debate, the chat, the order
+// ticket or an algo strategy (`source`) proposes one; nothing reaches the
+// broker until it is approved on the Orders page. `status` ∈ {'pending',
+// 'submitting','submitted','rejected','expired','failed'}: approval moves
+// pending→submitting in one conditional UPDATE, so a double click cannot
+// place twice, and the order is sent with remark `q:<id>` so a lost reply can
+// be matched to the order it placed. Pending rows past `expiresAt` turn
+// `expired` when the list is read. A null `accId` (paper only) lets the api
+// pick the first paper account, as the algo scheduler does.
+export const orderProposals = pgTable('order_proposals', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull().default(sql`now() + interval '24 hours'`),
+  source: varchar('source', { length: 16 }).notNull(),
+  decisionId: uuid('decision_id').references(() => agentDecisions.id, { onDelete: 'set null' }),
+  algoStrategyId: uuid('algo_strategy_id').references(() => algoStrategies.id, { onDelete: 'set null' }),
+  accId: varchar('acc_id', { length: 32 }),
+  trdEnv: varchar('trd_env', { length: 16 }).notNull(),
+  symbol: varchar('symbol', { length: 32 }).notNull(),
+  side: varchar('side', { length: 8 }).notNull(),
+  qty: integer('qty').notNull(),
+  orderType: varchar('order_type', { length: 24 }).notNull().default('NORMAL'),
+  price: numeric('price', { precision: 18, scale: 6 }),
+  triggerPrice: numeric('trigger_price', { precision: 18, scale: 6 }),
+  trailType: varchar('trail_type', { length: 8 }),
+  trailValue: numeric('trail_value', { precision: 18, scale: 6 }),
+  trailSpread: numeric('trail_spread', { precision: 18, scale: 6 }),
+  timeInForce: varchar('time_in_force', { length: 8 }).notNull().default('DAY'),
+  session: varchar('session', { length: 16 }).notNull().default('RTH'),
+  rationale: text('rationale'),
+  status: varchar('status', { length: 16 }).notNull().default('pending'),
+  moomooOrderId: varchar('moomoo_order_id', { length: 64 }),
+  error: text('error'),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  // Set when approval claims the row; a row in submitting for longer than an
+  // approval can take is stuck, and the Orders page can resolve it.
+  claimedAt: timestamp('claimed_at', { withTimezone: true }),
+}, t => ({
+  pendingOnly: index('order_proposals_pending_idx').on(t.status, t.createdAt).where(sql`status = 'pending'`),
+  byCreatedAt: index('order_proposals_created_at_idx').on(t.createdAt),
 }))
 
 // One row per deterministic valuation-engine invocation. `source` ∈

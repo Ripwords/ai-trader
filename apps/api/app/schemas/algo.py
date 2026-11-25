@@ -30,6 +30,9 @@ class StrategyBase(BaseModel):
     sizing_mode: SizingMode = "fixed_qty"
     sizing_value: float = Field(default=1, gt=0)
     pyramiding_max: int = Field(default=1, ge=1, le=100)
+    # When on, each signal goes to the approval queue (order_proposals) on the
+    # web's Orders page instead of being placed.
+    require_approval: bool = False
 
 
 class StrategyCreate(StrategyBase):
@@ -48,6 +51,7 @@ class StrategyUpdate(BaseModel):
     sizing_mode: SizingMode | None = None
     sizing_value: float | None = Field(default=None, gt=0)
     pyramiding_max: int | None = Field(default=None, ge=1, le=100)
+    require_approval: bool | None = None
 
 
 class Strategy(StrategyBase):

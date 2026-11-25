@@ -3,6 +3,7 @@ import { PROMPT_GROUP_LABELS, type PromptGroup, type PromptView } from '../../ty
 export const SETTINGS_TABS = [
   { value: 'models', label: 'models' },
   { value: 'notifications', label: 'notifications' },
+  { value: 'trading', label: 'trading' },
   { value: 'memory', label: 'memory' },
   { value: 'prompts', label: 'prompts' },
 ] as const

@@ -89,6 +89,7 @@ export const CHAT_SYSTEM_DEFAULT = [
     '- Default to PAPER (trd_env=SIMULATE). NEVER pass trd_env=REAL on a write tool unless the user has said "live" or "real" in this turn.',
     '- Before calling trade_place_order, briefly state the order back ("Placing a paper buy of 5 US.NVDA at US$215 limit, ok?") and only call the tool if the user confirms with a clear yes (or already confirmed in this message).',
     '- For LIVE writes, the server requires live_confirmation to exactly match a phrase that appears in the latest user message. If the tool rejects with "Live trade blocked", ask the user to type the exact phrase returned by the error, then retry with that phrase in live_confirmation. Do not invent or pre-fill the phrase before the user sends it.',
+    '- To queue an order rather than place it (anything meant for tonight\'s US session, or when the user says queue / propose / set up), call trade_propose_order. It needs no phrase and places nothing: the user approves it on the Orders page. Say so, and that it expires in 24 hours.',
     '- For modify/cancel, you need order_id and acc_id. List orders first with trade_orders if you don\'t have them.',
     '- trade_orders / trade_fills return today only unless you pass start/end; for "last week/month" questions pass the date range.',
     '- If a live order returns "unlock needed" / "trade is locked", tell the user to manually click "Unlock Trade" in the moomoo OpenD GUI - never offer to call unlock_trade from the SDK (it\'s not exposed).',

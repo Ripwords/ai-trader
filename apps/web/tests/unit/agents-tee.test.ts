@@ -3,6 +3,11 @@ import { createFakeDb } from './support/fake-db'
 
 let fake = createFakeDb()
 vi.mock('../../db/client', () => ({ getDb: () => fake.db }))
+const proposer = vi.hoisted(() => ({ propose: vi.fn(async () => ({ created: true })) }))
+vi.mock('../../server/lib/debate-proposals', () => ({
+  proposeFromDecision: proposer.propose,
+  liveDebateDeps: async () => ({}),
+}))
 
 const { AgentRunTee } = await import('../../server/utils/agents-tee')
 const { runVersion, waitForRun } = await import('../../server/lib/agents/run-signal')
@@ -85,6 +90,36 @@ describe('AgentRunTee', () => {
 
     const decisions = fake.inserts.filter(i => i.table === 'agent_decisions').map(i => i.values.confidence)
     expect(decisions).toEqual([null, 63])
+  })
+
+  it('hands each stored decision to the debate proposer, with the stored row id', async () => {
+    proposer.propose.mockClear()
+    fake = createFakeDb(
+      table => table === 'agent_runs' ? [{ symbol: 'US.AAPL', tradeDate: '2026-10-06' }] : [],
+      { insertReturning: table => table === 'agent_decisions' ? [{ id: 'dec-1' }] : [] },
+    )
+    const tee = new AgentRunTee('run-1', 'user-1')
+    tee.push({ type: 'decision', rating: 'buy', confidence: 63, rationale: 'go' })
+    await tee.flush()
+    await vi.waitFor(() => expect(proposer.propose).toHaveBeenCalledTimes(1))
+    expect(proposer.propose).toHaveBeenCalledWith(
+      { decisionId: 'dec-1', symbol: 'US.AAPL', rating: 'buy', confidence: 63, rationale: 'go' },
+      expect.anything(),
+    )
+  })
+
+  it('still finishes the run when the debate proposer fails', async () => {
+    proposer.propose.mockClear()
+    proposer.propose.mockRejectedValueOnce(new Error('api down'))
+    fake = createFakeDb(
+      table => table === 'agent_runs' ? [{ symbol: 'US.AAPL', tradeDate: '2026-10-06' }] : [],
+      { insertReturning: table => table === 'agent_decisions' ? [{ id: 'dec-1' }] : [] },
+    )
+    const tee = new AgentRunTee('run-1', 'user-1')
+    tee.push({ type: 'decision', rating: 'sell', confidence: null, rationale: 'exit' })
+    tee.push({ type: 'run-end', run_id: 'run-1', tokens_in: 1, tokens_out: 1, cost_usd: 0 })
+    await tee.end('unused')
+    expect(fake.updates.filter(u => u.set.status).map(u => u.set.status)).toEqual(['complete'])
   })
 
   it('ends a stream that stopped after an error without run-end, keeping that error', async () => {

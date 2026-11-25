@@ -9,7 +9,7 @@ const STOPPED = 'Stopped'
  * reply said "Stopped".
  */
 const WRITE_TOOLS: ReadonlySet<string> = new Set<keyof ReturnType<typeof makeTools>>([
-  'trade_place_order', 'trade_modify_order', 'trade_cancel_order',
+  'trade_place_order', 'trade_propose_order', 'trade_modify_order', 'trade_cancel_order',
   'algo_kill', 'algo_unkill',
   'watchlist_add', 'watchlist_remove',
   'alert_create', 'alert_cancel', 'reminder_create', 'reminder_cancel',

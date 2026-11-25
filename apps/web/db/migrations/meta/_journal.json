@@ -85,6 +85,20 @@
       "when": 1795355006607,
       "tag": "0011_chat_memories",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795614785923,
+      "tag": "0012_order_proposals",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795647169075,
+      "tag": "0013_order_proposals_claimed_at",
+      "breakpoints": true
     }
   ]
 }

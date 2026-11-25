@@ -1,5 +1,5 @@
 export interface Section {
-  key: 'chat' | 'research' | 'portfolio' | 'algo' | 'usage' | 'settings'
+  key: 'chat' | 'research' | 'portfolio' | 'orders' | 'algo' | 'usage' | 'settings'
   to: string
   label: string
   // One-line blurb shown in the mobile drawer; never on desktop.
@@ -10,6 +10,7 @@ export const SECTIONS: readonly Section[] = [
   { key: 'chat',      to: '/',          label: 'chat',      blurb: 'copilot — charts, news, paper writes' },
   { key: 'research',  to: '/research',  label: 'research',  blurb: 'multi-agent debate · per-symbol verdict' },
   { key: 'portfolio', to: '/portfolio', label: 'portfolio', blurb: 'cross-broker net worth' },
+  { key: 'orders',    to: '/orders',    label: 'orders',    blurb: 'open orders · approval queue' },
   { key: 'algo',      to: '/algo',      label: 'algo',      blurb: 'strategies, backtests, scheduler' },
   { key: 'usage',     to: '/usage',     label: 'usage',     blurb: 'LLM tokens & cost' },
   { key: 'settings',  to: '/settings',  label: 'settings',  blurb: 'model providers & keys' },

@@ -68,6 +68,7 @@ async def db_pool(algo_db_url: str) -> Any:
     finally:
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM algo_signals")
+            await conn.execute("DELETE FROM order_proposals")
             await conn.execute("DELETE FROM algo_runs")
             await conn.execute("DELETE FROM algo_strategies")
             await conn.execute(
@@ -812,3 +813,104 @@ async def test_a_restart_does_not_fire_again_inside_the_cadence(db_pool: Any) ->
     sch = Scheduler(get_klines=fake_klines, get_position=fake_position, place_paper_order=fake_place)
     await sch._tick()
     assert fired == []
+
+
+# --- require approval ------------------------------------------------------
+
+
+async def _make_approval_strategy(code: str) -> str:
+    from app.schemas.algo import StrategyUpdate
+
+    sid = await _make_strategy(code)
+    updated = await repo.update_strategy(sid, StrategyUpdate(require_approval=True))
+    assert updated is not None and updated.require_approval is True
+    return sid
+
+
+async def _proposals(sid: str) -> list[Any]:
+    async with repo.get_pool().acquire() as conn:
+        return list(await conn.fetch(
+            "SELECT * FROM order_proposals WHERE algo_strategy_id = $1 ORDER BY created_at", sid,
+        ))
+
+
+async def test_require_approval_defaults_off_and_round_trips(db_pool: Any) -> None:
+    from app.schemas.algo import StrategyUpdate
+
+    sid = await _make_strategy("def on_bar(c): c.hold()\n")
+    s = await repo.get_strategy(sid)
+    assert s is not None and s.require_approval is False
+    s = await repo.update_strategy(sid, StrategyUpdate(require_approval=True))
+    assert s is not None and s.require_approval is True
+
+
+async def test_require_approval_queues_a_paper_market_proposal_instead_of_placing(db_pool: Any) -> None:
+    sid = await _make_approval_strategy("def on_bar(c): c.buy(c.qty)\n")
+    placed: list[tuple[str, str, int]] = []
+
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
+        return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
+
+    async def fake_position(sym: str) -> int:
+        return 0
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        placed.append((sym, side, qty))
+        return "ORD-1"
+
+    sch = Scheduler(get_klines=fake_klines, get_position=fake_position, place_paper_order=fake_place)
+    await sch._tick()
+
+    assert placed == []
+    rows = await _proposals(sid)
+    assert len(rows) == 1
+    p = rows[0]
+    assert (p["source"], p["trd_env"], p["order_type"], p["acc_id"]) == ("algo", "SIMULATE", "MARKET", None)
+    assert (p["symbol"], p["side"], p["qty"], p["status"]) == ("US.NVDA", "BUY", 1, "pending")
+    assert (p["time_in_force"], p["session"]) == ("DAY", "RTH")
+    assert "t" in (p["rationale"] or "")
+    sigs = await repo.list_signals(strategy_id=sid)
+    assert len(sigs) == 1
+    assert sigs[0].order_id is None
+    assert sigs[0].error == "queued for approval"
+
+
+async def test_a_pending_proposal_is_not_queued_twice(db_pool: Any) -> None:
+    sid = await _make_approval_strategy("def on_bar(c): c.buy(c.qty)\n")
+
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
+        return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
+
+    async def fake_position(sym: str) -> int:
+        return 0
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        raise AssertionError("must not place")
+
+    sch = Scheduler(get_klines=fake_klines, get_position=fake_position, place_paper_order=fake_place)
+    s = await repo.get_strategy(sid)
+    assert s is not None
+    await sch._fire(s, kill_active=False)
+    await sch._fire(s, kill_active=False)
+
+    assert len(await _proposals(sid)) == 1
+    assert len(await repo.list_signals(strategy_id=sid)) == 1
+
+
+async def test_kill_switch_still_blocks_a_queued_signal(db_pool: Any) -> None:
+    sid = await _make_approval_strategy("def on_bar(c): c.buy(c.qty)\n")
+
+    async def fake_klines(sym: str, num: int, ktype: str = "1d") -> list[Any]:
+        return [_bar(datetime(2026, 1, 1), 100.0), _bar(datetime(2026, 1, 2), 110.0)]
+
+    async def fake_position(sym: str) -> int:
+        return 0
+
+    async def fake_place(sym: str, side: str, qty: int) -> str:
+        raise AssertionError("must not place")
+
+    sch = Scheduler(get_klines=fake_klines, get_position=fake_position, place_paper_order=fake_place)
+    s = await repo.get_strategy(sid)
+    assert s is not None
+    await sch._fire(s, kill_active=True)
+    assert await _proposals(sid) == []

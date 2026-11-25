@@ -12,7 +12,7 @@ import type {
   AlgoState,
   AlgoStrategy,
 } from '../../../server/llm/http'
-import { assessAlgoMaturity, type AlgoMaturityStatus } from '../../../server/lib/algo-risk'
+import { assessAlgoMaturity, isQueuedSignal, type AlgoMaturityStatus } from '../../../server/lib/algo-risk'
 import { buildHunks, type DiffPayload } from '../../components/algo/diff-hunks'
 import { SIZING_MODES, backtestOutlivesSave, foldChecks, sizingMeta } from '../../utils/algo-view'
 
@@ -170,6 +170,23 @@ async function toggleEnabled() {
     liveError.value = `${strategy.value!.enabled ? 'stop' : 'go live'} failed: ${formatApiError(e)}`
   } finally {
     toggling.value = false
+  }
+}
+
+// Require approval saves on its own, like go live: it changes what the
+// scheduler does with a signal, not the strategy a backtest ran.
+const approvalSaving = ref(false)
+const approvalError = ref<string | null>(null)
+async function setRequireApproval(on: boolean) {
+  approvalError.value = null
+  approvalSaving.value = true
+  try {
+    await $fetch(`/api/algo/strategies/${id.value}`, { method: 'PUT', body: { require_approval: on } })
+    await refresh()
+  } catch (e) {
+    approvalError.value = `could not change require approval: ${formatApiError(e)}`
+  } finally {
+    approvalSaving.value = false
   }
 }
 
@@ -391,6 +408,19 @@ async function runBacktest() {
           </div>
         </div>
 
+        <div class="flex flex-col items-start gap-2">
+          <USwitch
+            :model-value="strategy!.require_approval"
+            :loading="approvalSaving"
+            :disabled="approvalSaving"
+            size="md"
+            label="Require approval"
+            description="Each signal waits on the Orders page until you approve it, instead of being placed."
+            @update:model-value="setRequireApproval"
+          />
+          <p v-if="approvalError" role="alert" class="text-sm text-[var(--tape-down)]">{{ approvalError }}</p>
+        </div>
+
         <section class="surface-1 p-4 sm:p-5 space-y-4" aria-labelledby="maturity-title">
           <div class="flex flex-col md:flex-row md:items-baseline md:justify-between gap-2">
             <div>
@@ -549,6 +579,11 @@ async function runBacktest() {
                     </td>
                     <td class="py-1.5 pl-4">
                       <span v-if="sig.order_id" class="text-[var(--tape-up)]">order placed</span>
+                      <NuxtLink
+                        v-else-if="isQueuedSignal(sig)"
+                        to="/orders?tab=approvals"
+                        class="text-[var(--paper-1)] underline underline-offset-2 hover:text-[var(--tape-up)]"
+                      >queued for approval</NuxtLink>
                       <span v-else-if="sig.error" class="block w-64 sm:w-80 whitespace-normal break-words text-[var(--tape-down)]">{{ sig.error }}</span>
                       <span v-else class="text-[var(--paper-3)]">—</span>
                     </td>

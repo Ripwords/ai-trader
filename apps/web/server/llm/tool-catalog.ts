@@ -151,6 +151,12 @@ export const TOOL_CATALOG: Record<NativeToolName, ToolCatalogEntry> = {
     useWhen: 'You want to buy or sell. Live orders need the exact LIVE PLACE phrase it gives you.',
     example: 'Buy 10 NVDA at 120 in paper',
   },
+  trade_propose_order: {
+    category: 'Trading',
+    what: 'Queues an order on the Orders page for you to approve. Nothing is placed until you do.',
+    useWhen: 'You want an order set up for tonight\'s US session, or a live order you will check first.',
+    example: 'Queue a GTC buy of 5 NVDA at 115 on my live account',
+  },
   trade_modify_order: {
     category: 'Trading',
     what: 'Changes the price, quantity or trigger of an open order.',

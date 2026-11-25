@@ -6,6 +6,7 @@ from typing import Any
 
 from app.schemas.quote import Bar, KLineResponse, KLineType, OrderBook, OrderBookLevel, Snapshot
 from app.schemas.trade import Account, Fill, Order, PlaceOrderResult, Portfolio, Position
+from app.services.order_rules import OrderRuleError, check_modify_order, check_place_order
 from app.schemas.watchlist import WatchlistItem
 
 
@@ -88,6 +89,72 @@ def _single_attempt(cls: type) -> type:
 
 def _is_real_sdk(ctx: Any) -> bool:
     return any(c.__module__.startswith("moomoo") for c in type(ctx).__mro__)
+
+
+def _sdk_const(enum_name: str, value: str) -> Any:
+    """The moomoo constant ``enum_name.value`` (e.g. TimeInForce.GTC), or the
+    bare string when the SDK isn't installed. The SDK's constants are the
+    strings themselves, so tests see the same value either way."""
+    try:
+        import moomoo  # type: ignore[import-not-found]
+        return getattr(getattr(moomoo, enum_name), value)
+    except (ImportError, AttributeError):
+        return value
+
+
+def _cell(row: Any, key: str) -> Any:
+    """A row value, or None for the SDK's placeholders ('N/A', '', NaN)."""
+    value = row.get(key)
+    if value is None:
+        return None
+    if isinstance(value, float) and value != value:  # NaN
+        return None
+    if isinstance(value, str) and value.strip() in ("", "N/A"):
+        return None
+    return value
+
+
+def _cell_float(row: Any, key: str, *, positive: bool = False) -> float | None:
+    value = _cell(row, key)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if positive and number <= 0:
+        return None
+    return number
+
+
+def _cell_str(row: Any, key: str) -> str | None:
+    value = _cell(row, key)
+    return None if value is None else str(value)
+
+
+def _order_from_row(r: Any, *, acc_id: str | None = None, trd_env: str | None = None) -> Order:
+    """An order-list row (today's or history) as an Order. moomoo's rows
+    don't carry the account, so the caller passes what it queried."""
+    return Order(
+        order_id=str(r["order_id"]),
+        code=str(r["code"]),
+        side="BUY" if str(r.get("trd_side", "BUY")).upper().startswith("B") else "SELL",
+        qty=int(float(r.get("qty", 0) or 0)),
+        price=float(r.get("price", 0) or 0),
+        status=str(r.get("order_status", "")),
+        created_at=datetime.fromisoformat(str(r["create_time"])),
+        trigger_price=_cell_float(r, "aux_price", positive=True),
+        acc_id=acc_id,
+        trd_env=trd_env,  # type: ignore[arg-type]
+        order_type=_cell_str(r, "order_type"),
+        time_in_force=_cell_str(r, "time_in_force"),
+        session=_cell_str(r, "session"),
+        dealt_qty=_cell_float(r, "dealt_qty"),
+        remark=_cell_str(r, "remark"),
+        trail_type=_cell_str(r, "trail_type"),
+        trail_value=_cell_float(r, "trail_value"),
+        trail_spread=_cell_float(r, "trail_spread"),
+    )
 
 
 class OpendAdapter:
@@ -554,19 +621,7 @@ class OpendAdapter:
                 pass
         if ret != 0:
             raise OpendError(f"order_list_query failed: {data}")
-        return [
-            Order(
-                order_id=str(r["order_id"]),
-                code=str(r["code"]),
-                side="BUY" if str(r.get("trd_side", "BUY")).upper().startswith("B") else "SELL",
-                qty=int(r.get("qty", 0)),
-                price=float(r.get("price", 0) or 0),
-                status=str(r.get("order_status", "")),
-                created_at=datetime.fromisoformat(str(r["create_time"])),
-                trigger_price=float(r["aux_price"]) if r.get("aux_price") not in (None, "", "N/A") and float(r["aux_price"]) > 0 else None,
-            )
-            for _, r in data.iterrows()
-        ]
+        return [_order_from_row(r, acc_id=str(acc_id), trd_env=trd_env) for _, r in data.iterrows()]
 
     def _resolve_trd_env(self, trd_env: str) -> Any:
         """Translate our string env to the SDK enum (or pass through for tests)."""
@@ -600,29 +655,36 @@ class OpendAdapter:
         trigger_price: float | None = None,
         trd_env: str = "SIMULATE",
         acc_id: str | None = None,
+        trail_type: str | None = None,
+        trail_value: float | None = None,
+        trail_spread: float | None = None,
+        time_in_force: str = "DAY",
+        session: str = "RTH",
+        remark: str | None = None,
     ) -> PlaceOrderResult:
         """Place a paper or live order.
 
-        - NORMAL (limit): ``price`` required.
-        - MARKET: ``price`` ignored (we pass 0 — SDK accepts that for market
-          orders on supported markets).
-        - STOP (stop-market): ``trigger_price`` required (SDK ``aux_price``),
-          ``price`` ignored.
-        - STOP_LIMIT: both ``trigger_price`` (SDK ``aux_price``) and
-          ``price`` (the limit) required.
+        The rules (which fields each order type needs, what paper accounts
+        and each session take) are in ``order_rules.check_place_order``; a
+        field the type doesn't use is dropped before sending. ``price`` maps
+        to the SDK ``price`` (0 when unused, since the SDK has no default),
+        ``trigger_price`` to ``aux_price``. ``session`` replaces the
+        deprecated ``fill_outside_rth`` and is sent for US stocks only.
         """
-        if order_type in ("NORMAL", "STOP_LIMIT") and price is None:
-            raise OpendError(f"price is required for {order_type} orders")
-        if order_type in ("STOP", "STOP_LIMIT") and trigger_price is None:
-            raise OpendError(f"trigger_price is required for {order_type} orders")
+        try:
+            sent = check_place_order(
+                code=code, order_type=order_type, trd_env=trd_env, price=price,
+                trigger_price=trigger_price, trail_type=trail_type, trail_value=trail_value,
+                trail_spread=trail_spread, time_in_force=time_in_force, session=session,
+                remark=remark,
+            )
+        except OrderRuleError as exc:
+            raise OpendError(str(exc)) from exc
+        price, trigger_price = sent["price"], sent["trigger_price"]
         if trd_env == "REAL" and acc_id is None:
             # The acc_id fallback resolves a SIMULATE account; submitting that
             # id under REAL is never what a caller means.
             raise OpendError("acc_id is required for REAL orders")
-        # STOP is trigger-only; a stray limit price would be rejected or
-        # silently misread by the SDK, so drop it.
-        if order_type in ("MARKET", "STOP"):
-            price = None
         ctx = self._trade_ctx_factory()
         try:
             try:
@@ -642,7 +704,13 @@ class OpendAdapter:
                 order_type=sdk_type,
                 trd_env=env,
                 acc_id=int(resolved_acc_id),
+                remark=remark,
+                time_in_force=_sdk_const("TimeInForce", time_in_force),
                 aux_price=trigger_price,
+                trail_type=_sdk_const("TrailType", trail_type) if trail_type else None,
+                trail_value=trail_value,
+                trail_spread=trail_spread,
+                session=_sdk_const("Session", session if code.upper().startswith("US.") else "NONE"),
             )
         finally:
             try:
@@ -672,13 +740,19 @@ class OpendAdapter:
         qty: int | None = None,
         trigger_price: float | None = None,
         trd_env: str = "SIMULATE",
+        trail_type: str | None = None,
+        trail_value: float | None = None,
+        trail_spread: float | None = None,
     ) -> dict[str, str]:
-        """Modify price/qty and — for STOP / STOP_LIMIT orders — the trigger
-        price (SDK ``aux_price``)."""
-        if price is None and qty is None and trigger_price is None:
-            raise OpendError(
-                "modify_order: provide at least one of price, qty, or trigger_price"
+        """Modify price/qty, the trigger (SDK ``aux_price``) of a triggered
+        order, or the trail of a trailing one."""
+        try:
+            check_modify_order(
+                price=price, qty=qty, trigger_price=trigger_price,
+                trail_type=trail_type, trail_value=trail_value, trail_spread=trail_spread,
             )
+        except OrderRuleError as exc:
+            raise OpendError(str(exc)) from exc
         ctx = self._trade_ctx_factory()
         try:
             try:
@@ -695,6 +769,9 @@ class OpendAdapter:
                 acc_id=int(acc_id),
                 trd_env=env,
                 aux_price=trigger_price,
+                trail_type=_sdk_const("TrailType", trail_type) if trail_type else None,
+                trail_value=trail_value,
+                trail_spread=trail_spread,
             )
         finally:
             try:
@@ -798,18 +875,7 @@ class OpendAdapter:
                 pass
         if ret != 0:
             raise OpendError(f"history_order_list_query failed: {data}")
-        return [
-            Order(
-                order_id=str(r["order_id"]),
-                code=str(r["code"]),
-                side="BUY" if str(r.get("trd_side", "BUY")).upper().startswith("B") else "SELL",
-                qty=int(r.get("qty", 0)),
-                price=float(r.get("price", 0) or 0),
-                status=str(r.get("order_status", "")),
-                created_at=datetime.fromisoformat(str(r["create_time"])),
-            )
-            for _, r in data.iterrows()
-        ]
+        return [_order_from_row(r, acc_id=str(acc_id), trd_env=trd_env) for _, r in data.iterrows()]
 
     def list_history_fills(
         self,

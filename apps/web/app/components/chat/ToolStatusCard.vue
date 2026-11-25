@@ -39,6 +39,7 @@ const labels: Record<string, string> = {
   trade_orders: 'Loading orders',
   trade_fills: 'Loading fills',
   trade_place_order: 'Submitting order',
+  trade_propose_order: 'Queueing order for approval',
   trade_modify_order: 'Modifying order',
   trade_cancel_order: 'Cancelling order',
   algo_list: 'Loading strategies',

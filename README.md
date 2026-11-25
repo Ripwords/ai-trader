@@ -15,6 +15,7 @@ Self-hosted trading copilot. Chat with an AI that has tools for moomoo market da
 - Ask for a full ticker analysis → TradingAgents runs analysts, bull/bear debate, risk review, and a portfolio-manager verdict.
 - Ask `should I buy NVDA?` or `which of these should I add to?` → before the assistant recommends buying or adding to a stock, it gets a debate verdict for that ticker without being asked (see [Debate before a buy](#debate-before-a-buy)).
 - Ask `notify me when NVDA hits 150` or `remind me to check NVDA earnings on Friday 9am` → an email and a push notification when it fires (see [Notifications & reminders](#notifications--reminders)).
+- Open `/orders` to see every working order across your moomoo accounts and cancel one, place a new order from the order ticket, or approve the orders that debates, the chat, algo strategies and the ticket put in the queue (see [Orders](#orders)).
 - Manage paper algo strategies from `/algo`; scheduler order placement is paper-only. **go live (paper)** stays disabled until the strategy is saved and its latest backtest clears the blocking checks, and the reason is printed under the button. Saving a change to anything but the name discards the backtest on screen, because it was run on the old code or settings; run a new one before going live. The gate is in the page only: the api does not check backtests. A failed go-live, stop, or kill-switch request shows its error next to the control. Passing checks fold into one "all N checks passed" line. Below 1024px the strategy assistant opens from the **chat** button as a side panel (Esc closes it); order ids sit under **technical details** in the signals table.
 
 ## Prereqs
@@ -242,6 +243,51 @@ A locked holding is one you cannot or will not trade, such as a pension. It stil
 
 The KWSP/EPF pension (Ghostfolio symbol `GF_KWSP`) is locked by default. To change the list, open **edit plan** and pick holdings under **locked holdings**, or tell the assistant ("lock my ASB fund", "unlock KWSP"). Emptying the list counts every holding again.
 
+### Orders
+
+`/orders` has two tabs, kept in the URL like the portfolio page (`/orders`, `/orders?tab=approvals`). The **approvals** tab shows a count when proposals are waiting. **refresh** reloads both tabs; while the page is visible it also reloads every 30 seconds.
+
+**Active** lists today's working orders on every moomoo account except IPO accounts: symbol, side, type, filled over total, price (limit, trigger or trail, whichever the type uses), time in force, session, status, account and when it was created. A live account's orders carry a red **real** marker. An order placed from the approval queue links back to it under **from**. Finished orders (filled, cancelled, failed, deleted) are left out; the api decides which statuses count as finished (`GET /trade/orders?active_only=true`). An account whose orders cannot be read shows a warning above the table instead of looking empty. Order ids, account ids and remarks are under **Technical details** on each row.
+
+**cancel** asks first in a dialog that names the order and the account. For a live order the dialog says it is a live order at your broker.
+
+**new order** opens the order ticket. Pick the account (the picker is hidden when you have one), symbol with its market prefix (`US.NVDA`, `HK.00700`), side, quantity and order type. The ticket shows only the fields the type uses and only the choices the account allows, and names the first rule the order breaks before you can send it. Then either:
+
+- **place now** sends it straight to moomoo. On a live account the button reads **place live order now** and a second dialog spells out the order (side, quantity, symbol, type and prices, time in force, session, account) and says it is a LIVE order with real money.
+- **add to queue** puts it in the approval queue to approve later.
+
+**Order types, time in force and session**
+
+| Order type | Needs | Paper accounts |
+|---|---|---|
+| limit (`NORMAL`) | limit price | yes |
+| market (`MARKET`) | nothing; regular hours only | yes |
+| stop (`STOP`) | trigger price | no |
+| stop limit (`STOP_LIMIT`) | trigger and limit price | no |
+| market if touched (`MARKET_IF_TOUCHED`) | trigger price | no |
+| limit if touched (`LIMIT_IF_TOUCHED`) | trigger and limit price | no |
+| trailing stop (`TRAILING_STOP`) | trail as a percent (`RATIO`) or a price amount (`AMOUNT`) | no |
+| trailing stop limit (`TRAILING_STOP_LIMIT`) | trail plus the limit spread from the trailed stop | no |
+
+Time in force is `DAY` or `GTC` (good till cancelled); paper accounts take `DAY` only. Session applies to US stocks only: `RTH` (regular hours), `ETH` (pre- and post-market), `OVERNIGHT` and `ALL`. A market order runs in regular hours only. `OVERNIGHT` and `ALL` take limit orders only and are not available on paper accounts. Other markets have no session choice. The api enforces all of these and answers a broken rule with 422; the ticket and the queue check the same rules first.
+
+**Approvals** is the queue. Each waiting proposal shows the order, the account, where it came from, when it expires (24 hours after it was queued) and the reason it was proposed. Proposals that are not acted on expire.
+
+- **approve** opens a dialog that spells out the order, the same way as the ticket's live dialog; a live proposal's button reads **approve live** and the dialog says LIVE. Confirming places the order with the remark `q:<proposal id>`, so it can be traced from the Active tab.
+- **edit** opens the ticket on the proposal. Quantity, type, prices, time in force and session can change; account, symbol and side stay as proposed.
+- **reject** removes it from the queue.
+
+Below the waiting proposals, **last 7 days** lists what happened to recent ones: submitted, rejected, expired or failed.
+
+Proposals come from four places:
+
+- **The order ticket** (**add to queue**).
+- **The chat.** Ask the assistant to queue an order ("queue a limit buy of 10 NVDA at 120 for tonight"). It uses `trade_propose_order`, which places nothing and needs no confirmation phrase. The assistant is told to propose rather than place anything meant to run overnight.
+- **Research debates**, when **Settings → trading → Queue an order after a debate** is on. After a debate rates a stock buy or strong buy, a limit buy at the last price is queued for the amount you set (shares = amount ÷ last price, rounded down; nothing is queued if that is under one share). Sell queues the whole position and reduce queues half of it, both as limit sells at the last price; with no position nothing is queued. Hold queues nothing. All are `DAY`, regular hours, on the account you choose there (by default, the paper account for the stock's market). The proposal's reason quotes the rating and the confidence.
+- **Algo strategies** with **Require approval** on (the switch on the strategy page, off by default). Each signal queues a paper market order (`DAY`, regular hours) instead of being placed; approving it sends it to the paper account for the stock's market, and the signal shows **queued for approval** with a link to the queue. While a same-side proposal from the strategy is waiting, later signals do not queue another. The kill switch and the daily order cap still apply first. Orders placed from the queue are not counted toward the strategy's pyramid limit or its daily order cap.
+
+**The overnight flow.** The US session runs while it is night in Malaysia. Orders get proposed during the day, you approve them in the evening, and they go to moomoo at once with their time in force and session. moomoo MY holds US orders placed while the market is closed and releases them at the open; `GTC` and conditional orders (stop, trailing, if-touched) also wait on moomoo's servers. Nothing in this app has to stay running overnight.
+
 ### Chat tool catalogue
 
 #### What the assistant can do (`/tools`)
@@ -252,7 +298,7 @@ Type `/tools` in chat to see every tool the assistant can use, grouped by purpos
 |---|---|
 | **Portfolio** | how your investments are doing: today's move, performance over time, net worth, whether you hold a symbol, and risk and correlation (MPT). |
 | **Broker account** | raw moomoo data: which accounts you have, buying power, positions in one account (including paper), and orders versus actual fills. |
-| **Trading** | to place, change or cancel an order. Paper by default; a live order needs the exact confirmation phrase the assistant gives you. |
+| **Trading** | to place, change or cancel an order, or to queue one for you to approve on the Orders page. Paper by default; placing a live order needs the exact confirmation phrase the assistant gives you, queueing one does not. |
 | **Market data** | a price now, a chart, or the order book for one symbol. |
 | **Research** | to dig into one company: what its last earnings really said (`earnings_release`, `earnings_surprise`, `earnings_call_transcript`, `estimate_revisions`), DCF valuation, cheapest names on your watchlist, technicals, a full research memo, a sharp first-principles question, or whether your thesis still holds. |
 | **Agent research runs** | a rated verdict from the multi-agent pipeline. Watch it here ("run the agents on NVDA") or start it in the background and get notified ("research AMD in the background"). Ask "is it done?" or "what did the agents conclude?" afterwards. The assistant also runs one on its own before it recommends a buy. |
@@ -304,7 +350,7 @@ Tools are defined in `apps/web/server/llm/tools.ts`. The routing rules are the c
 | market | `market_kline`, `market_snapshot`, `market_order_book` |
 | watchlist | `watchlist_list`, `watchlist_add`, `watchlist_remove` |
 | news / web | `news_pulse` (stock news + the macro/sector context behind a move), `search_news` (topics that are not one ticker), `search_web` |
-| broker (moomoo) | `trade_accounts`, `trade_account_overview`, `trade_portfolio`, `trade_orders`, `trade_fills` (today by default, pass `start`/`end` for history), `trade_place_order`, `trade_modify_order`, `trade_cancel_order` |
+| broker (moomoo) | `trade_accounts`, `trade_account_overview`, `trade_portfolio`, `trade_orders`, `trade_fills` (today by default, pass `start`/`end` for history), `trade_place_order`, `trade_propose_order` (queues an order for approval; places nothing), `trade_modify_order`, `trade_cancel_order` |
 | portfolio | `investment_portfolio`, `investment_performance`, `holdings_context`, `portfolio_performance`, `portfolio_mpt_analysis`, `convert_fx`, `planning_get` (the plan tab), `planning_update` (changes the plan), `portfolio_rebalance_plan` (trades to reach the target; places nothing) |
 | research | `agents_debate`, `research_start`, `research_get` (also reports a running run's status), `investment_research`, `thesis_tracker`, `dyp_ask`, `value_stock`, `value_screen`, `technical_analysis`, `earnings_release` (latest SEC 8-K press release), `earnings_surprise` (actual vs consensus), `earnings_call_transcript` (prepared remarks + analyst Q&A), `estimate_revisions` (how consensus moved; revenue consensus per print) |
 | algo (paper only) | `algo_list`, `algo_backtest`, `algo_recent_signals`, `algo_state`, `algo_kill`, `algo_unkill` |
@@ -313,6 +359,9 @@ Tools are defined in `apps/web/server/llm/tools.ts`. The routing rules are the c
 ### Safety rails
 
 - Live (REAL) orders need `ALLOW_LIVE_TRADING=true` on the api **and** a typed confirmation phrase in the chat turn. The phrase must match whole: a typed `@ 150` does not confirm an order at 15, `LIVE CANCEL 1234` does not cancel order 12, and a phrase that leaves out a field you typed (a `QTY` or `TRIG`) is refused. A comma inside a number does not end the phrase, so `@ 1,000` does not confirm `@ 1`. Each phrase places one order: a second call in the same reply, or **retry** on that reply, is refused with "already used", so a retry after an error cannot buy twice. To send the same order again, type the phrase again in a new message. If the api refuses the order outright (for example, over the cap), the phrase can be used again; after a timeout it cannot, because the order may have reached the broker, so check today's orders first. The chat waits up to 2 minutes for an order call to answer. Placement and modification both count against `MAX_DAILY_LIVE_NOTIONAL_USD`. The cap is checked and the order sent as one step, so two orders sent at the same time cannot both use the same room under the cap. The cap counts the REAL orders on the account the order is for, not all your REAL accounts together. Orders without a limit price are valued at the last trade, or at their stop trigger when that is higher (a BUY STOP above the market fills near its trigger), for both the new order and stop orders already open.
+- Orders placed from the Orders page (ticket **place now**, or **approve** in the queue) go through the same api route as the chat, so `ALLOW_LIVE_TRADING` and `MAX_DAILY_LIVE_NOTIONAL_USD` apply to them too. The confirm dialog that spells out the order stands in for the typed phrase. The cap values every order type: trailing orders at the last trade plus the trail, if-touched orders at the higher of the trigger and the last trade.
+- Approving a proposal first claims it (pending → submitting in one database update), so a double click or a second tab cannot place it twice. If moomoo refuses the order, the proposal goes back to pending with the reason shown, to fix or retry. If the reply is lost (a timeout), the app looks for an order carrying the proposal's remark before deciding: found, it is marked submitted; not found, it is marked failed and says to check Active before queueing it again. A proposal left in submitting (the web restarted mid-approval, say) shows **stuck placing** on the Approvals tab once it has sat there five minutes, longer than any approval can take. **Check moomoo and resolve** looks for an order carrying its remark in today's orders and the order history: if there is one, the proposal is marked submitted; if not, it goes back to pending to approve again. If moomoo can't be reached, the page offers to mark it failed instead, never pending, because the order may exist; check Active before queueing it again.
+- The algo scheduler never places live orders; its approval-queue proposals are always paper.
 - The TradingAgents pipeline stops at `AGENTS_DAILY_COST_USD_CAP` per day across runs, resumes and every backtest pair.
 - Algo strategies run in an AST-validated sandbox: no imports beyond math/numpy/pandas/statistics, no dunder or `_private` names, no pandas/numpy file IO methods (`read_*`, `to_*`, `np.load`, ...), and no reaching a system module through an allowed one (`statistics.sys`, `from pandas.io.common import os`). The same rule applies to attributes, dotted imports and `from` imports, and the runtime's import hook checks it again. Relative and `*` imports are refused. Every backtest and every live `on_bar` call runs in a child process with a wall-clock limit (`ALGO_BACKTEST_TIMEOUT_SEC`, `ALGO_STRATEGY_TIMEOUT_SEC`), so a runaway loop is killed and reported instead of stalling the api. The scheduler only ever places paper orders. Each live tick reads bars at the strategy's cadence (`1h` reads 60-minute bars); backtests always use daily bars. A tick that fails before the strategy decides (klines, compile, position query, `on_bar`) is recorded as an `ERROR` signal; a paper account whose positions cannot be read counts as a failed query, not as holding nothing. A BUY whose sizing comes to 0 shares (for example `fixed_cash` below one share's price) is recorded as blocked and places nothing. An order moomoo accepted still counts against the pyramiding cap if saving its signal fails. After an api restart the pyramiding count is rebuilt from the signal history, so a held position does not get a fresh `pyramiding_max` budget, and each strategy's next tick is timed from its newest signal, so a deploy does not make a `1d` strategy decide twice in a day.
 - When OpenD is down, each api call to it makes one connection attempt (at most 20 s) and then fails with 502, or reports `reachable: false` for `/quote/state`. OpenD calls run off the event loop, so the other api routes keep answering.
@@ -453,7 +502,7 @@ flowchart LR
 | **Aggressive / Neutral / Conservative Risk** | Debate the trader's proposal from three risk stances. | Proposal + reports |
 | **Portfolio Manager** | Authorises BUY / SELL / HOLD with reasoning. | Risk debate + proposal + analyst reports |
 | **Confidence judge** | Reads the whole debate and the final call, then states the probability (0–100) that the rating is right over the next 7 trading days, scored the same way the backtest scores it. A failed or unreadable reply stores no confidence rather than a placeholder. | Debate + decision |
-| **Execution** | Places the order against `SIMULATE` (paper) by default; `REAL` is gated by `MAX_DAILY_LIVE_NOTIONAL_USD`. | Manager decision → moomoo OpenD |
+| **Execution** | Places nothing. The rating is stored as the run's decision. With **Settings → trading → Queue an order after a debate** on, a buy, sell or reduce rating *proposes* an order in the approval queue on `/orders`, which you approve or reject (see [Orders](#orders)). | Manager decision |
 
 Each run starts fresh: agents do not carry lessons from past decisions into later runs. Upstream's prompts tell the Bull, the Bear, the Research Manager, the Trader and the Portfolio Manager to learn from reflections on past trades, and hand them a memory that this app never fills. Asked for lessons it did not have, one run's Bull wrote "I've been burned before". The default prompts for those five roles therefore drop that wording and say instead that the role has no record of earlier debates or decisions and must not write as if it remembers any. `{past_memory_str}` is still an allowed placeholder for those five prompts, so a prompt saved under Settings → Prompts that uses it keeps working; it is filled with a fixed sentence saying nothing is on record. A saved prompt keeps its own wording, so reset any of those five you saved earlier to get the new default.
 

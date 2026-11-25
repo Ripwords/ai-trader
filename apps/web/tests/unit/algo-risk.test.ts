@@ -60,4 +60,12 @@ describe('algo maturity assessment', () => {
     expect(out.score).toBeGreaterThan(50)
     expect(out.checks.map(check => [check.key, check.status])).toContainEqual(['signals', 'warn'])
   })
+
+  it('does not count a signal queued for approval as an order error', () => {
+    const out = assessAlgoMaturity(strategy, null, [
+      { error: 'queued for approval' },
+      { error: null },
+    ])
+    expect(out.checks).toContainEqual(expect.objectContaining({ key: 'signals', status: 'pass' }))
+  })
 })

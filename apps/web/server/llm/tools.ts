@@ -6,6 +6,14 @@ import { searchWithFallback } from '../lib/search'
 import { klineWithFallback, snapshotWithFallback } from '../lib/market-fallback'
 import { getContextualNews } from '../lib/contextual-news'
 import { claimLiveConfirmation, releaseLiveConfirmation } from './live-confirmations'
+import {
+  orderTypeSchema,
+  sessionSchema,
+  timeInForceSchema,
+  trailTypeSchema,
+  type OrderChange,
+  type OrderSettings,
+} from '../lib/order-types'
 
 // Self-fetches to this app's own /api routes; none of them stream.
 const SELF_FETCH_TIMEOUT_MS = 30_000
@@ -52,30 +60,35 @@ function formatLiveNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : String(value)
 }
 
-export function expectedLivePlaceConfirmation(args: {
-  code: string
-  side: 'BUY' | 'SELL'
-  qty: number
-  price?: number
-  order_type?: 'NORMAL' | 'MARKET' | 'STOP' | 'STOP_LIMIT'
-  trigger_price?: number
-}): string {
+/** ` TRAIL RATIO 5 SPREAD 0.1`, or the parts of it that are set. */
+function trailPhrase(args: Pick<OrderSettings, 'trail_type' | 'trail_value' | 'trail_spread'>): string {
+  const trail = [args.trail_type, args.trail_value != null ? formatLiveNumber(args.trail_value) : undefined]
+    .filter(part => part != null)
+  const trailPart = trail.length ? ` TRAIL ${trail.join(' ')}` : ''
+  const spreadPart = args.trail_spread != null ? ` SPREAD ${formatLiveNumber(args.trail_spread)}` : ''
+  return `${trailPart}${spreadPart}`
+}
+
+/**
+ * Every field that changes what the order does is in the phrase, so a
+ * confirmed phrase cannot approve a different order. DAY and RTH are the
+ * defaults and are left out, so an order that uses neither keeps the phrase
+ * it had before time in force and sessions existed.
+ */
+export function expectedLivePlaceConfirmation(args: OrderSettings): string {
   const orderType = args.order_type ?? 'NORMAL'
   const pricePart = args.price != null ? ` @ ${formatLiveNumber(args.price)}` : ''
   const triggerPart = args.trigger_price != null ? ` TRIG ${formatLiveNumber(args.trigger_price)}` : ''
-  return `LIVE PLACE ${args.side} ${args.qty} ${args.code} ${orderType}${pricePart}${triggerPart}`.toUpperCase()
+  const tifPart = args.time_in_force && args.time_in_force !== 'DAY' ? ` TIF ${args.time_in_force}` : ''
+  const sessionPart = args.session && args.session !== 'RTH' ? ` SESSION ${args.session}` : ''
+  return `LIVE PLACE ${args.side} ${args.qty} ${args.code} ${orderType}${pricePart}${triggerPart}${trailPhrase(args)}${tifPart}${sessionPart}`.toUpperCase()
 }
 
-export function expectedLiveModifyConfirmation(args: {
-  order_id: string
-  price?: number
-  qty?: number
-  trigger_price?: number
-}): string {
+export function expectedLiveModifyConfirmation(args: OrderChange): string {
   const pricePart = args.price != null ? ` PRICE ${formatLiveNumber(args.price)}` : ''
   const qtyPart = args.qty != null ? ` QTY ${args.qty}` : ''
   const triggerPart = args.trigger_price != null ? ` TRIG ${formatLiveNumber(args.trigger_price)}` : ''
-  return `LIVE MODIFY ${args.order_id}${pricePart}${qtyPart}${triggerPart}`.toUpperCase()
+  return `LIVE MODIFY ${args.order_id}${pricePart}${qtyPart}${triggerPart}${trailPhrase(args)}`.toUpperCase()
 }
 
 export function expectedLiveCancelConfirmation(args: { order_id: string }): string {
@@ -89,11 +102,11 @@ export function expectedLiveCancelConfirmation(args: { order_id: string }): stri
  * order 12. A full stop or comma before a space still counts as a boundary,
  * but not one inside a number: "@ 1,000" does not confirm "@ 1".
  * The phrase must also not be followed by another order field, or the model
- * could drop a confirmed QTY or TRIG and still pass.
+ * could drop a confirmed QTY, TRIG, TRAIL, TIF or SESSION and still pass.
  */
 export function containsPhrase(text: string, phrase: string): boolean {
   const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`(?:^|[^A-Z0-9._-])${escaped}(?=$|[\\s;:!?)]|[.,](?:\\s|$))(?!\\s+(?:@|TRIG\\b|QTY\\b|PRICE\\b))`).test(text)
+  return new RegExp(`(?:^|[^A-Z0-9._-])${escaped}(?=$|[\\s;:!?)]|[.,](?:\\s|$))(?!\\s+(?:@|TRIG\\b|QTY\\b|PRICE\\b|TRAIL\\b|SPREAD\\b|TIF\\b|SESSION\\b))`).test(text)
 }
 
 function assertLiveTradeConfirmed(args: {
@@ -532,18 +545,32 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
     'trade_place_order': tool({
       description:
         'Place a paper trading order (default trd_env=SIMULATE). REFUSE to place live orders ' +
-        '(trd_env=REAL) unless the latest user message includes the exact LIVE PLACE confirmation phrase. For NORMAL (limit) orders ' +
-        'price is required; for MARKET orders price is ignored. STOP is a stop-market order ' +
-        '(trigger_price required, price ignored); STOP_LIMIT needs both trigger_price (the trigger) ' +
-        'and price (the limit once triggered). acc_id is optional for paper — server ' +
-        'auto-picks the first SIMULATE account if omitted.',
+        '(trd_env=REAL) unless the latest user message includes the exact LIVE PLACE confirmation phrase. ' +
+        'Order types: NORMAL (limit; price required), MARKET (price ignored), STOP (stop-market; trigger_price ' +
+        'required), STOP_LIMIT (trigger_price + price, the limit once triggered), MARKET_IF_TOUCHED (trigger_price; ' +
+        'a market order once the price touches it, e.g. a BUY below the market), LIMIT_IF_TOUCHED (trigger_price + ' +
+        'price), TRAILING_STOP (trail_type + trail_value; the stop follows the price), TRAILING_STOP_LIMIT ' +
+        '(trail_type + trail_value + trail_spread, the limit\'s distance from the stop). ' +
+        'time_in_force: DAY (default) or GTC (good till cancelled; stays working on moomoo\'s servers across days). ' +
+        'session (US stocks only): RTH (default, regular hours), ETH (pre/post market), OVERNIGHT, ALL. ' +
+        'MARKET orders run in RTH only; OVERNIGHT and ALL take NORMAL (limit) orders only. ' +
+        'PAPER (SIMULATE) accounts take only NORMAL and MARKET, DAY only, and no OVERNIGHT/ALL session; the api ' +
+        'refuses anything else with a 422 — tell the user rather than retrying. ' +
+        'The live phrase lists every setting: LIVE PLACE <SIDE> <QTY> <CODE> <TYPE>[ @ <price>][ TRIG <trigger>]' +
+        '[ TRAIL <RATIO|AMOUNT> <value>][ SPREAD <spread>][ TIF GTC][ SESSION <session>] (DAY and RTH are left out). ' +
+        'acc_id is optional for paper — server auto-picks the first SIMULATE account if omitted.',
       inputSchema: z.object({
         code: z.string().describe('moomoo symbol like US.NVDA, HK.00700'),
         side: z.enum(['BUY', 'SELL']),
         qty: z.number().int().min(1),
-        price: z.number().optional().describe('Limit price. Required for NORMAL and STOP_LIMIT; ignored for MARKET and STOP.'),
-        order_type: z.enum(['NORMAL', 'MARKET', 'STOP', 'STOP_LIMIT']).default('NORMAL'),
-        trigger_price: z.number().optional().describe('Trigger (stop) price. Required for STOP and STOP_LIMIT orders; ignored otherwise. For a SELL stop-loss it sits below the market; for a BUY stop above.'),
+        price: z.number().optional().describe('Limit price. Required for NORMAL, STOP_LIMIT and LIMIT_IF_TOUCHED; ignored for every other type.'),
+        order_type: orderTypeSchema.default('NORMAL'),
+        trigger_price: z.number().optional().describe('Trigger price. Required for STOP, STOP_LIMIT, MARKET_IF_TOUCHED and LIMIT_IF_TOUCHED; ignored otherwise. For a SELL stop-loss it sits below the market; for a BUY stop above.'),
+        trail_type: trailTypeSchema.optional().describe('Trailing orders only: RATIO (trail_value is a percent, 5 = 5%) or AMOUNT (a price distance).'),
+        trail_value: z.number().positive().optional().describe('Trailing orders only: how far the stop follows the price.'),
+        trail_spread: z.number().min(0).optional().describe('TRAILING_STOP_LIMIT only: the limit price\'s distance from the stop.'),
+        time_in_force: timeInForceSchema.default('DAY').describe('DAY (default) or GTC. Paper accounts take DAY only.'),
+        session: sessionSchema.default('RTH').describe('US stocks only. RTH (default), ETH, OVERNIGHT or ALL. Paper accounts have no OVERNIGHT/ALL.'),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
         acc_id: z.string().optional(),
         live_confirmation: z.string().optional().describe('Required only for REAL orders. Must exactly match the LIVE PLACE phrase typed by the user in the latest message.'),
@@ -579,15 +606,82 @@ export function makeTools(client: ApiClient, arg?: MakeToolsArg) {
       },
     }),
 
+    'trade_propose_order': tool({
+      description:
+        'Queue an order for the owner to approve on the Orders page (/orders, Approvals tab). Nothing is placed and no ' +
+        'confirmation phrase is needed: the owner reviews, edits and approves it there, and only then is it sent. ' +
+        'PREFER this over trade_place_order for anything meant to run overnight or while the owner is away (US hours ' +
+        'are night in Malaysia; moomoo holds a US order placed off-market and releases it at the open), for live ' +
+        'orders the owner has not spelled out with the LIVE PLACE phrase, and whenever the owner says "queue", ' +
+        '"propose" or "set up". Takes the same order settings as trade_place_order with the same rules (paper: NORMAL ' +
+        'and MARKET, DAY only, no OVERNIGHT/ALL). acc_id is required for REAL; for paper it may be left out (the ' +
+        'first paper account is used). The proposal expires after 24 hours if not approved. Put the reason in rationale.',
+      inputSchema: z.object({
+        code: z.string().describe('moomoo symbol like US.NVDA, HK.00700'),
+        side: z.enum(['BUY', 'SELL']),
+        qty: z.number().int().min(1),
+        price: z.number().positive().optional().describe('Limit price. Required for NORMAL, STOP_LIMIT and LIMIT_IF_TOUCHED.'),
+        order_type: orderTypeSchema.default('NORMAL'),
+        trigger_price: z.number().positive().optional().describe('Required for STOP, STOP_LIMIT, MARKET_IF_TOUCHED and LIMIT_IF_TOUCHED.'),
+        trail_type: trailTypeSchema.optional().describe('Trailing orders only: RATIO (percent) or AMOUNT.'),
+        trail_value: z.number().positive().optional(),
+        trail_spread: z.number().min(0).optional().describe('TRAILING_STOP_LIMIT only.'),
+        time_in_force: timeInForceSchema.default('DAY'),
+        session: sessionSchema.default('RTH'),
+        trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
+        acc_id: z.string().optional().describe('Required for REAL. From trade_accounts; never an IPO account.'),
+        rationale: z.string().max(2000).optional().describe('One or two sentences the owner reads when approving.'),
+      }),
+      execute: async (args) => {
+        const { createProposal, drizzleProposalStore } = await import('../lib/order-proposals')
+        const p = await createProposal({
+          source: 'chat',
+          accId: args.acc_id ?? null,
+          trdEnv: args.trd_env,
+          symbol: args.code,
+          side: args.side,
+          qty: args.qty,
+          orderType: args.order_type,
+          price: args.price,
+          triggerPrice: args.trigger_price,
+          trailType: args.trail_type,
+          trailValue: args.trail_value,
+          trailSpread: args.trail_spread,
+          timeInForce: args.time_in_force,
+          session: args.session,
+          rationale: args.rationale,
+        }, drizzleProposalStore()).catch((e: unknown) => {
+          const err = e as { statusMessage?: string; message?: string }
+          throw new Error(err.statusMessage || err.message || 'could not queue the order')
+        })
+        return {
+          status: p.status,
+          symbol: p.symbol,
+          side: p.side,
+          qty: p.qty,
+          order_type: p.orderType,
+          trd_env: p.trdEnv,
+          expires_at: p.expiresAt,
+          approve_at: '/orders?tab=approvals',
+        }
+      },
+    }),
+
     'trade_modify_order': tool({
       description:
-        'Modify an existing order\'s price, quantity, and/or trigger price (for STOP / STOP_LIMIT orders). acc_id required. trd_env defaults to SIMULATE. REAL modifies require an exact LIVE MODIFY confirmation phrase in the latest user message.',
+        'Modify an existing order\'s price, quantity, trigger price (STOP, STOP_LIMIT, MARKET_IF_TOUCHED, LIMIT_IF_TOUCHED) ' +
+        'and/or trail (TRAILING_STOP, TRAILING_STOP_LIMIT; trail_type and trail_value go together). acc_id required. ' +
+        'trd_env defaults to SIMULATE. REAL modifies require an exact LIVE MODIFY confirmation phrase in the latest user ' +
+        'message: LIVE MODIFY <ORDER_ID>[ PRICE <p>][ QTY <q>][ TRIG <t>][ TRAIL <RATIO|AMOUNT> <value>][ SPREAD <s>].',
       inputSchema: z.object({
         order_id: z.string(),
         acc_id: z.string(),
         price: z.number().optional(),
         qty: z.number().int().optional(),
-        trigger_price: z.number().optional().describe('New trigger (stop) price, only meaningful when modifying a STOP or STOP_LIMIT order.'),
+        trigger_price: z.number().optional().describe('New trigger price, only meaningful for STOP, STOP_LIMIT, MARKET_IF_TOUCHED and LIMIT_IF_TOUCHED orders.'),
+        trail_type: trailTypeSchema.optional().describe('New trail type for a trailing order; send with trail_value.'),
+        trail_value: z.number().positive().optional().describe('New trail for a trailing order; send with trail_type.'),
+        trail_spread: z.number().min(0).optional().describe('New spread for a TRAILING_STOP_LIMIT order.'),
         trd_env: z.enum(['SIMULATE', 'REAL']).default('SIMULATE'),
         live_confirmation: z.string().optional().describe('Required only for REAL order modifies. Must exactly match the LIVE MODIFY phrase typed by the user in the latest message.'),
       }),

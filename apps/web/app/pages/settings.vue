@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* Hallmark · genre: modern-minimal · macrostructure: page header, tabs (models: providers list with modal editor + per-role model selection; notifications; memory: saved facts list with modal editor; prompts: grouped editable prompts) · design-system: design.md · designed-as-app */
+/* Hallmark · genre: modern-minimal · macrostructure: page header, tabs (models: providers list with modal editor + per-role model selection; notifications; trading: debate proposals; memory: saved facts list with modal editor; prompts: grouped editable prompts) · design-system: design.md · designed-as-app */
 import ConfirmModal from '~/components/settings/ConfirmModal.vue'
 import ProviderFormModal from '~/components/settings/ProviderFormModal.vue'
 import { settingsErrorMessage } from '../../composables/providerForm'
@@ -244,6 +244,7 @@ async function saveSelection(): Promise<void> {
         </div>
 
         <NotificationsSettings v-else-if="tab === 'notifications'" />
+        <TradingSettings v-else-if="tab === 'trading'" />
         <MemorySettings v-else-if="tab === 'memory'" />
         <PromptsSettings v-else />
       </div>

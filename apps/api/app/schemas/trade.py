@@ -1,13 +1,19 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
+from app.services.order_rules import (
+    OrderType,
+    Session,
+    TimeInForce,
+    TrailType,
+    TrdEnv,
+    check_modify_order,
+    check_place_order,
+)
 
-TrdEnv = Literal["SIMULATE", "REAL"]
-# NORMAL = limit, MARKET = market, STOP = stop-market (trigger only),
-# STOP_LIMIT = stop-limit (trigger + limit price). Mirrors moomoo OrderType.
-OrderType = Literal["NORMAL", "MARKET", "STOP", "STOP_LIMIT"]
+__all__ = ["OrderType", "Session", "TimeInForce", "TrailType", "TrdEnv"]
 
 
 class Account(BaseModel):
@@ -69,8 +75,24 @@ class Order(BaseModel):
     price: float
     status: str
     created_at: datetime
-    # The stop trigger (moomoo aux_price) of a STOP / STOP_LIMIT order.
+    # The trigger (moomoo aux_price) of a STOP / STOP_LIMIT / *_IF_TOUCHED
+    # order, or the current stop of a trailing one.
     trigger_price: float | None = None
+    # The account the order was listed from. moomoo's rows don't carry it;
+    # list_orders fills it from the query. None on history rows built elsewhere.
+    acc_id: str | None = None
+    trd_env: TrdEnv | None = None
+    # Plain strings, not the request Literals: moomoo can report types and
+    # values this app never places (e.g. ABSOLUTE_LIMIT, IOC). None when absent
+    # or "N/A".
+    order_type: str | None = None
+    time_in_force: str | None = None
+    session: str | None = None
+    dealt_qty: float | None = None
+    remark: str | None = None
+    trail_type: str | None = None
+    trail_value: float | None = None
+    trail_spread: float | None = None
 
 
 class Fill(BaseModel):
@@ -84,27 +106,75 @@ class Fill(BaseModel):
 
 
 class PlaceOrderRequest(BaseModel):
+    """Rules live in app.services.order_rules.check_place_order; a request
+    that breaks one fails validation (422) before anything is sent."""
+
     code: str
     side: Literal["BUY", "SELL"]
     qty: int
-    # price: required for NORMAL and STOP_LIMIT (the limit price), ignored
-    # for MARKET and STOP.
+    # The limit price: required for NORMAL, STOP_LIMIT and LIMIT_IF_TOUCHED;
+    # dropped for every other type.
     price: float | None = None
     order_type: OrderType = "NORMAL"
-    # trigger_price: required for STOP / STOP_LIMIT (moomoo aux_price).
+    # moomoo aux_price: required for STOP, STOP_LIMIT, MARKET_IF_TOUCHED and
+    # LIMIT_IF_TOUCHED; dropped for every other type.
     trigger_price: float | None = None
+    # Required for TRAILING_STOP and TRAILING_STOP_LIMIT; trail_spread (the
+    # limit's distance from the stop) for TRAILING_STOP_LIMIT only.
+    trail_type: TrailType | None = None
+    trail_value: float | None = None
+    trail_spread: float | None = None
+    time_in_force: TimeInForce = "DAY"
+    session: Session = "RTH"
+    # Attached to the order by moomoo and echoed back in the order list.
+    remark: str | None = None
     trd_env: TrdEnv = "SIMULATE"
     acc_id: str | None = None  # string on wire (see Account.acc_id note); None = first SIMULATE
+
+    @model_validator(mode="after")
+    def _follows_order_rules(self) -> "PlaceOrderRequest":
+        sent = check_place_order(
+            code=self.code,
+            order_type=self.order_type,
+            trd_env=self.trd_env,
+            price=self.price,
+            trigger_price=self.trigger_price,
+            trail_type=self.trail_type,
+            trail_value=self.trail_value,
+            trail_spread=self.trail_spread,
+            time_in_force=self.time_in_force,
+            session=self.session,
+            remark=self.remark,
+        )
+        self.price = sent["price"]
+        self.trigger_price = sent["trigger_price"]
+        return self
 
 
 class ModifyOrderRequest(BaseModel):
     order_id: str
     price: float | None = None
     qty: int | None = None
-    # New trigger price when modifying a STOP / STOP_LIMIT (moomoo aux_price).
+    # New trigger price (moomoo aux_price) for a triggered order.
     trigger_price: float | None = None
+    # New trail for a trailing order; trail_type and trail_value go together.
+    trail_type: TrailType | None = None
+    trail_value: float | None = None
+    trail_spread: float | None = None
     trd_env: TrdEnv = "SIMULATE"
     acc_id: str
+
+    @model_validator(mode="after")
+    def _follows_order_rules(self) -> "ModifyOrderRequest":
+        check_modify_order(
+            price=self.price,
+            qty=self.qty,
+            trigger_price=self.trigger_price,
+            trail_type=self.trail_type,
+            trail_value=self.trail_value,
+            trail_spread=self.trail_spread,
+        )
+        return self
 
 
 class CancelOrderRequest(BaseModel):
