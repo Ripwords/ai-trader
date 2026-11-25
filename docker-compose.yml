@@ -67,6 +67,14 @@ services:
       # their keys). Cost cap is a hard $/day ceiling.
       AGENTS_DAILY_COST_USD_CAP: ${AGENTS_DAILY_COST_USD_CAP:-5.00}
       WEB_INTERNAL_BASE_URL: http://web:3000
+      # The api segfaults now and then in native code inside a worker thread
+      # (dmesg: "segfault at 8 ip 0000000000000008"). This makes Python print
+      # every thread's stack to the container log when that happens.
+      PYTHONFAULTHANDLER: "1"
+      # Live-money safety rails (see .env.example). Live orders, including
+      # approved proposals, are refused with 403 until ALLOW_LIVE_TRADING=true.
+      ALLOW_LIVE_TRADING: ${ALLOW_LIVE_TRADING:-false}
+      MAX_DAILY_LIVE_NOTIONAL_USD: ${MAX_DAILY_LIVE_NOTIONAL_USD:-1000}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # External DNS pinned to public resolvers. The Docker default forwards to
